@@ -179,17 +179,29 @@ with open(f'./metrics/{approach}_metrics.csv', 'w+') as metrics_file:
 # plot occupancy and flow diagram to get capacity flow    
 fig, ax = plt.subplots(1,1, figsize=(15,30)) 
 plt.xticks(np.arange(min(occ), max(occ)+1, 1.0))
+plt.xlabel("Occupancy [%]")
+plt.ylabel("Flow [veh/h]")
+plt.title("")
 plt.plot(occ, flw, 'bo')
 plt.show() 
 
 pd.DataFrame(cvs_seg_time).to_csv(f'./metrics/{approach}_cvs.csv', index=False, header=False)
 
 # plot other metrics
+plt.xlabel("Iteration")
+plt.ylabel("Mean speed")
+plt.title("Mean speed over the whole stretch")
 plt.plot(ms)
 plt.show()
+
+plt.xlabel("Step")
+plt.ylabel("Emission level")
+plt.title("Emissions over time")
 plt.plot(emissions_over_time)
 plt.show()
-plt.plot(flw)
-plt.show()
+
+# plt.title("flow")
+# plt.plot(flw)
+# plt.show()
 
 traci.close()

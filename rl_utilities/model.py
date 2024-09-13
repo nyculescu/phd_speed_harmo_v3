@@ -1,25 +1,14 @@
-from gym import Env
-from gym.spaces import Discrete, Box
-import numpy as np
-import random
-import os, sys
-from statistics import mean
-import traci
-from matplotlib import pyplot as plt
-import control_algorithms
+import tensorflow as tf
 
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Input
-from tensorflow.keras.optimizers import Adam
 from rl.agents import DQNAgent
 from rl.policy import BoltzmannQPolicy
 from rl.memory import SequentialMemory
 
 def build_model(states, actions):
-    model = Sequential()    
-    model.add(Dense(24, activation='relu', input_shape=states))
-    model.add(Dense(24, activation='relu'))
-    model.add(Dense(actions, activation='linear'))
+    model = tf.keras.models.Sequential()    
+    model.add(tf.keras.layers.Dense(24, activation='relu', input_shape=states))
+    model.add(tf.keras.layers.Dense(24, activation='relu'))
+    model.add(tf.keras.layers.Dense(actions, activation='linear'))
     return model
 
 def build_agent(model, actions):

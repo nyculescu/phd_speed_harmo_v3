@@ -1,7 +1,4 @@
-from gym import Env
-from gym.spaces import Discrete, Box
 import numpy as np
-from statistics import mean
 import traci
 from matplotlib import pyplot as plt
 
@@ -23,7 +20,7 @@ model = build_model(states, actions)
 print(model.summary())
 
 dqn = build_agent(model, actions)
-dqn.compile(Adam(lr=1e-3), metrics=['mae'])
+dqn.compile(tf.keras.optimizers.Adam(lr=1e-3), metrics=['mae'])
 dqn.fit(env, nb_steps=12000, visualize=False, verbose=1, log_interval=12000)
 
 plt.plot(env.mean_speeds)
