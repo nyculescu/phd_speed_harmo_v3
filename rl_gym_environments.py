@@ -1,44 +1,79 @@
 # inspired by https://github.com/nicknochnack/OpenAI-Reinforcement-Learning-with-Custom-Environment
 
-from gym import Env
-from gym.spaces import Discrete, Box
+import gymnasium as gym
 import numpy as np
-from statistics import mean
 import traci
-from matplotlib import pyplot as plt
+from traci.exceptions import FatalTraCIError, TraCIException
+import subprocess
+import psutil
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 from rl_utilities.reward_functions import *
-from rl_utilities.model import *
+# from rl_utilities.model import *
 from simulation_utilities.road import *
 from simulation_utilities.setup import *
 
-class SUMOEnv(Env):
+class SUMOEnv(gym.Env):
     def __init__(self):
         # Actions we can take, down, stay, up
-        self.action_space = Discrete(3)
+        self.action_space = gym.spaces.Discrete(3)
         # avg speed array
-        self.observation_space = Box(low=np.array([0]), high=np.array([1]))
+        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([1]))
         self.state = 0 # occupancy
         self.speed_limit = 120 # to be changed actively
         # Set simulation length
         self.aggregation_time = 30
         self.sim_length = 3600/self.aggregation_time # 30 x 120 = 3600 steps        
 
-        # SUMO specific
-        #run sumo simulation
-        traci.start(sumoCmd)
-
         #self.reward_func = scipy.stats.norm(105, 7.5).pdf
         self.reward_func = quad_occ_reward
 
         self.mean_speeds = []
         self.flows = []
-
         self.emissions_over_time = []
 
         self.cvs_seg_time = []
         for i in range(len(all_segments)):
             self.cvs_seg_time.append([])
+        
+        self.sumo_process = None
+        self.sumo_max_retries = 5
+        self.start_sumo()
+    
+    def is_sumo_running(self):
+        return psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
+
+    def start_sumo(self):
+        if self.is_sumo_running():
+            logging.warning("SUMO process is still running. Terminating...")
+            self.close_sumo()
+        
+        for attempt in range(self.sumo_max_retries):
+            try:
+                port = 8813 + attempt
+                logging.debug(f"Attempting to start SUMO on port {port}")
+                self.sumo_process = subprocess.Popen(sumoCmd + ["--remote-port", str(port)], 
+                                     stdout=subprocess.PIPE, 
+                                     stderr=subprocess.PIPE)
+                logging.debug(f"Attempting to connect to SUMO on port {port}")
+                traci.init(port=port, numRetries=5)
+                logging.info(f"Successfully connected to SUMO on port {port}")
+                return
+            except (FatalTraCIError, TraCIException) as e:
+                logging.error(f"Attempt {attempt + 1} failed: {e}")
+                self.close_sumo()
+        
+        raise RuntimeError("Failed to start SUMO after multiple attempts")
+
+    def close_sumo(self):
+        if self.sumo_process:
+            try:
+                traci.close()
+            except (FatalTraCIError, TraCIException):
+                pass  # Ignore errors when closing
+            self.sumo_process.terminate()
+            self.sumo_process = None
         
     def step(self, action):
         # Apply action
@@ -58,19 +93,10 @@ class SUMOEnv(Env):
 
         for segment in road_segments:
            [traci.lane.setMaxSpeed(lane, speed_new) for lane in segment]
-
-        # Reduce simulation length by 1 second
-        self.sim_length -= 1 
         
         # Calculate reward
         reward = self.reward_func(self.state)
         
-        # Check if shower is done
-        if self.sim_length <= 0: 
-            done = True
-        else:
-            done = False
-
         # ------------------------------ SUMO ------------------------------
 
         # the only relevant parameter until now
@@ -83,7 +109,12 @@ class SUMOEnv(Env):
         occupancy_sum = 0
 
         for i in range(self.aggregation_time):
-            traci.simulationStep() 
+            try:
+                traci.simulationStep() 
+            except (FatalTraCIError, TraCIException):
+                print("Lost connection to SUMO. Attempting to reconnect...")
+                self.start_sumo()
+                return self.reset()[0], 0, True, False, {}  # End episode on connection loss
                     
             # GATHER METRICS FROM SENSORS    
             # for some it is important to average over the number of lanes on the edge
@@ -121,7 +152,8 @@ class SUMOEnv(Env):
                 speeds = np.array(speeds)
                 lane_avg = np.mean(speeds)
                 lane_stdv = np.std(speeds)
-                cvs_sum += lane_stdv / lane_avg
+                if not np.isnan(lane_stdv) and not np.isnan(lane_avg) and lane_avg != 0:
+                    cvs_sum += lane_stdv / lane_avg
             cvs_seg = cvs_sum / len(seg)
             if np.isnan(cvs_seg):
                 cvs_seg = 0
@@ -145,18 +177,39 @@ class SUMOEnv(Env):
         # normalize the speed
         self.state = occupancy
         self.state_speed = mean_road_speed * 3.6  # m/s to km/h
-
-        # Set placeholder for info
-        info = {}
         
+        # Multi-dimensional observation
+        # obs = np.array([
+        #     self.state,
+        #     self.state_speed / 120.0,
+        #     self.flows[-1] / 3600.0,
+        #     self.cvs_seg_time[-1][-1],
+        #     self.speed_limit / 120.0
+        # ])
+
+        obs = np.array([self.state], dtype="float32") # Occupancy
+        
+        # Reduce simulation length by 1 second
+        self.sim_length -= 1 
+        
+        # Check if shower is done
+        if self.sim_length <= 0: 
+            done = True
+            self.close_sumo()
+        else:
+            done = False
+
         # Return step information
-        return self.state, reward, done, info
+        return obs, reward, done, False, {}
 
     def render(self):
         # Implement viz
         pass
     
-    def reset(self):
+    def reset(self, seed=None):
+        # self.close_sumo()
+        # self.start_sumo()
+
         self.mean_speeds = []
 
         # Reset params
@@ -167,8 +220,15 @@ class SUMOEnv(Env):
         self.sim_length = 3600/self.aggregation_time
 
         # Reset SUMO
-        traci.close(False)
-        traci.start(sumoCmd)
+        # traci.close(False)
+        # traci.start(sumoCmd)
+        self.state = np.array([self.state],dtype="float32")
+        print("Reset observation shape:", self.state.shape)
 
-        return self.state
+        return self.state, {}
     
+    def close(self):
+        self.close_sumo()
+
+    def __del__(self):
+        self.close()
