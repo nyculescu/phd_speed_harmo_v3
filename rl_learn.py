@@ -39,8 +39,7 @@ try:
 
     # Train the agent
     total_timesteps = 12000
-    progress_bar_callback = ProgressBarCallback(total_timesteps)
-    model.learn(total_timesteps, callback=[progress_bar_callback], log_interval=100)
+    model.learn(total_timesteps, callback=[ProgressBarCallback(total_timesteps)], log_interval=100)
 
     # Plot mean speeds
     if len(env.mean_speeds) > 0:
@@ -60,12 +59,12 @@ try:
     n_episodes = 1
     
     for _ in range(n_episodes):
-        obs = env.reset()
+        obs, _ = env.reset()
         done = False
         episode_reward = 0
         while not done:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, _ = env.step(action)
+            obs, reward, done, _, _ = env.step(action)
             episode_reward += reward
         mean_reward += episode_reward
 

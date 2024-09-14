@@ -9,6 +9,7 @@ def linear_occ_reward(x):
     else:
         return 0
 
+# This function is based on occupancy
 def quad_occ_reward(x):
     if 0 < x <= 12:
         return ((0.5 * x) + 6) / 12

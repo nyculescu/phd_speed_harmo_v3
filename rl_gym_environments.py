@@ -16,15 +16,15 @@ from simulation_utilities.setup import *
 
 class SUMOEnv(gym.Env):
     def __init__(self):
-        # Actions we can take, down, stay, up
-        self.action_space = gym.spaces.Discrete(3)
+        # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
+        self.action_space = gym.spaces.Discrete(11)
         # avg speed array
-        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([1]))
-        self.state = 0 # occupancy
-        self.speed_limit = 120 # to be changed actively
+        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([1]), dtype="float32")
+        self.state = np.array([0], dtype="float32") # occupancy
+        self.speed_limit = 130 # this is changed actively
         # Set simulation length
         self.aggregation_time = 30
-        self.sim_length = 3600/self.aggregation_time # 30 x 120 = 3600 steps        
+        self.sim_length = 3600 / self.aggregation_time # 30 x 120 = 3600 steps        
 
         #self.reward_func = scipy.stats.norm(105, 7.5).pdf
         self.reward_func = quad_occ_reward
@@ -41,11 +41,9 @@ class SUMOEnv(gym.Env):
         self.sumo_max_retries = 5
         self.start_sumo()
     
-    def is_sumo_running(self):
-        return psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
-
     def start_sumo(self):
-        if self.is_sumo_running():
+        is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
+        if is_sumo_running:
             logging.warning("SUMO process is still running. Terminating...")
             self.close_sumo()
         
@@ -77,22 +75,18 @@ class SUMOEnv(gym.Env):
         
     def step(self, action):
         # Apply action
-        # 0 -1 = -1 
-        # 1 -1 = 0 
-        # 2 -1 = 1 
-        self.speed_limit += (action - 1) * 10
-      
-        # only cap the speed using lower bounds to let the algorithm learn itself
-        if self.speed_limit < 10:
-            self.speed_limit = 10       
-        
+        self.speed_limit = 10 * action + 30
 
         # copied from mtfc
         speed_new = self.speed_limit / 3.6 # km/h to m/s
         road_segments = [seg_1_before]
 
         for segment in road_segments:
-           [traci.lane.setMaxSpeed(lane, speed_new) for lane in segment]
+           is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
+           if is_sumo_running:
+               [traci.lane.setMaxSpeed(lane, speed_new) for lane in segment]
+           else:
+               self.start_sumo()
         
         # Calculate reward
         reward = self.reward_func(self.state)
@@ -176,7 +170,7 @@ class SUMOEnv(gym.Env):
         # gets the avg speed from the simulation
         # normalize the speed
         self.state = occupancy
-        self.state_speed = mean_road_speed * 3.6  # m/s to km/h
+        # self.state_speed = mean_road_speed * 3.6  # m/s to km/h
         
         # Multi-dimensional observation
         # obs = np.array([
@@ -193,11 +187,9 @@ class SUMOEnv(gym.Env):
         self.sim_length -= 1 
         
         # Check if shower is done
-        if self.sim_length <= 0: 
-            done = True
+        done = self.sim_length <= 0
+        if done:
             self.close_sumo()
-        else:
-            done = False
 
         # Return step information
         return obs, reward, done, False, {}
@@ -207,25 +199,18 @@ class SUMOEnv(gym.Env):
         pass
     
     def reset(self, seed=None):
-        # self.close_sumo()
-        # self.start_sumo()
-
         self.mean_speeds = []
 
         # Reset params
         self.state = 0
-        self.state_speed = 0
-        self.speed_limit = 120
+        # self.state_speed = 0
+        self.speed_limit = 130
         # Reset time
-        self.sim_length = 3600/self.aggregation_time
+        self.sim_length = 3600 / self.aggregation_time
 
-        # Reset SUMO
-        # traci.close(False)
-        # traci.start(sumoCmd)
-        self.state = np.array([self.state],dtype="float32")
-        print("Reset observation shape:", self.state.shape)
-
-        return self.state, {}
+        obs = np.array([self.state], dtype=np.float32)
+        print("Reset observation shape:", obs.shape)
+        return obs, {}
     
     def close(self):
         self.close_sumo()
