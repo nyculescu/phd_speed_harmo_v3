@@ -91,8 +91,6 @@ class SUMOEnv(gym.Env):
         # Calculate reward
         reward = self.reward_func(self.state)
         
-        # ------------------------------ SUMO ------------------------------
-
         # the only relevant parameter until now
         mean_edge_speed = np.zeros(len(edges))
 
@@ -200,6 +198,8 @@ class SUMOEnv(gym.Env):
     
     def reset(self, seed=None):
         self.mean_speeds = []
+        self.flows = []
+        self.emissions_over_time = []
 
         # Reset params
         self.state = 0
@@ -209,7 +209,7 @@ class SUMOEnv(gym.Env):
         self.sim_length = 3600 / self.aggregation_time
 
         obs = np.array([self.state], dtype=np.float32)
-        print("Reset observation shape:", obs.shape)
+        # print("DEBUG | Reset observation shape:", obs.shape)
         return obs, {}
     
     def close(self):

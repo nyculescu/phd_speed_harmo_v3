@@ -1,2 +1,7 @@
 *.pyc
 *.csv
+.py310_tf_env/
+__pycache__/
+logs/
+metrics/
+rl_models/*/*/events.out.tfevents.*
