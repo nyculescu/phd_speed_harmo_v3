@@ -7,12 +7,25 @@ from traci.exceptions import FatalTraCIError, TraCIException
 import subprocess
 import psutil
 import logging
-logging.basicConfig(level=logging.DEBUG)
+from matplotlib import pyplot as plt
+from matplotlib.animation import FuncAnimation
+logging.basicConfig(level=logging.DEBUG) # FIXME: use WARNING for long runs. More info at: https://docs.python.org/3/library/logging.html#logging-levels
 
 from rl_utilities.reward_functions import *
 # from rl_utilities.model import *
 from simulation_utilities.road import *
 from simulation_utilities.setup import *
+from simulation_utilities.flow_gen import *
+
+# Initialize counters for vehicle types
+vehicle_counts = {
+    "normal_car": 0,
+    "fast_car": 0,
+    "van": 0,
+    "bus": 0,
+    "motorcycle": 0,
+    "truck": 0
+}
 
 class SUMOEnv(gym.Env):
     def __init__(self):
@@ -23,8 +36,9 @@ class SUMOEnv(gym.Env):
         self.state = np.array([0], dtype="float32") # occupancy
         self.speed_limit = 130 # this is changed actively
         # Set simulation length
-        self.aggregation_time = 30
-        self.sim_length = 3600 / self.aggregation_time # 30 x 120 = 3600 steps        
+        self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
+        # Simulation length for 24 hours (86400 seconds)
+        self.sim_length = 24 * 60 * 60 / self.aggregation_time  # 60 x 1440 = 86400 steps
 
         #self.reward_func = scipy.stats.norm(105, 7.5).pdf
         self.reward_func = quad_occ_reward
@@ -39,6 +53,8 @@ class SUMOEnv(gym.Env):
         
         self.sumo_process = None
         self.sumo_max_retries = 5
+        self.day_index = 0
+
         self.start_sumo()
     
     def start_sumo(self):
@@ -49,6 +65,8 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
+                flow_generation(self.day_index) # TODO: create an algo to increment day_index
+
                 port = 8813 + attempt
                 logging.debug(f"Attempting to start SUMO on port {port}")
                 self.sumo_process = subprocess.Popen(sumoCmd + ["--remote-port", str(port)], 
@@ -107,7 +125,7 @@ class SUMOEnv(gym.Env):
                 print("Lost connection to SUMO. Attempting to reconnect...")
                 self.start_sumo()
                 return self.reset()[0], 0, True, False, {}  # End episode on connection loss
-                    
+
             # GATHER METRICS FROM SENSORS    
             # for some it is important to average over the number of lanes on the edge
 
@@ -158,7 +176,7 @@ class SUMOEnv(gym.Env):
         self.mean_speeds.append(mean_road_speed) 
 
         # AFTER THE MERGE
-        flow = (veh_time_sum / self.aggregation_time) * 3600
+        flow = (veh_time_sum / self.aggregation_time) * 60 * 60 * 24
         self.flows.append(flow)     
 
         occupancy = occupancy_sum / self.aggregation_time      
@@ -197,16 +215,16 @@ class SUMOEnv(gym.Env):
         pass
     
     def reset(self, seed=None):
+        self.day_index = 0
         self.mean_speeds = []
         self.flows = []
         self.emissions_over_time = []
 
         # Reset params
         self.state = 0
-        # self.state_speed = 0
         self.speed_limit = 130
         # Reset time
-        self.sim_length = 3600 / self.aggregation_time
+        self.sim_length = 24 * 60 * 60 / self.aggregation_time
 
         obs = np.array([self.state], dtype=np.float32)
         # print("DEBUG | Reset observation shape:", obs.shape)

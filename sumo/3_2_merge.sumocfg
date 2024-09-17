@@ -6,7 +6,7 @@
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
     <input>
         <net-file value="./3_2_merge.net.xml"/>
-        <route-files value="./congestion_one_wave.rou.xml"/>
+        <route-files value="./generated_flows.rou.xml"/>
         <additional-files value="./loops_detectors.xml"/>
         <gui-settings-file value="colored.view.xml"/>
     </input>
