@@ -28,7 +28,8 @@ vehicle_counts = {
 }
 
 class SUMOEnv(gym.Env):
-    def __init__(self):
+    def __init__(self, port):
+        self.port = port
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.action_space = gym.spaces.Discrete(11)
         # avg speed array
@@ -67,7 +68,7 @@ class SUMOEnv(gym.Env):
             try:
                 flow_generation(self.day_index) # TODO: create an algo to increment day_index
 
-                port = 8813 + attempt
+                port = self.port + attempt
                 logging.debug(f"Attempting to start SUMO on port {port}")
                 self.sumo_process = subprocess.Popen(sumoCmd + ["--remote-port", str(port)], 
                                      stdout=subprocess.PIPE, 

@@ -5,3 +5,5 @@ __pycache__/
 logs/
 metrics/
 rl_models/*/*/events.out.tfevents.*
+sumo/generated_flows.rou.xml
+sumo/loop_detector_metrics.xml
