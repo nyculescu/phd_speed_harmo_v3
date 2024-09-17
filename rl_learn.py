@@ -62,9 +62,9 @@ try:
     '''
     total_timesteps = {
         #FIXME: current values just for testing
-        "PPO": 10000, # 500k is generally robust and can handle fewer timesteps effectively
-        "A2C": 8000, # 300k can learn efficiently with fewer samples due to its synchronous nature
-        "DQN": 9000  # 400k is sample-efficient, especially in discrete action spaces
+        "PPO": 100000, # 500k is generally robust and can handle fewer timesteps effectively
+        "A2C": 60000, # 300k can learn efficiently with fewer samples due to its synchronous nature
+        "DQN": 80000  # 400k is sample-efficient, especially in discrete action spaces
     }
 
     ''' Initialize models with recommended hyperparameters 
@@ -119,7 +119,7 @@ try:
     )
     ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-    eval_freq = 200 # FIXME: current value just for testing. | Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
+    eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
     n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
     ppo_eval_callback = EvalCallback(
