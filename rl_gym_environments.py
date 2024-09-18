@@ -66,7 +66,8 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                flow_generation(self.day_index) # TODO: create an algo to increment day_index
+                base_traf_jam_exp = np.random.triangular(-0.25, 0, 0.25)
+                flow_generation(base_traf_jam_exp, self.day_index) # TODO: create an algo to increment day_index
 
                 port = self.port + attempt
                 logging.debug(f"Attempting to start SUMO on port {port}")

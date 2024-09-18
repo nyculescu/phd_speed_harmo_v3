@@ -6,7 +6,6 @@ import logging
 from rl_gym_environments import SUMOEnv
 
 from stable_baselines3.common.callbacks import BaseCallback
-from tqdm import tqdm
 import multiprocessing
 
 import os

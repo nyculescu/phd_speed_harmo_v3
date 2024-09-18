@@ -58,9 +58,7 @@ depart_pos = "free"
 depart_speed = "speedLimit"
 lanes = 3
 
-def flow_generation(day_index = 0):
-    base_traffic_jam_exponent = np.random.uniform(0, 0.75)
-
+def flow_generation(base_traffic_jam_exponent, day_index = 0):
     # Vehicle type distributions
     truck = np.random.uniform(10, 15) * (1.0 if np.random.triangular(0, 0.86, 1) > 0.5 else 0.0)
     cars = np.random.uniform(70, 85) * 1.15
@@ -114,11 +112,15 @@ def flow_generation(day_index = 0):
         # Iterate over each pair of rates
         for i in range(0, len(car_generation_rates_per_lane), 2):
             # Calculate start and end times for each flow
-            begin_time = i * 3600
+            begin_time = i * 1800
 
             # Get vehsPerHour for current interval
-            vehs_per_hour_1 = car_generation_rates_per_lane[i] * math.exp(base_traffic_jam_exponent * np.random.triangular(0.85, 1, 1.15)) # e^x * random number around value 1
-            vehs_per_hour_2 = car_generation_rates_per_lane[i+1] * math.exp(base_traffic_jam_exponent * np.random.triangular(0.85, 1, 1.15)) # e^x * random number around value 1
+            low = math.exp(base_traffic_jam_exponent) * 0.75
+            high = math.exp(base_traffic_jam_exponent) * 1.25
+            mid = math.exp(base_traffic_jam_exponent)
+            traffic_jam_factor = np.random.triangular(low, mid, high)
+            vehs_per_hour_1 = car_generation_rates_per_lane[i] * traffic_jam_factor
+            vehs_per_hour_2 = car_generation_rates_per_lane[i+1] * traffic_jam_factor
             
             # Calculate the flow index based on the current iteration
             flow_index = i // 2
@@ -130,13 +132,13 @@ def flow_generation(day_index = 0):
                 
                 if vehs_1 > 0:
                     flows.append((begin_time,
-                                f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" '
+                                f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
                                 f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                 f'route="{route_id}" vehsPerHour="{vehs_1}"/>\n'))
                 
                 if vehs_2 > 0:
                     flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
-                                f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" '
+                                f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                 f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                 f'route="{route_id}" vehsPerHour="{vehs_2}"/>\n'))
 
