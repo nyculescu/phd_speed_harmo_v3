@@ -60,48 +60,61 @@ lanes = 3
 
 def flow_generation(base_traffic_jam_exponent, day_index = 0):
     # Vehicle type distributions
-    truck = np.random.uniform(10, 15) * (1.0 if np.random.triangular(0, 0.86, 1) > 0.5 else 0.0)
+    trucks = np.random.uniform(10, 15) * (1.0 if np.random.triangular(0, 0.86, 1) > 0.5 else 0.0)
     cars = np.random.uniform(70, 85) * 1.15
     motorcycle = 0
     bus = 0
     van = 0
 
-    if (truck + cars < 92.5):
-        remaining_veh = 100 - truck - cars
+    if (trucks + cars < 92.5):
+        remaining_veh = 100 - trucks - cars
         van = np.random.uniform(min(9, remaining_veh), min(12, remaining_veh))
-        remaining_veh = 100 - truck - cars - van
+        remaining_veh = 100 - trucks - cars - van
         if (remaining_veh < 95):
             bus = np.random.uniform(remaining_veh * 0.95, remaining_veh)
             motorcycle = max(0, remaining_veh - bus)
         else:
-            truck = truck * 0.95
+            trucks = trucks * 0.95
             cars = cars * 0.95
-            remaining_veh = 100 - truck - cars
+            remaining_veh = 100 - trucks - cars
             van = np.random.uniform(remaining_veh * 0.75, remaining_veh * 0.95)
-            remaining_veh = 100 - truck - cars - van
+            remaining_veh = 100 - trucks - cars - van
             bus = np.random.uniform(remaining_veh * 0.90, remaining_veh * 0.98)
             motorcycle = remaining_veh - bus
     else:
-        truck = truck * 0.925
+        trucks = trucks * 0.925
         cars = cars * 0.925
-        remaining_veh = 100 - truck - cars
+        remaining_veh = 100 - trucks - cars
         van = np.random.uniform(remaining_veh * 0.75, remaining_veh * 0.95)
-        remaining_veh = 100 - truck - cars - van
+        remaining_veh = 100 - trucks - cars - van
         bus = np.random.uniform(remaining_veh * 0.90, remaining_veh * 0.98)
         motorcycle = remaining_veh - bus
     
     normal_car = cars * np.random.uniform(0.75, 0.95)
     fast_car = cars - normal_car
+    trailer = trucks * 0.98
+    truck = trucks - trailer
 
     # Calculate proportions
-    total_distribution = normal_car + fast_car + van + bus + motorcycle + truck
+    total_distribution = normal_car + fast_car + van + bus + motorcycle + trucks
+
     proportions = {
-        "normal_car": normal_car / total_distribution,
-        "fast_car": fast_car / total_distribution,
-        "van": van / total_distribution,
+        "passenger": normal_car / total_distribution,
+        "passenger/hatchback": fast_car / total_distribution,
+        "passenger/van": van / total_distribution,
         "bus": bus / total_distribution,
         "motorcycle": motorcycle / total_distribution,
-        "truck": truck / total_distribution
+        "truck": truck / total_distribution,
+        "truck/trailer": trailer / total_distribution,
+
+        # Disobedient proportions:
+        "disobedient_passenger": normal_car * 0.05 / total_distribution,
+        "disobedient_passenger/hatchback": fast_car * 0.09 / total_distribution,
+        "disobedient_passenger/van": van * 0.04 / total_distribution,
+        "disobedient_bus": bus * 0.01 / total_distribution,
+        "disobedient_motorcycle": motorcycle * 0.06 / total_distribution,
+        "disobedient_truck": truck * 0.02 / total_distribution,
+        "disobedient_truck/trailer": trailer * 0.005 / total_distribution,
     }
 
     # Open a .rou.xml file to write flows
@@ -131,16 +144,28 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
                 vehs_2 = vehs_per_hour_2 * proportions[vehicle_type]
                 
                 if vehs_1 > 0:
-                    flows.append((begin_time,
-                                f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
-                                f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                f'route="{route_id}" vehsPerHour="{vehs_1}"/>\n'))
+                    if "disobedient" in vehicle_type:
+                        flows.append((begin_time,
+                                    f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                    f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
+                    else:
+                        flows.append((begin_time,
+                                    f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                    f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type}"/>\n'))
                 
                 if vehs_2 > 0:
-                    flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
+                    if "disobedient" in vehicle_type:
+                        flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
                                 f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                 f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                f'route="{route_id}" vehsPerHour="{vehs_2}"/>\n'))
+                                f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
+                    else:
+                        flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
+                                f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                                f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type}"/>\n'))
 
         # Sort flows by begin time
         flows.sort(key=lambda x: x[0])
@@ -151,12 +176,21 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
             f.write('\n')
             
             # Define specific vehicle types
-            f.write('    <vType id="normal_car" accel="2.6" decel="4.5" sigma="0.5" length="4.5" maxSpeed="180" color="1,0,0"/>\n')
-            f.write('    <vType id="fast_car" accel="3.2" decel="4.9" sigma="0.4" length="4.2" maxSpeed="240" color="0.8,0.8,0"/>\n')
-            f.write('    <vType id="van" accel="1.8" decel="3.2" sigma="0.6" length="6.2" maxSpeed="130" color="1,1,1"/>\n')
-            f.write('    <vType id="bus" accel="1.2" decel="3.8" sigma="0.7" length="12.0" maxSpeed="100" color="1,.5,.5"/>\n')
-            f.write('    <vType id="motorcycle" accel="3.8" decel="6.2" sigma="0.3" length="2.2" maxSpeed="180" color=".2,.2,.8"/>\n')
-            f.write('    <vType id="truck" accel="1.1" decel="3.1" sigma="0.9" length="10.5" maxSpeed="100" color=".4,.4,.4"/>\n')
+            f.write(f'    <vType id="passenger" accel="2.6" decel="4.5" sigma="{np.random.uniform(0.1, 0.5)}" length="4.5" maxSpeed="180" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}"/>\n')
+            f.write(f'    <vType id="passenger/hatchback" accel="3.2" decel="4.9" sigma="{np.random.uniform(0.1, 0.7)}" length="4.2" maxSpeed="240" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}"/>\n')
+            f.write(f'    <vType id="passenger/van" accel="1.8" decel="3.2" sigma="{np.random.uniform(0.1, 0.5)}" length="6.2" maxSpeed="130" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}"/>\n')
+            f.write(f'    <vType id="bus" accel="1.2" decel="3.8" sigma="{np.random.uniform(0.1, 0.3)}" length="12.0" maxSpeed="100" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}"/>\n')
+            f.write(f'    <vType id="motorcycle" accel="3.8" decel="6.2" sigma="{np.random.uniform(0.1, 0.4)}" length="2.2" maxSpeed="180" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}"/>\n')
+            f.write(f'    <vType id="truck" accel="1.1" decel="3.1" sigma="{np.random.uniform(0.1, 0.4)}" length="6" maxSpeed="100" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}"/>\n')
+            f.write(f'    <vType id="truck/trailer" accel="1.1" decel="3.1" sigma="{np.random.uniform(0.1, 0.3)}" length="10.5" maxSpeed="100" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}"/>\n')
+
+            f.write(f'    <vType id="disobedient_passenger" accel="2.6" decel="4.5" length="4.5" maxSpeed="180" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_passenger/hatchback" accel="3.2" decel="4.9" length="4.2" maxSpeed="240" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_passenger/van" accel="1.8" decel="3.2" length="6.2" maxSpeed="130" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_bus" accel="1.2" decel="3.8" length="12.0" maxSpeed="100" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_motorcycle" accel="3.8" decel="6.2" length="2.2" maxSpeed="180" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_truck" accel="1.1" decel="3.1" length="6" maxSpeed="100" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
+            f.write(f'    <vType id="disobedient_truck/trailer" accel="1.1" decel="3.1" length="10.5" maxSpeed="100" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5"/>\n')
 
             f.write('\n')
             f.write(f'    <route id="{route_id}" edges="{edges}"/>\n') # Replace {your_edges_here} with actual edges
@@ -169,3 +203,5 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
             f.write('</routes>\n')
 
         print("Flow generation complete.")
+
+flow_generation(0)
