@@ -8,6 +8,8 @@ from rl_gym_environments import SUMOEnv
 from stable_baselines3.common.callbacks import BaseCallback
 import multiprocessing
 
+from simulation_utilities.flow_gen import *
+
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
@@ -206,7 +208,40 @@ def train_a2c():
 
     # plot_mean_speeds(env.mean_speeds, "A2C")
 
+def mock_sumo_env_for_tests():
+    import traci
+    from traci.exceptions import FatalTraCIError, TraCIException
+    import numpy as np
+    from rl_gym_environments import edges, loops_after
+
+    env = SUMOEnv(port=8813)
+    env.start_sumo()
+    veh_time_sum = 0
+    mean_edge_speed = np.zeros(len(edges))
+    emissions_over_time = []
+    for i in range(3600 * 24):
+        try:
+            traci.simulationStep() 
+        except (FatalTraCIError, TraCIException):
+            print("No connection to SUMO")
+
+        veh_time_sum += sum([traci.inductionloop.getLastStepVehicleNumber(loop) for loop in loops_after])
+
+        emission_sum = 0
+        for i, edge in enumerate(edges):
+            mean_edge_speed[i] += traci.edge.getLastStepMeanSpeed(edge)
+            emission_sum += traci.edge.getCO2Emission(edge)
+        emissions_over_time.append(emission_sum)
+    print(f"All: {emissions_over_time}")
+    print(f"Mean: {np.mean(emissions_over_time)}")
+    print(f"Sum: {sum(emissions_over_time)}")
+    env.close()
+
 if __name__ == '__main__':
+    day_index = 0
+    base_traf_jam_exp = 1 #np.random.triangular(-0.25, 0, 0.25)
+    flow_generation(base_traf_jam_exp, day_index) # TODO: create an algo to increment day_index
+    
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
 
@@ -224,3 +259,5 @@ if __name__ == '__main__':
     ppo_process.join()
     dqn_process.join()
     a2c_process.join()
+
+    # mock_sumo_env_for_tests()
