@@ -7,13 +7,13 @@ from rl_gym_environments import SUMOEnv
 
 from stable_baselines3.common.callbacks import BaseCallback
 import multiprocessing
+from time import sleep
 
 from simulation_utilities.flow_gen import *
-
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
-print("CUDA device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
+logging.info("CUDA device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
 
 def plot_mean_speeds(mean_speeds, agent_name):
     if len(mean_speeds) > 0:
@@ -24,7 +24,7 @@ def plot_mean_speeds(mean_speeds, agent_name):
         plt.title(f"Mean Speed over Training for {agent_name}")
         plt.show()
     else:
-        print(f"No mean speeds data to plot for {agent_name}")
+        logging.debug(f"No mean speeds data to plot for {agent_name}")
 
 class LoggingCallback(BaseCallback):
     def __init__(self, custom_logger, total_timesteps, verbose=0):
@@ -78,7 +78,7 @@ def train_ppo():
     try:
         check_env(env)
     finally:
-        env.close()
+        env.close_sumo("PPO check env terminated")
 
     total_timesteps = 100000 # 500k is generally robust and can handle fewer timesteps effectively
     log_dir = "./logs/PPO/"
@@ -111,7 +111,7 @@ def train_ppo():
         render=False
     )
 
-    print("Training PPO model...")
+    logging.info("Training PPO model...")
     ppo_logger = setup_logger('PPO', f'{log_dir}/ppo_training.log')
     ppo_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(ppo_logger, total_timesteps), ppo_eval_callback], log_interval=100)
 
@@ -123,7 +123,7 @@ def train_dqn():
     try:
         check_env(env)
     finally:
-        env.close()
+        env.close_sumo("DQN check env terminated")
 
     total_timesteps = 80000  # 400k is sample-efficient, especially in discrete action spaces
     log_dir = "./logs/DQN/"
@@ -158,7 +158,7 @@ def train_dqn():
         deterministic=True,
         render=False
     )
-    print("Training DQN model...")
+    logging.info("Training DQN model...")
     dqn_logger = setup_logger('DQN', f'{log_dir}/dqn_training.log')
     dqn_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(dqn_logger, total_timesteps), dqn_eval_callback], log_interval=100)
 
@@ -170,7 +170,7 @@ def train_a2c():
     try:
         check_env(env)
     finally:
-        env.close()
+        env.close_sumo("A2C check env terminated")
 
     total_timesteps = 60000 # 300k can learn efficiently with fewer samples due to its synchronous nature
     log_dir = "./logs/A2C/"
@@ -202,62 +202,34 @@ def train_a2c():
         deterministic=True,
         render=False
     )
-    print("Training A2C model...")
+    logging.info("Training A2C model...")
     a2c_logger = setup_logger('A2C', f'{log_dir}/a2c_training.log')
     a2c_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(a2c_logger, total_timesteps), a2c_eval_callback], log_interval=100)
 
     # plot_mean_speeds(env.mean_speeds, "A2C")
 
-def mock_sumo_env_for_tests():
-    import traci
-    from traci.exceptions import FatalTraCIError, TraCIException
-    import numpy as np
-    from rl_gym_environments import edges, loops_after
-
-    env = SUMOEnv(port=8813)
-    env.start_sumo()
-    veh_time_sum = 0
-    mean_edge_speed = np.zeros(len(edges))
-    emissions_over_time = []
-    for i in range(3600 * 24):
-        try:
-            traci.simulationStep() 
-        except (FatalTraCIError, TraCIException):
-            print("No connection to SUMO")
-
-        veh_time_sum += sum([traci.inductionloop.getLastStepVehicleNumber(loop) for loop in loops_after])
-
-        emission_sum = 0
-        for i, edge in enumerate(edges):
-            mean_edge_speed[i] += traci.edge.getLastStepMeanSpeed(edge)
-            emission_sum += traci.edge.getCO2Emission(edge)
-        emissions_over_time.append(emission_sum)
-    print(f"All: {emissions_over_time}")
-    print(f"Mean: {np.mean(emissions_over_time)}")
-    print(f"Sum: {sum(emissions_over_time)}")
-    env.close()
-
 if __name__ == '__main__':
     day_index = 0
-    base_traf_jam_exp = 1 #np.random.triangular(-0.25, 0, 0.25)
+    base_traf_jam_exp = 0.5 #np.random.triangular(-0.25, 0, 0.25)
     flow_generation(base_traf_jam_exp, day_index) # TODO: create an algo to increment day_index
-    
+    sleep(1)
+
     # Ensure freeze_support() is called if necessary (typically for Windows)
-    multiprocessing.freeze_support()
+    # multiprocessing.freeze_support()
 
-    # Create a process for each training function
-    ppo_process = multiprocessing.Process(target=train_ppo)
-    dqn_process = multiprocessing.Process(target=train_dqn)
-    a2c_process = multiprocessing.Process(target=train_a2c)
+    # # Create a process for each training function
+    # ppo_process = multiprocessing.Process(target=train_ppo)
+    # dqn_process = multiprocessing.Process(target=train_dqn)
+    # a2c_process = multiprocessing.Process(target=train_a2c)
     
-    # Start the processes
-    ppo_process.start()
-    dqn_process.start()
-    a2c_process.start()
+    # # Start the processes
+    # ppo_process.start()
+    # dqn_process.start()
+    # a2c_process.start()
     
-    # Join the processes to ensure they complete before exiting
-    ppo_process.join()
-    dqn_process.join()
-    a2c_process.join()
+    # # Join the processes to ensure they complete before exiting
+    # ppo_process.join()
+    # dqn_process.join()
+    # a2c_process.join()
 
-    # mock_sumo_env_for_tests()
+    train_ppo() # FIXME: this one is called only for debugging purposes

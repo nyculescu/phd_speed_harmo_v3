@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import logging
 
 # Vehicle generation rates (bimodal distribution pattern)
 car_generation_rates_per_lane = [
@@ -146,24 +147,24 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
                 if vehs_1 > 0:
                     if "disobedient" in vehicle_type:
                         flows.append((begin_time,
-                                    f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                                    f'    <flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                     else:
                         flows.append((begin_time,
-                                    f'<flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                                    f'    <flow id="{vehicle_type}_{flow_index}_0_{vehicle_type}" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type}"/>\n'))
                 
                 if vehs_2 > 0:
                     if "disobedient" in vehicle_type:
                         flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
-                                f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                                f'    <flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                 f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                 f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                     else:
                         flows.append((begin_time + (30 * len(car_generation_rates_per_lane)),
-                                f'<flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                                f'    <flow id="{vehicle_type}_{flow_index}_1_{vehicle_type}" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                 f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                 f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type}"/>\n'))
 
@@ -202,6 +203,6 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
 
             f.write('</routes>\n')
 
-        print("Flow generation complete.")
+        logging.info("Flow generation complete.")
 
 flow_generation(0)
