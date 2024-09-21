@@ -1,4 +1,4 @@
-max_emissions_over_time = 550000 # empirical data after running the simulation at max capacity
+max_emissions_over_time = 1000000 # empirical data after running the simulation at max capacity
 
 def normalize(value, min_value, max_value):
     """Normalize a value between min_value and max_value to a range [0, 1]."""

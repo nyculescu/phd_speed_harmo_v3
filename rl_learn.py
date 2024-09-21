@@ -13,7 +13,7 @@ from simulation_utilities.flow_gen import *
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
-logging.info("CUDA device name:", torch.cuda.get_device_name(torch.cuda.current_device()))
+logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
 
 def plot_mean_speeds(mean_speeds, agent_name):
     if len(mean_speeds) > 0:
@@ -98,7 +98,8 @@ def train_ppo():
         gae_lambda=0.95,
         clip_range=0.2,
         verbose=1,
-        tensorboard_log=log_dir
+        tensorboard_log=log_dir,
+        device='cuda'
     )
 
     ppo_eval_callback = EvalCallback(
@@ -146,7 +147,8 @@ def train_dqn():
         exploration_fraction=0.1,
         exploration_final_eps=0.05,
         verbose=1,
-        tensorboard_log=log_dir
+        tensorboard_log=log_dir,
+        device='cuda'
     )
 
     dqn_eval_callback = EvalCallback(
@@ -190,7 +192,8 @@ def train_a2c():
         vf_coef=0.5,
         max_grad_norm=0.5,
         verbose=1,
-        tensorboard_log=log_dir
+        tensorboard_log=log_dir,
+        device='cuda'
     )
 
     a2c_eval_callback = EvalCallback(
@@ -215,21 +218,26 @@ if __name__ == '__main__':
     sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
-    # multiprocessing.freeze_support()
+    multiprocessing.freeze_support()
 
-    # # Create a process for each training function
-    # ppo_process = multiprocessing.Process(target=train_ppo)
-    # dqn_process = multiprocessing.Process(target=train_dqn)
-    # a2c_process = multiprocessing.Process(target=train_a2c)
+    # Create a process for each training function
+    ppo_process = multiprocessing.Process(target=train_ppo)
+    dqn_process = multiprocessing.Process(target=train_dqn)
+    a2c_process = multiprocessing.Process(target=train_a2c)
     
-    # # Start the processes
-    # ppo_process.start()
-    # dqn_process.start()
-    # a2c_process.start()
+    # Start the processes
+    ppo_process.start()
+    dqn_process.start()
+    a2c_process.start()
     
-    # # Join the processes to ensure they complete before exiting
-    # ppo_process.join()
-    # dqn_process.join()
-    # a2c_process.join()
+    # Join the processes to ensure they complete before exiting
+    ppo_process.join()
+    dqn_process.join()
+    a2c_process.join()
 
-    train_ppo() # FIXME: this one is called only for debugging purposes
+    # train_ppo() # FIXME: this one is called only for debugging purposes
+    
+'''
+Run through tunnel
+/> d:/phd_ws/speed_harmo/phd_speed_harmo_v3/.py310_tf_env/Scripts/python.exe d:/phd_ws/speed_harmo/phd_speed_harmo_v3/rl_learn.py
+'''
