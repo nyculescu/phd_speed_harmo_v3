@@ -42,7 +42,7 @@ class SUMOEnv(gym.Env):
         self.mean_speeds_mps = []
         self.mean_emissions = []
         self.mean_num_halts = []
-        self.mean_occupancy_curr = []
+        self.mean_occupancy = []
         self.occupancy_sum = 0
         self.occupancy_avg = 0
         self.occupancy_curr = 0
@@ -180,12 +180,11 @@ class SUMOEnv(gym.Env):
         self.flows.append(self.flow)     
 
         self.occupancy_avg = self.occupancy_sum / self.aggregation_time / len(loops_before)
-
-        self.mean_occupancy_curr.append(self.occupancy_sum / self.aggregation_time)
+        self.mean_occupancy.append(self.occupancy_sum / self.aggregation_time)
 
         # Normalize each component of the observation
         normalized_mean_speed = normalize(np.mean(self.mean_speeds_mps), min_value=0, max_value=130/3.6)
-        normalized_occupancy = normalize(self.occupancy_curr, min_value=0, max_value=100)
+        normalized_occupancy = normalize(np.mean(self.mean_occupancy), min_value=0, max_value=100)
         normalized_emissions = normalize(np.mean(self.mean_emissions), min_value=0, max_value=max_emissions)
         normalized_halts = normalize(np.mean(self.mean_num_halts), min_value=0, max_value=10)
 
@@ -198,7 +197,7 @@ class SUMOEnv(gym.Env):
         ], dtype=np.float32)
         
         # "The system is activated when the mean speed and mean flow are below 50 km/h and 1500 veh/hour/lane, respectively." Ref.: Grumert, E. F., Tapani, A., & Ma, X. (2018). Characteristics of variable speed limit systems. European transport research review, 10, 1-12.
-        reward = complex_reward(speed_new_mps, np.mean(self.mean_speeds_mps), self.occupancy_avg, np.mean(self.mean_emissions), np.mean(self.mean_num_halts))           
+        reward = complex_reward(speed_new_mps, np.mean(self.mean_speeds_mps), np.mean(self.mean_occupancy), np.mean(self.mean_emissions), np.mean(self.mean_num_halts))           
 
         # Reduce simulation length by 1 second
         self.sim_length -= 1 
@@ -235,7 +234,7 @@ class SUMOEnv(gym.Env):
         self.mean_speeds_mps = []
         self.mean_emissions = []
         self.mean_num_halts = []
-        self.mean_occupancy_curr = []
+        self.mean_occupancy = []
         self.flow = 0
         self.flows = []
         self.total_travel_time = 0

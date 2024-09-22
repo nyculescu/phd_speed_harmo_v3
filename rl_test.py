@@ -70,7 +70,7 @@ def test_ppo():
     result = {metrics_to_plot[0]: ppo_env.mean_speeds_mps
               , metrics_to_plot[1]: ppo_env.mean_emissions
               , metrics_to_plot[2]: ppo_env.mean_num_halts
-              , metrics_to_plot[3]: ppo_env.mean_occupancy_curr
+              , metrics_to_plot[3]: ppo_env.mean_occupancy
               , metrics_to_plot[4]: ppo_env.flows
               }
     return ('PPO', result)
@@ -91,7 +91,7 @@ def test_a2c():
     result = {metrics_to_plot[0]: a2c_env.mean_speeds_mps
               , metrics_to_plot[1]: a2c_env.mean_emissions
               , metrics_to_plot[2]: a2c_env.mean_num_halts
-              , metrics_to_plot[3]: a2c_env.mean_occupancy_curr
+              , metrics_to_plot[3]: a2c_env.mean_occupancy
               , metrics_to_plot[4]: a2c_env.flows
               }
     
@@ -114,7 +114,7 @@ def test_dqn():
     result = {metrics_to_plot[0]: dqn_env.mean_speeds_mps
               , metrics_to_plot[1]: dqn_env.mean_emissions
               , metrics_to_plot[2]: dqn_env.mean_num_halts
-              , metrics_to_plot[3]: dqn_env.mean_occupancy_curr
+              , metrics_to_plot[3]: dqn_env.mean_occupancy
               , metrics_to_plot[4]: dqn_env.flows
               }
     return ('DQN', result)
