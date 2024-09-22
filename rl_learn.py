@@ -73,14 +73,18 @@ Note about policies:
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
 def train_ppo():
+    env_check = False
+    total_timesteps=500000
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0) # TODO: create an algo to increment day_index
+
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8813)
-    try:
-        check_env(env)
-    finally:
-        env.close_sumo("PPO check env terminated")
+    if env_check:
+        try:
+            check_env(env)
+        finally:
+            env.close_sumo("PPO check env terminated")
 
-    total_timesteps = 100000 # 500k is generally robust and can handle fewer timesteps effectively
     log_dir = "./logs/PPO/"
     model_dir = "./rl_models/PPO/"
     # Ensure log and model directories exist
@@ -114,19 +118,24 @@ def train_ppo():
 
     logging.info("Training PPO model...")
     ppo_logger = setup_logger('PPO', f'{log_dir}/ppo_training.log')
+    # no_train_on_low_occ = PauseLearningOnCondition(occupancy_threshold=0.3)
     ppo_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(ppo_logger, total_timesteps), ppo_eval_callback], log_interval=100)
 
     # plot_mean_speeds(env.mean_speeds, "PPO")
 
 def train_dqn():
+    env_check = False
+    total_timesteps=500000
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
+
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8814)
-    try:
-        check_env(env)
-    finally:
-        env.close_sumo("DQN check env terminated")
+    if env_check:
+        try:
+            check_env(env)
+        finally:
+            env.close_sumo("DQN check env terminated")
 
-    total_timesteps = 80000  # 400k is sample-efficient, especially in discrete action spaces
     log_dir = "./logs/DQN/"
     model_dir = "./rl_models/DQN/"
     # Ensure log and model directories exist
@@ -167,14 +176,18 @@ def train_dqn():
     # plot_mean_speeds(env.mean_speeds, "DQN")
 
 def train_a2c():
+    env_check = False
+    total_timesteps=500000
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
+
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8815)
-    try:
-        check_env(env)
-    finally:
-        env.close_sumo("A2C check env terminated")
+    if env_check:
+        try:
+            check_env(env)
+        finally:
+            env.close_sumo("A2C check env terminated")
 
-    total_timesteps = 60000 # 300k can learn efficiently with fewer samples due to its synchronous nature
     log_dir = "./logs/A2C/"
     model_dir = "./rl_models/A2C/"
     # Ensure log and model directories exist
@@ -212,11 +225,6 @@ def train_a2c():
     # plot_mean_speeds(env.mean_speeds, "A2C")
 
 if __name__ == '__main__':
-    day_index = 0
-    base_traf_jam_exp = 0.5 #np.random.triangular(-0.25, 0, 0.25)
-    flow_generation(base_traf_jam_exp, day_index) # TODO: create an algo to increment day_index
-    sleep(1)
-
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
 
@@ -235,9 +243,9 @@ if __name__ == '__main__':
     dqn_process.join()
     a2c_process.join()
 
-    # train_ppo() # FIXME: this one is called only for debugging purposes
+    # train_ppo(env_check=False) # FIXME: this one is called only for debugging purposes
     
 '''
-Run through tunnel
+Run rl_learn.py through tunnel:
 /> d:/phd_ws/speed_harmo/phd_speed_harmo_v3/.py310_tf_env/Scripts/python.exe d:/phd_ws/speed_harmo/phd_speed_harmo_v3/rl_learn.py
 '''

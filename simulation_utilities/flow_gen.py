@@ -4,15 +4,15 @@ import logging
 
 # Vehicle generation rates (bimodal distribution pattern)
 car_generation_rates_per_lane = [
-            75, 50,     # 00:00-00:30-01:00
-            50, 25,     # 01:00-01:30-02:00
-            25, 10,     # 02:00-02:30-03:00
-            10, 15,     # 03:00-03:30-04:00 
-            35, 50,     # 04:00-04:30-05:00
-            75, 125,    # 05:00-05:30-06:00
-            300, 480,   # 06:00-06:30-07:00
-            900, 1115,  # 07:00-07:30-08:00
-            1275, 1380, # 08:00-08:30-09:00
+            # 75, 50,     # 00:00-00:30-01:00
+            # 50, 25,     # 01:00-01:30-02:00
+            # 25, 10,     # 02:00-02:30-03:00
+            # 10, 15,     # 03:00-03:30-04:00 
+            # 35, 50,     # 04:00-04:30-05:00
+            # 75, 125,    # 05:00-05:30-06:00
+            # 300, 480,   # 06:00-06:30-07:00
+            # 900, 1115,  # 07:00-07:30-08:00
+            1275, 1380, # 08:00-08:30-09:00   # start
             1225, 1100, # 09:00-09:30-10:00
             1090, 1075, # 10:00-10:30-11:00
             1200, 1325, # 11:00-11:30-12:00
@@ -23,11 +23,11 @@ car_generation_rates_per_lane = [
             1375, 1400, # 16:00-16:30-17:00
             1575, 1725, # 17:00-17:30-18:00
             1575, 1400, # 18:00-18:30-19:00
-            1200, 1125, # 19:00-19:30-20:00
-            850, 700,   # 20:00-20:30-21:00
-            575, 450,   # 21:00-21:30-22:00
-            350, 225,   # 22:00-22:30-23:00
-            200, 100    # 23:00-23:30-00:00
+            1200, 1125, # 19:00-19:30-20:00   # end
+            # 850, 700,   # 20:00-20:30-21:00
+            # 575, 450,   # 21:00-21:30-22:00
+            # 350, 225,   # 22:00-22:30-23:00
+            # 200, 100    # 23:00-23:30-00:00
 ]
 
 # Day of the week factor # TODO: add this one in flow generation
@@ -119,7 +119,7 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
     }
 
     # Open a .rou.xml file to write flows
-    with open("./sumo/generated_flows.rou.xml", "w") as f:
+    with open(f"./sumo/generated_flows.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
@@ -172,7 +172,7 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
         flows.sort(key=lambda x: x[0])
 
         # Open a .rou.xml file to write sorted flows
-        with open("./sumo/generated_flows.rou.xml", "w") as f:
+        with open(f"./sumo/generated_flows.rou.xml", "w") as f:
             f.write('<routes>\n')
             f.write('\n')
             
@@ -205,4 +205,4 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
 
         logging.info("Flow generation complete.")
 
-flow_generation(0)
+# flow_generation(0, "DQN")
