@@ -75,7 +75,6 @@ Note about policies:
 def train_ppo():
     env_check = False
     total_timesteps=500000
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0) # TODO: create an algo to increment day_index
 
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8813)
@@ -126,7 +125,6 @@ def train_ppo():
 def train_dqn():
     env_check = False
     total_timesteps=500000
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
 
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8814)
@@ -178,7 +176,6 @@ def train_dqn():
 def train_a2c():
     env_check = False
     total_timesteps=500000
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
 
     # Initialize SUMO environment for this agent then check it
     env = SUMOEnv(port=8815)
@@ -243,7 +240,7 @@ if __name__ == '__main__':
     dqn_process.join()
     a2c_process.join()
 
-    # train_ppo(env_check=False) # FIXME: this one is called only for debugging purposes
+    # train_ppo() # FIXME: this one is called only for debugging purposes
     
 '''
 Run rl_learn.py through tunnel:

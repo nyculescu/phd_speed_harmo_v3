@@ -35,7 +35,7 @@ class SUMOEnv(gym.Env):
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.action_space = gym.spaces.Discrete(len(self.speed_limits))
-        self.observation_space = gym.spaces.Box(low=np.array([0]*4), high=np.array([1]*4), dtype="float32", shape=(4,))
+        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float32", shape=(1,))
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
         self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time  # 60 x 1440 = 86400 steps
@@ -52,6 +52,12 @@ class SUMOEnv(gym.Env):
         self.sumo_process = None
         self.sumo_max_retries = 5
         self.day_index = 0
+        self.flow_gen_max = 0
+        self.emissions_t_minus_1 = 0  # Initial previous cumulative CO2 emissions
+        self.mean_speed_t_minus_1 = 0  # Initial previous average speed in m/s
+        self.reward = 0
+        self.total_emissions_now = 0
+        self.rewards = []
 
     def start_sumo(self):
         # If SUMO is running, then perform a restart
@@ -63,6 +69,11 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
+                self.flow_gen_max = np.random.triangular(0.5, 1, 1.5)
+                flow_generation(self.flow_gen_max, self.day_index)
+                self.day_index %= 7
+                sleep(1)
+
                 port = self.port + attempt
                 logging.debug(f"Attempting to start SUMO on port {port}")
                 self.sumo_process = subprocess.Popen(sumoCmd + ["--remote-port", str(port)], 
@@ -88,40 +99,6 @@ class SUMOEnv(gym.Env):
             self.sumo_process.terminate()
             self.sumo_process = None
 
-    def track_vehicle_times(self, all_segments, departure_times, arrival_times, traci):
-        # Create a list of the keys to iterate over
-        departure_times_keys = list(departure_times.keys())
-        arrival_times_keys = list(arrival_times.keys())
-
-        for idx, seg in enumerate(all_segments):
-            for lane in seg:
-                ids = traci.lane.getLastStepVehicleIDs(lane)
-                
-                # Iterate over a copy of the keys
-                for id in departure_times_keys:
-                    if id not in ids:
-                        if id in arrival_times_keys:
-                            # Check if both keys exist before accessing them
-                            dep_time = departure_times.get(id)
-                            arr_time = arrival_times.get(id)
-                            if dep_time is not None and arr_time is not None:
-                                travel_time = max(0, arr_time - dep_time)
-                                self.total_travel_time += travel_time / 60
-                                # Remove entries from the original dictionaries
-                                del departure_times[id]
-                                del arrival_times[id]
-                                # logging.debug(f"Removed {id} from departure_times and arrival_times")
-
-                for id in ids:
-                    current_time = traci.simulation.getTime()
-                    if id in departure_times:
-                        arrival_times[id] = current_time
-                    else:
-                        departure_times[id] = current_time
-                        # logging.debug(f"Added {id} to departure_times with time {current_time}")
-                    # self.total_waiting_time += traci.vehicle.getAccumulatedWaitingTime(id) # Calculate total waiting time for all vehicles still in simulation
-                    traci.vehicle.isStopped(id)   # FIXME: a logic based on this will be used instead getAccumulatedWaitingTime() 
-
     def step(self, action):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if not is_sumo_running:
@@ -129,20 +106,22 @@ class SUMOEnv(gym.Env):
 
         # Apply action
         self.speed_limit = self.speed_limits[action]
+        speed_new_mps = self.speed_limit / 3.6  # km/h to m/s
 
-        # copied from mtfc
-        speed_new_mps = self.speed_limit / 3.6 # km/h to m/s
-        road_segments = [seg_1_before]
-
-        for segment in road_segments:
+        for segment in [seg_1_before]:
             if is_sumo_running:
-               [traci.lane.setMaxSpeed(lane, speed_new_mps) for lane in segment]
-                
+                [traci.lane.setMaxSpeed(lane, speed_new_mps) for lane in segment]
+
         mean_speeds_edges_mps = np.zeros(len(edges))
-        num_halts_edges = np.zeros(len(edges))
         emissions_edges = np.zeros(len(edges))
         veh_time_sum = 0
 
+        # Initialize previous state variables if not already set
+        if not hasattr(self, 'prev_emissions'):
+            self.prev_emissions = np.zeros(len(edges))
+            self.prev_mean_speed = np.zeros(len(edges))
+
+        # Step simulation and collect data
         for i in range(self.aggregation_time):
             try:
                 traci.simulationStep()
@@ -155,9 +134,8 @@ class SUMOEnv(gym.Env):
 
             for idx, edge in enumerate(edges):
                 mean_speeds_edges_mps[idx] += traci.edge.getLastStepMeanSpeed(edge)
-                num_halts_edges[idx] += traci.edge.getLastStepHaltingNumber(edge)  # Number of vehicles stopped
                 emissions_edges[idx] += traci.edge.getCO2Emission(edge)
-         
+
             occ_max = 0
             for loops in loops_before:
                 occ_loop = sum([traci.inductionloop.getLastStepOccupancy(loop) for loop in loops]) / len(loops)
@@ -167,69 +145,54 @@ class SUMOEnv(gym.Env):
             self.occupancy_curr = occ_max
             self.occupancy_sum += occ_max
 
-        mean_speeds_edges_mps = mean_speeds_edges_mps / self.aggregation_time
-        self.mean_speeds_mps.append(sum(mean_speeds_edges_mps) / len(mean_speeds_edges_mps)) 
+        # Calculate average speed and emissions over the aggregation period
+        avg_speed_now = np.mean(mean_speeds_edges_mps) / self.aggregation_time
+        self.total_emissions_now = np.sum(emissions_edges)
 
-        num_halts_edges = num_halts_edges / self.aggregation_time
-        self.mean_num_halts.append(sum(num_halts_edges)) 
+        # Calculate reward using the adapted reward function
+        self.reward = reward_co2_avgspeed(
+            self.total_emissions_now,
+            np.sum(self.prev_emissions),
+            avg_speed_now,
+            np.mean(self.prev_mean_speed),
+            k1=-2,
+            b1=0.9,
+            k3=-0.5,
+            b3=0.9
+        )
+        self.rewards.append(self.reward)
 
-        emissions_edges = emissions_edges / self.aggregation_time
-        self.mean_emissions.append(sum(emissions_edges) / len(emissions_edges)) 
+        # Update previous state variables
+        self.prev_emissions = emissions_edges
+        self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
 
-        self.flow = (veh_time_sum / self.aggregation_time)
-        self.flows.append(self.flow)     
+        flow = (veh_time_sum / self.aggregation_time) * len(car_generation_rates_per_lane) / 2 * 60 * 60
+        self.flows.append(flow)
 
-        self.occupancy_avg = self.occupancy_sum / self.aggregation_time / len(loops_before)
-        self.mean_occupancy.append(self.occupancy_sum / self.aggregation_time)
-
-        # Normalize each component of the observation
-        normalized_mean_speed = normalize(np.mean(self.mean_speeds_mps), min_value=0, max_value=130/3.6)
-        normalized_occupancy = normalize(np.mean(self.mean_occupancy), min_value=0, max_value=100)
-        normalized_emissions = normalize(np.mean(self.mean_emissions), min_value=0, max_value=max_emissions)
-        normalized_halts = normalize(np.mean(self.mean_num_halts), min_value=0, max_value=10)
-
-        # Construct normalized observation vector
-        obs = np.array([
-            normalized_mean_speed,
-            normalized_occupancy,
-            normalized_emissions,
-            normalized_halts
-        ], dtype=np.float32)
-        
-        # "The system is activated when the mean speed and mean flow are below 50 km/h and 1500 veh/hour/lane, respectively." Ref.: Grumert, E. F., Tapani, A., & Ma, X. (2018). Characteristics of variable speed limit systems. European transport research review, 10, 1-12.
-        reward = complex_reward(speed_new_mps, np.mean(self.mean_speeds_mps), np.mean(self.mean_occupancy), np.mean(self.mean_emissions), np.mean(self.mean_num_halts))           
-
-        # Reduce simulation length by 1 second
-        self.sim_length -= 1 
+        self.sim_length -= 1  # Reduce simulation length by 1 second
         done = self.sim_length <= 0
         if done:
-            # self.log_info()
-            self.close_sumo("simualtion done")
+            self.log_info()
+            self.rewards = []
+            self.close_sumo("simulation done")
 
-        # Return step information
-        return obs, reward, done, False, {}
+        return np.array([avg_speed_now]), self.reward, done, False, {}
 
     def render(self):
         # Implement viz
         pass
     
     def log_info(self):
-        logging.info(f"--------------------------------\nSUMO PID: {self.sumo_process.pid}")
-
-        logging.info(f"Max CO2 emis: {max(self.mean_emissions)} mg/s")
-        logging.info(f"Avg CO2 emis: {np.mean(self.mean_emissions)} mg/s")
-
-        logging.info(f"Max Mean speed: {max(self.mean_speeds_mps)} m/s")
-        logging.info(f"Avg Mean speed: {np.mean(self.mean_speeds_mps)} m/s")
-
-        logging.info(f"Max No Halts: {max(self.mean_num_halts)}")
-        logging.info(f"Avg No Halts: {np.mean(self.mean_num_halts)}")
-
-        logging.info(f"Occupancy Sum: {self.occupancy_sum}")
-        logging.info(f"Occupancy/60: {self.occupancy_avg}")
+        logging.info(f"\n-----------------------------------\n\
+                     SUMO PID: {self.sumo_process.pid}")
+        logging.info(f"Reward for this episode: {self.reward}")
+        logging.info(f"Max CO2 emis: {max(self.prev_emissions)} mg/s")
+        logging.info(f"Max speed prev: {max(self.prev_mean_speed)} m/s")
+        logging.info(f"Mean flow: {np.mean(self.flows)}")
 
     def reset(self, seed=None):
         self.day_index = 0
+        self.flow_gen_max = 0
         self.isUnstableFlowConditions = False
         self.mean_speeds_mps = []
         self.mean_emissions = []
@@ -241,10 +204,10 @@ class SUMOEnv(gym.Env):
         self.total_waiting_time = 0
         # self.sumo_process = None
         self.sumo_max_retries = 5
-        self.day_index = 0
         self.occupancy_sum = 0
         self.occupancy_avg = 0
         self.occupancy_curr = 0
+        self.rewards = []
 
         # Reset params
         self.speed_limit = 130
@@ -252,7 +215,7 @@ class SUMOEnv(gym.Env):
         # Reset time
         self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time
 
-        obs = np.array([0]*4, dtype=np.float32)
+        obs = np.array([0], dtype=np.float32)
         
         return obs, {}
     
@@ -262,8 +225,42 @@ class SUMOEnv(gym.Env):
     def __del__(self):
         self.close()
 
-    def get_current_occupancy(self):
-        return self.occupancy_curr
+    # def get_current_occupancy(self):
+    #     return self.occupancy_curr
+
+    # def track_vehicle_times(self, all_segments, departure_times, arrival_times, traci):
+    #     # Create a list of the keys to iterate over
+    #     departure_times_keys = list(departure_times.keys())
+    #     arrival_times_keys = list(arrival_times.keys())
+    #     for idx, seg in enumerate(all_segments):
+    #         for lane in seg:
+    #             ids = traci.lane.getLastStepVehicleIDs(lane)
+                
+    #             # Iterate over a copy of the keys
+    #             for id in departure_times_keys:
+    #                 if id not in ids:
+    #                     if id in arrival_times_keys:
+    #                         # Check if both keys exist before accessing them
+    #                         dep_time = departure_times.get(id)
+    #                         arr_time = arrival_times.get(id)
+    #                         if dep_time is not None and arr_time is not None:
+    #                             travel_time = max(0, arr_time - dep_time)
+    #                             self.total_travel_time += travel_time / 60
+    #                             # Remove entries from the original dictionaries
+    #                             del departure_times[id]
+    #                             del arrival_times[id]
+    #                             # logging.debug(f"Removed {id} from departure_times and arrival_times")
+
+    #             for id in ids:
+    #                 current_time = traci.simulation.getTime()
+    #                 if id in departure_times:
+    #                     arrival_times[id] = current_time
+    #                 else:
+    #                     departure_times[id] = current_time
+    #                     # logging.debug(f"Added {id} to departure_times with time {current_time}")
+    #                 # self.total_waiting_time += traci.vehicle.getAccumulatedWaitingTime(id) # Calculate total waiting time for all vehicles still in simulation
+    #                 traci.vehicle.isStopped(id)   # FIXME: a logic based on this will be used instead getAccumulatedWaitingTime() 
+
 
 # class PauseLearningOnCondition(BaseCallback): # FIXME: delete this one, no pause on training in stable_baselines3
 #     occupancy_threshold=0.3

@@ -36,21 +36,20 @@ colors = {'PPO': 'blue', 'A2C': 'orange', 'DQN': 'green'}
 
 results = {}
 
-metrics_to_plot = ['speed'
-                   , 'emissions'
-                   , 'halts_no'
-                   , 'occupancy_curr'
+metrics_to_plot = ['rewards'
+                   , 'obs'
+                   , 'prev_emissions'
+                   , 'prev_mean_speed'
                    , 'flow'
                    ]
 
 def save_metrics(metrics, agent_name):
+    # Open the file using a context manager
     with open(f'./logs/{agent_name}_metrics.csv', 'w+') as metrics_file:
-        list_to_string = lambda x: ','.join([str(elem) for elem in x]) + '\n'
-        metrics_file.write(list_to_string(metrics['speed']))
-        metrics_file.write(list_to_string(metrics['flow']))
-        metrics_file.write(list_to_string(metrics['emissions']))
-        metrics_file.write(list_to_string(metrics['halts_no']))
-        metrics_file.write(list_to_string(metrics['occupancy_curr']))
+        # Iterate over each key and write its corresponding values
+        for key in metrics_to_plot:
+            # Convert list to comma-separated string and write to file
+            metrics_file.write(','.join(map(str, metrics[key])) + '\n')
     
     # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
 
@@ -67,10 +66,10 @@ def test_ppo():
         action, _ = ppo_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = ppo_env.step(action)
 
-    result = {metrics_to_plot[0]: ppo_env.mean_speeds_mps
-              , metrics_to_plot[1]: ppo_env.mean_emissions
-              , metrics_to_plot[2]: ppo_env.mean_num_halts
-              , metrics_to_plot[3]: ppo_env.mean_occupancy
+    result = {metrics_to_plot[0]: ppo_env.rewards
+              , metrics_to_plot[1]: ppo_env.obs
+              , metrics_to_plot[2]: ppo_env.prev_emissions
+              , metrics_to_plot[3]: ppo_env.prev_mean_speed
               , metrics_to_plot[4]: ppo_env.flows
               }
     return ('PPO', result)
@@ -88,11 +87,11 @@ def test_a2c():
         action, _ = a2c_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = a2c_env.step(action)
     
-    result = {metrics_to_plot[0]: a2c_env.mean_speeds_mps
-              , metrics_to_plot[1]: a2c_env.mean_emissions
-              , metrics_to_plot[2]: a2c_env.mean_num_halts
-              , metrics_to_plot[3]: a2c_env.mean_occupancy
-              , metrics_to_plot[4]: a2c_env.flows
+    result = {metrics_to_plot[0]: ppo_env.rewards
+              , metrics_to_plot[1]: ppo_env.obs
+              , metrics_to_plot[2]: ppo_env.prev_emissions
+              , metrics_to_plot[3]: ppo_env.prev_mean_speed
+              , metrics_to_plot[4]: ppo_env.flows
               }
     
     return ('A2C', result)
@@ -111,11 +110,11 @@ def test_dqn():
         action, _ = dqn_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = dqn_env.step(action)
 
-    result = {metrics_to_plot[0]: dqn_env.mean_speeds_mps
-              , metrics_to_plot[1]: dqn_env.mean_emissions
-              , metrics_to_plot[2]: dqn_env.mean_num_halts
-              , metrics_to_plot[3]: dqn_env.mean_occupancy
-              , metrics_to_plot[4]: dqn_env.flows
+    result = {metrics_to_plot[0]: ppo_env.rewards
+              , metrics_to_plot[1]: ppo_env.obs
+              , metrics_to_plot[2]: ppo_env.prev_emissions
+              , metrics_to_plot[3]: ppo_env.prev_mean_speed
+              , metrics_to_plot[4]: ppo_env.flows
               }
     return ('DQN', result)
 
@@ -133,13 +132,14 @@ def plot_metrics():
     variance_std_dev = {agent: {key: (np.var(values), np.std(values)) for key, values in metrics.items()} for agent, metrics in results.items()}
 
     # Perform ANOVA
-    anova_results = {
-        'flow': stats.f_oneway(results['PPO']['flow'], results['A2C']['flow'], results['DQN']['flow']),
-        'speed': stats.f_oneway(results['PPO']['speed'], results['A2C']['speed'], results['DQN']['speed']),
-        'emissions': stats.f_oneway(results['PPO']['emissions'], results['A2C']['emissions'], results['DQN']['emissions']),
-        'halts_no': stats.f_oneway(results['PPO']['halts_no'], results['A2C']['halts_no'], results['DQN']['halts_no']),
-        'occupancy_curr': stats.f_oneway(results['PPO']['occupancy_curr'], results['A2C']['occupancy_curr'], results['DQN']['occupancy_curr']),
-    }
+    # anova_results = {
+    #     'obs': stats.f_oneway(results['PPO']['obs'], results['A2C']['obs'], results['DQN']['obs'])
+    #     ,'rewards': stats.f_oneway(results['PPO']['rewards'], results['A2C']['rewards'], results['DQN']['rewards'])
+    #     ,'prev_emissions': stats.f_oneway(results['PPO']['prev_emissions'], results['A2C']['prev_emissions'], results['DQN']['prev_emissions'])
+    #     ,'prev_mean_speed': stats.f_oneway(results['PPO']['prev_mean_speed'], results['A2C']['prev_mean_speed'], results['DQN']['prev_mean_speed'])
+    #     ,'flow': stats.f_oneway(results['PPO']['flow'], results['A2C']['flow'], results['DQN']['flow'])
+    # }
+    anova_results = {metric: stats.f_oneway(results['PPO'][metric], results['A2C'][metric], results['DQN'][metric]) for metric in metrics}
     # Log ANOVA Results to a file
     os.makedirs('logs', exist_ok=True)
     with open('logs/anova_results.log', 'w') as f:
@@ -221,48 +221,48 @@ if __name__ == '__main__':
     flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
     sleep(1)
 
-    # # Ensure freeze_support() is called if necessary (typically for Windows)
-    # multiprocessing.freeze_support()
+    # Ensure freeze_support() is called if necessary (typically for Windows)
+    multiprocessing.freeze_support()
 
-    # logging.debug("Creating pool of processes")
-    # # Create a pool of processes
-    # pool = multiprocessing.Pool(processes=3)
+    logging.debug("Creating pool of processes")
+    # Create a pool of processes
+    pool = multiprocessing.Pool(processes=3)
 
-    # # Collect async results
-    # async_results = [
-    #     pool.apply_async(test_dqn, callback=process_callback),
-    #     pool.apply_async(test_ppo, callback=process_callback),
-    #     pool.apply_async(test_a2c, callback=process_callback)
-    # ]
+    # Collect async results
+    async_results = [
+        pool.apply_async(test_dqn, callback=process_callback),
+        pool.apply_async(test_ppo, callback=process_callback),
+        pool.apply_async(test_a2c, callback=process_callback)
+    ]
 
-    # # Close the pool and wait for all processes to finish
-    # logging.debug("Closing pool")
-    # pool.close()
-    # pool.join()
+    # Close the pool and wait for all processes to finish
+    logging.debug("Closing pool")
+    pool.close()
+    pool.join()
     
-    # # Check if all async tasks were successful
-    # logging.debug("Checking async results")
-    # for async_result in async_results:
-    #     try:
-    #         async_result.get(timeout=10)
-    #     except Exception as e:
-    #         logging.error(f"An error occurred in one of the processes: {e}")
+    # Check if all async tasks were successful
+    logging.debug("Checking async results")
+    for async_result in async_results:
+        try:
+            async_result.get(timeout=10)
+        except Exception as e:
+            logging.error(f"An error occurred in one of the processes: {e}")
 
     # # FIXME: this one is called only for debugging purposes
-    agent_name, agent_result = test_dqn()
-    logging.debug(f"Processing result for {agent_name}")
-    results[agent_name] = agent_result
-    save_metrics(agent_result, agent_name)
+    # agent_name, agent_result = test_dqn()
+    # logging.debug(f"Processing result for {agent_name}")
+    # results[agent_name] = agent_result
+    # save_metrics(agent_result, agent_name)
 
-    agent_name, agent_result = test_a2c()
-    logging.debug(f"Processing result for {agent_name}")
-    results[agent_name] = agent_result
-    save_metrics(agent_result, agent_name)
+    # agent_name, agent_result = test_a2c()
+    # logging.debug(f"Processing result for {agent_name}")
+    # results[agent_name] = agent_result
+    # save_metrics(agent_result, agent_name)
 
-    agent_name, agent_result = test_ppo()
-    logging.debug(f"Processing result for {agent_name}")
-    results[agent_name] = agent_result
-    save_metrics(agent_result, agent_name)
+    # agent_name, agent_result = test_ppo()
+    # logging.debug(f"Processing result for {agent_name}")
+    # results[agent_name] = agent_result
+    # save_metrics(agent_result, agent_name)
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")

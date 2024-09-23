@@ -44,12 +44,12 @@ day_of_the_week_factor = [
 # Day off factor (assuming no day off effect) # TODO: add this one in flow generation
 day_off_factor = [
     1.0, # Monday
-    1.0, # Tuesday
-    1.0, # Wednesday
+    1.05, # Tuesday
+    1.05, # Wednesday
     1.0, # Thursday
-    1.0, # Friday
-    1.0, # Saturday
-    1.0  # Sunday
+    1.10, # Friday
+    0.75, # Saturday
+    0.8  # Sunday
 ]
 
 # Define route and other common flow attributes
@@ -59,9 +59,9 @@ depart_pos = "free"
 depart_speed = "speedLimit"
 lanes = 3
 
-def flow_generation(base_traffic_jam_exponent, day_index = 0):
+def flow_generation(base_traffic_jam_exponent, day_index):
     # Vehicle type distributions
-    trucks = np.random.uniform(10, 15) * (1.0 if np.random.triangular(0, 0.86, 1) > 0.5 else 0.0)
+    trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
     cars = np.random.uniform(70, 85) * 1.15
     motorcycle = 0
     bus = 0
@@ -129,9 +129,9 @@ def flow_generation(base_traffic_jam_exponent, day_index = 0):
             begin_time = i * 1800
 
             # Get vehsPerHour for current interval
-            low = math.exp(base_traffic_jam_exponent) * 0.75
-            high = math.exp(base_traffic_jam_exponent) * 1.25
-            mid = math.exp(base_traffic_jam_exponent)
+            low = math.exp(base_traffic_jam_exponent) * 0.75 * day_off_factor[day_index]
+            high = math.exp(base_traffic_jam_exponent) * 1.25 * day_off_factor[day_index]
+            mid = math.exp(base_traffic_jam_exponent) * day_off_factor[day_index]
             traffic_jam_factor = np.random.triangular(low, mid, high)
             vehs_per_hour_1 = car_generation_rates_per_lane[i] * traffic_jam_factor
             vehs_per_hour_2 = car_generation_rates_per_lane[i+1] * traffic_jam_factor
