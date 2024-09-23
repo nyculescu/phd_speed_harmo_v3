@@ -182,7 +182,7 @@ def complex_reward(target_speed_mps, mean_speeds_mps, occupancy, mean_emissions,
 
     return reward
 
-def reward_co2_avgspeed(emissions_t, emissions_t_minus_1, speed_t, speed_t_minus_1, k1=-0.5, b1=0.9, k3=-0.2, b3=0.9):
+def reward_co2_avgspeed(emissions_t, emissions_t_minus_1, speed_t, speed_t_minus_1, k1=-0.2, b1=0.9, k3=-0.1, b3=0.9):
     # Normalize emissions
     normalized_emissions_t = emissions_t / 30000000  # Example normalization factor
     normalized_emissions_t_minus_1 = emissions_t_minus_1 / 30000000

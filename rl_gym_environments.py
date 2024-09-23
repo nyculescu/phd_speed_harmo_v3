@@ -30,8 +30,9 @@ vehicle_counts = {
 }
 
 class SUMOEnv(gym.Env):
-    def __init__(self, port):
+    def __init__(self, port, model):
         self.port = port
+        self.model = model
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.action_space = gym.spaces.Discrete(len(self.speed_limits))
@@ -149,6 +150,10 @@ class SUMOEnv(gym.Env):
         avg_speed_now = np.mean(mean_speeds_edges_mps) / self.aggregation_time
         self.total_emissions_now = np.sum(emissions_edges)
 
+        # Update previous state variables
+        self.prev_emissions = emissions_edges
+        self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
+
         # Calculate reward using the adapted reward function
         self.reward = reward_co2_avgspeed(
             self.total_emissions_now,
@@ -161,10 +166,6 @@ class SUMOEnv(gym.Env):
             b3=0.9
         )
         self.rewards.append(self.reward)
-
-        # Update previous state variables
-        self.prev_emissions = emissions_edges
-        self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
 
         flow = (veh_time_sum / self.aggregation_time) * len(car_generation_rates_per_lane) / 2 * 60 * 60
         self.flows.append(flow)

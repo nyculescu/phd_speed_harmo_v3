@@ -55,7 +55,7 @@ def save_metrics(metrics, agent_name):
 
 def test_ppo():
     logging.debug("Starting PPO test")
-    ppo_env = SUMOEnv(port=8813)
+    ppo_env = SUMOEnv(port=8813, model="PPO")
     # check_env(ppo_env)
     ppo_model = PPO.load(model_paths['PPO'])
 
@@ -76,7 +76,7 @@ def test_ppo():
 
 def test_a2c():
     logging.debug("Starting A2C test")
-    a2c_env = SUMOEnv(port=8814)
+    a2c_env = SUMOEnv(port=8814, model="A2C")
     # check_env(a2c_env)
     a2c_model = A2C.load(model_paths['A2C'])
     
@@ -99,7 +99,7 @@ def test_a2c():
 # Note: even though the code seem to be redundant and can be abstractised into one function with different values of the params, leave it like this because it won't run on multi-process
 def test_dqn():
     logging.debug("Starting DQN test")
-    dqn_env = SUMOEnv(port=8815)
+    dqn_env = SUMOEnv(port=8815, model="DQN")
     # check_env(dqn_env)
     dqn_model = DQN.load(model_paths['DQN'])
 

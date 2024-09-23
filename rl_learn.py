@@ -3,6 +3,7 @@ from stable_baselines3 import PPO, DQN, A2C
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import EvalCallback
 import logging
+import logging.handlers
 from rl_gym_environments import SUMOEnv
 
 from stable_baselines3.common.callbacks import BaseCallback
@@ -53,6 +54,33 @@ def setup_logger(name, log_file, level=logging.INFO):
 
     return logger
 
+def listener_configurer(log_file):
+    root = logging.getLogger()
+    handler = logging.FileHandler(log_file)
+    formatter = logging.Formatter('%(asctime)s - %(processName)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+
+def listener_process(queue, log_file):
+    listener_configurer(log_file)
+    while True:
+        try:
+            record = queue.get()
+            if record is None:  # Sentinel to shut down
+                break
+            logger = logging.getLogger(record.name)
+            logger.handle(record)
+        except Exception:
+            import sys, traceback
+            print('Problem:', file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+
+def worker_configurer(queue):
+    h = logging.handlers.QueueHandler(queue)
+    root = logging.getLogger()
+    root.addHandler(h)
+    root.setLevel(logging.INFO)
+
 eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
@@ -72,12 +100,15 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-def train_ppo():
+def train_ppo(queue):
+    worker_configurer(queue)
+    logger = logging.getLogger('PPO')
+
     env_check = False
     total_timesteps=500000
 
     # Initialize SUMO environment for this agent then check it
-    env = SUMOEnv(port=8813)
+    env = SUMOEnv(port=8813, model="PPO")
     if env_check:
         try:
             check_env(env)
@@ -116,18 +147,20 @@ def train_ppo():
     )
 
     logging.info("Training PPO model...")
-    ppo_logger = setup_logger('PPO', f'{log_dir}/ppo_training.log')
     # no_train_on_low_occ = PauseLearningOnCondition(occupancy_threshold=0.3)
-    ppo_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(ppo_logger, total_timesteps), ppo_eval_callback], log_interval=100)
+    ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback], log_interval=100)
 
     # plot_mean_speeds(env.mean_speeds, "PPO")
 
-def train_dqn():
+def train_dqn(queue):
+    worker_configurer(queue)
+    logger = logging.getLogger('DQN')
+
     env_check = False
     total_timesteps=500000
 
     # Initialize SUMO environment for this agent then check it
-    env = SUMOEnv(port=8814)
+    env = SUMOEnv(port=8814, model="DQN")
     if env_check:
         try:
             check_env(env)
@@ -168,17 +201,19 @@ def train_dqn():
         render=False
     )
     logging.info("Training DQN model...")
-    dqn_logger = setup_logger('DQN', f'{log_dir}/dqn_training.log')
-    dqn_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(dqn_logger, total_timesteps), dqn_eval_callback], log_interval=100)
+    dqn_model.learn(total_timesteps=total_timesteps, callback=[dqn_eval_callback], log_interval=100)
 
     # plot_mean_speeds(env.mean_speeds, "DQN")
 
-def train_a2c():
+def train_a2c(queue):
+    worker_configurer(queue)
+    logger = logging.getLogger('A2C')
+
     env_check = False
     total_timesteps=500000
 
     # Initialize SUMO environment for this agent then check it
-    env = SUMOEnv(port=8815)
+    env = SUMOEnv(port=8815, model="A2C")
     if env_check:
         try:
             check_env(env)
@@ -216,19 +251,27 @@ def train_a2c():
         render=False
     )
     logging.info("Training A2C model...")
-    a2c_logger = setup_logger('A2C', f'{log_dir}/a2c_training.log')
-    a2c_model.learn(total_timesteps=total_timesteps, callback=[LoggingCallback(a2c_logger, total_timesteps), a2c_eval_callback], log_interval=100)
+    # a2c_logger = setup_logger('A2C', f'{log_dir}/a2c_training.log')
+    a2c_model.learn(total_timesteps=total_timesteps, callback=[a2c_eval_callback], log_interval=100)
 
     # plot_mean_speeds(env.mean_speeds, "A2C")
 
 if __name__ == '__main__':
-    # Ensure freeze_support() is called if necessary (typically for Windows)
-    multiprocessing.freeze_support()
+    log_dir = "./logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = f'{log_dir}/multiprocessing_log.log'
 
-    # Create a process for each training function
-    ppo_process = multiprocessing.Process(target=train_ppo)
-    dqn_process = multiprocessing.Process(target=train_dqn)
-    a2c_process = multiprocessing.Process(target=train_a2c)
+    # Set up the queue
+    log_queue = multiprocessing.Queue(-1)
+
+    # Start the listener process
+    listener = multiprocessing.Process(target=listener_process, args=(log_queue, log_file))
+    listener.start()
+
+    # Start worker processes
+    ppo_process = multiprocessing.Process(target=train_ppo, args=(log_queue,))
+    dqn_process = multiprocessing.Process(target=train_dqn, args=(log_queue,))
+    a2c_process = multiprocessing.Process(target=train_a2c, args=(log_queue,))
     
     # Start the processes
     ppo_process.start()
@@ -239,6 +282,10 @@ if __name__ == '__main__':
     ppo_process.join()
     dqn_process.join()
     a2c_process.join()
+
+    # Stop the listener
+    log_queue.put_nowait(None)
+    listener.join()
 
     # train_ppo() # FIXME: this one is called only for debugging purposes
     
