@@ -30,9 +30,10 @@ vehicle_counts = {
 }
 
 class SUMOEnv(gym.Env):
-    def __init__(self, port, model):
+    def __init__(self, port, model, model_idx):
         self.port = port
         self.model = model
+        self.model_idx = model_idx
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.action_space = gym.spaces.Discrete(len(self.speed_limits))
@@ -71,17 +72,17 @@ class SUMOEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 self.flow_gen_max = np.random.triangular(0.5, 1, 1.5)
-                flow_generation(self.flow_gen_max, self.day_index)
+            
+                flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
                 self.day_index %= 7
-                sleep(1)
 
-                port = self.port + attempt
+                port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
-                self.sumo_process = subprocess.Popen(sumoCmd + ["--remote-port", str(port)], 
-                                     stdout=subprocess.PIPE, 
-                                     stderr=subprocess.PIPE)
+                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] + ["--remote-port", str(port)], 
+                                    stdout=subprocess.PIPE, 
+                                    stderr=subprocess.PIPE)
                 logging.debug(f"Attempting to connect to SUMO on port {port}")
-                traci.init(port=port, numRetries=5)
+                traci.init(port=port, numRetries=3)
                 logging.info(f"Successfully connected to SUMO on port {port}")
                 return
             except (FatalTraCIError, TraCIException) as e:
@@ -98,6 +99,7 @@ class SUMOEnv(gym.Env):
             except (FatalTraCIError, TraCIException):
                 pass  # Ignore errors when closing
             self.sumo_process.terminate()
+            self.sumo_process.wait()
             self.sumo_process = None
 
     def step(self, action):

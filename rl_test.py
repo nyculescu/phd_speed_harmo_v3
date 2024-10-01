@@ -218,7 +218,7 @@ def plot_metrics():
     plt.show()
 
 if __name__ == '__main__':
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0)
+    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model_idx)
     sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)

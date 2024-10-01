@@ -59,7 +59,7 @@ depart_pos = "free"
 depart_speed = "speedLimit"
 lanes = 3
 
-def flow_generation(base_traffic_jam_exponent, day_index):
+def flow_generation(base_traffic_jam_exponent, day_index, model, idx):
     # Vehicle type distributions
     trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
     cars = np.random.uniform(70, 85) * 1.15
@@ -119,7 +119,7 @@ def flow_generation(base_traffic_jam_exponent, day_index):
     }
 
     # Open a .rou.xml file to write flows
-    with open(f"./sumo/generated_flows.rou.xml", "w") as f:
+    with open(f"./sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
@@ -172,7 +172,7 @@ def flow_generation(base_traffic_jam_exponent, day_index):
         flows.sort(key=lambda x: x[0])
 
         # Open a .rou.xml file to write sorted flows
-        with open(f"./sumo/generated_flows.rou.xml", "w") as f:
+        with open(f"./sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
             f.write('<routes>\n')
             f.write('\n')
             
