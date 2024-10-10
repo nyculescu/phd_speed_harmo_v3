@@ -15,6 +15,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from rl_gym_environments import SUMOEnv, models
+import time
 
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -36,6 +37,21 @@ Note about policies:
 '''
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
+
+def start_process_with_delay(processes, delay_seconds):
+    last_start_time = time.time()
+
+    for process in processes:
+        # Wait until the required delay has passed
+        while time.time() - last_start_time < delay_seconds:
+            time.sleep(0.1)  # Sleep briefly to prevent busy-waiting
+
+        # Start the process
+        process.start()
+        print(f"Started {process.name} at {time.time()}")
+
+        # Update the last start time
+        last_start_time = time.time()
 
 def make_env(port, model, model_idx):
     def _init():
@@ -368,29 +384,22 @@ if __name__ == '__main__':
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
 
-    # Create a process for each training function
-    ppo_process = multiprocessing.Process(target=train_ppo)
-    dqn_process = multiprocessing.Process(target=train_dqn)
-    a2c_process = multiprocessing.Process(target=train_a2c)
-    trpo_process = multiprocessing.Process(target=train_trpo)
-    td3_process = multiprocessing.Process(target=train_td3)
-    sac_process = multiprocessing.Process(target=train_sac)
-    
-    # Start the processes
-    ppo_process.start()
-    dqn_process.start()
-    a2c_process.start()
-    trpo_process.start()
-    td3_process.start()
-    sac_process.start()
-    
+    # Create a list of processes for each training function
+    processes = [
+        multiprocessing.Process(target=train_ppo, name='PPO Process'),
+        multiprocessing.Process(target=train_dqn, name='DQN Process'),
+        multiprocessing.Process(target=train_a2c, name='A2C Process'),
+        multiprocessing.Process(target=train_trpo, name='TRPO Process'),
+        multiprocessing.Process(target=train_td3, name='TD3 Process'),
+        multiprocessing.Process(target=train_sac, name='SAC Process')
+    ]
+
+    # Start each process with a 2-second delay between them
+    start_process_with_delay(processes, delay_seconds=2)
+
     # Join the processes to ensure they complete before exiting
-    ppo_process.join()
-    dqn_process.join()
-    a2c_process.join()
-    trpo_process.join()
-    td3_process.join()
-    sac_process.join()
+    for process in processes:
+        process.join()
 
     # train_ppo() # FIXME: this one is called only for debugging purposes
 

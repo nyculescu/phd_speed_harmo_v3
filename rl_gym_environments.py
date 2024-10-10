@@ -58,7 +58,7 @@ class SUMOEnv(gym.Env):
         self.flows = []
         self.total_travel_time = 0 # [min]
         self.sumo_process = None
-        self.sumo_max_retries = 4 + models.index(model)
+        self.sumo_max_retries = 3 + models.index(model)
         self.day_index = 0
         self.flow_gen_max = 0
         self.emissions_t_minus_1 = 0  # Initial previous cumulative CO2 emissions
@@ -77,8 +77,6 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                if attempt > 1:
-                    sleep(models.index(self.model))
                 self.flow_gen_max = np.random.triangular(0.5, 1, 1.5)
             
                 flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
