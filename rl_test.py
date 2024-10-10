@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-from stable_baselines3 import PPO, A2C, DQN
+from sb3_contrib import TRPO
+from stable_baselines3 import PPO, DQN, A2C, SAC, TD3
 from stable_baselines3.common.env_checker import check_env
 from scipy import stats
 import logging
@@ -28,11 +29,15 @@ logging.getLogger('PIL').setLevel(logging.WARNING)
 model_paths = {
     "PPO": "rl_models/PPO/best_model",
     "A2C": "rl_models/A2C/best_model",
-    "DQN": "rl_models/DQN/best_model"
+    "DQN": "rl_models/DQN/best_model",
+    "TRPO": "rl_models/DQN/best_model",
+    "TD3": "rl_models/DQN/best_model",
+    "SAC": "rl_models/DQN/best_model"
 }
 
 # Define colors for each agent
-colors = {'PPO': 'blue', 'A2C': 'orange', 'DQN': 'green'}
+colors = {'PPO': 'blue', 'A2C': 'orange', 'DQN': 'green', 'TRPO': 'green', 'TD3': 'green', 'SAC': 'green'}
+ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815}
 
 results = {}
 
@@ -54,69 +59,168 @@ def save_metrics(metrics, agent_name):
     # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
 
 def test_ppo():
-    logging.debug("Starting PPO test")
-    ppo_env = SUMOEnv(port=8813, model="PPO")
+    model_name = "PPO"
+    logging.debug(f"Starting {model_name} test")
+    ppo_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(ppo_env)
-    ppo_model = PPO.load(model_paths['PPO'])
+    ppo_model = PPO.load(model_paths[model_name])
 
     obs, _ = ppo_env.reset()
     done = False
 
+    rewards = []
+    obss = []
     while not done:
         action, _ = ppo_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = ppo_env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
 
-    result = {metrics_to_plot[0]: ppo_env.rewards
-              , metrics_to_plot[1]: ppo_env.obs
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
               , metrics_to_plot[2]: ppo_env.prev_emissions
               , metrics_to_plot[3]: ppo_env.prev_mean_speed
               , metrics_to_plot[4]: ppo_env.flows
               }
-    return ('PPO', result)
+    return (model_name, result)
 
 def test_a2c():
-    logging.debug("Starting A2C test")
-    a2c_env = SUMOEnv(port=8814, model="A2C")
+    model_name = "A2C"
+    logging.debug(f"Starting {model_name} test")
+    a2c_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(a2c_env)
-    a2c_model = A2C.load(model_paths['A2C'])
+    a2c_model = A2C.load(model_paths[model_name])
     
     obs, _ = a2c_env.reset()
     done = False
 
+    rewards = []
+    obss = []
     while not done:
         action, _ = a2c_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = a2c_env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
     
-    result = {metrics_to_plot[0]: ppo_env.rewards
-              , metrics_to_plot[1]: ppo_env.obs
-              , metrics_to_plot[2]: ppo_env.prev_emissions
-              , metrics_to_plot[3]: ppo_env.prev_mean_speed
-              , metrics_to_plot[4]: ppo_env.flows
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
+              , metrics_to_plot[2]: a2c_env.prev_emissions
+              , metrics_to_plot[3]: a2c_env.prev_mean_speed
+              , metrics_to_plot[4]: a2c_env.flows
               }
     
-    return ('A2C', result)
+    return (model_name, result)
 
-# Note: even though the code seem to be redundant and can be abstractised into one function with different values of the params, leave it like this because it won't run on multi-process
+# Note: redundant code on purpose, else it won't run on multi-process
 def test_dqn():
-    logging.debug("Starting DQN test")
-    dqn_env = SUMOEnv(port=8815, model="DQN")
+    model_name = "DQN"
+    logging.debug(f"Starting {model_name} test")
+    dqn_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
-    dqn_model = DQN.load(model_paths['DQN'])
+    dqn_model = DQN.load(model_paths[model_name])
 
     obs, _ = dqn_env.reset()
     done = False
 
+    rewards = []
+    obss = []
     while not done:
         action, _ = dqn_model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = dqn_env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
 
-    result = {metrics_to_plot[0]: ppo_env.rewards
-              , metrics_to_plot[1]: ppo_env.obs
-              , metrics_to_plot[2]: ppo_env.prev_emissions
-              , metrics_to_plot[3]: ppo_env.prev_mean_speed
-              , metrics_to_plot[4]: ppo_env.flows
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
+              , metrics_to_plot[2]: dqn_env.prev_emissions
+              , metrics_to_plot[3]: dqn_env.prev_mean_speed
+              , metrics_to_plot[4]: dqn_env.flows
               }
-    return ('DQN', result)
+    return (model_name, result)
+
+def test_td3():
+    model_name = "TD3"
+    logging.debug(f"Starting {model_name} test")
+    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    # check_env(dqn_env)
+    model = DQN.load(model_paths[model_name])
+
+    obs, _ = env.reset()
+    done = False
+
+    rewards = []
+    obss = []
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
+
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
+              , metrics_to_plot[2]: env.prev_emissions
+              , metrics_to_plot[3]: env.prev_mean_speed
+              , metrics_to_plot[4]: env.flows
+              }
+    return (model_name, result)
+
+def test_trpo():
+    model_name = "TRPO"
+    logging.debug(f"Starting {model_name} test")
+    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    # check_env(dqn_env)
+    model = TRPO.load(model_paths[model_name])
+
+    obs, _ = env.reset()
+    done = False
+
+    rewards = []
+    obss = []
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
+
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
+              , metrics_to_plot[2]: env.prev_emissions
+              , metrics_to_plot[3]: env.prev_mean_speed
+              , metrics_to_plot[4]: env.flows
+              }
+    return (model_name, result)
+
+def test_sac():
+    model_name = "SAC"
+    logging.debug(f"Starting {model_name} test")
+    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    # check_env(dqn_env)
+    model = SAC.load(model_paths[model_name])
+
+    obs, _ = env.reset()
+    done = False
+
+    rewards = []
+    obss = []
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        obss.append(obs)
+        rewards.append(reward)
+    # obss = np.array(obss)
+
+    result = {metrics_to_plot[0]: rewards
+              , metrics_to_plot[1]: obss
+              , metrics_to_plot[2]: env.prev_emissions
+              , metrics_to_plot[3]: env.prev_mean_speed
+              , metrics_to_plot[4]: env.flows
+              }
+    return (model_name, result)
 
 def process_callback(result):
     agent_name, agent_result = result
@@ -139,17 +243,68 @@ def plot_metrics():
     #     ,'prev_mean_speed': stats.f_oneway(results['PPO']['prev_mean_speed'], results['A2C']['prev_mean_speed'], results['DQN']['prev_mean_speed'])
     #     ,'flow': stats.f_oneway(results['PPO']['flow'], results['A2C']['flow'], results['DQN']['flow'])
     # }
-    anova_results = {metric: stats.f_oneway(results['PPO'][metric], results['A2C'][metric], results['DQN'][metric]) for metric in metrics}
+    anova_results = {
+        metric: stats.f_oneway(
+            results['PPO'][metric],
+            results['A2C'][metric],
+            results['DQN'][metric],
+            results['TRPO'][metric],
+            results['TD3'][metric],
+            results['SAC'][metric]
+        )
+        for metric in results['PPO'].keys()  # Use keys from one agent's metrics
+    }
+
+    # Perform ANOVA
+    anova_results = {}
+    for metric in results['PPO'].keys():
+        # Extract data for each agent
+        ppo_data = results['PPO'][metric]
+        a2c_data = results['A2C'][metric]
+        dqn_data = results['DQN'][metric]
+        trpo_data = results['TRPO'][metric]
+        sac_data = results['SAC'][metric]
+        td3_data = results['TD3'][metric]
+
+        # Ensure data is in the correct format (1D arrays/lists)
+        if isinstance(ppo_data, np.ndarray):
+            ppo_data = ppo_data.flatten()
+        if isinstance(a2c_data, np.ndarray):
+            a2c_data = a2c_data.flatten()
+        if isinstance(dqn_data, np.ndarray):
+            dqn_data = dqn_data.flatten()
+        if isinstance(trpo_data, np.ndarray):
+            trpo_data = trpo_data.flatten()
+        if isinstance(sac_data, np.ndarray):
+            sac_data = sac_data.flatten()
+        if isinstance(td3_data, np.ndarray):
+            td3_data = td3_data.flatten()
+
+        # Perform ANOVA
+        anova_result = stats.f_oneway(ppo_data, a2c_data, dqn_data, td3_data, sac_data, trpo_data)
+
+        # Extract scalar values using .item()
+        f_statistic = anova_result.statistic.item() if np.ndim(anova_result.statistic) > 0 else anova_result.statistic
+        p_value = anova_result.pvalue.item() if np.ndim(anova_result.pvalue) > 0 else anova_result.pvalue
+
+        anova_results[metric] = (f_statistic, p_value)
+
     # Log ANOVA Results to a file
     os.makedirs('logs', exist_ok=True)
     with open('logs/anova_results.log', 'w') as f:
         for metric in anova_results:
-            f.write(f"ANOVA result for {metric}: F-statistic={anova_results[metric].statistic:.3f}, p-value={anova_results[metric].pvalue:.3f}\n")
+            f_statistic, p_value = anova_results[metric]
+            f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
 
     def find_convergence_iterations(results):
         convergence = {}
         for agent, metrics in results.items():
-            convergence[agent] = {key: np.argmax(values) + 1 for key, values in metrics.items()}
+            convergence[agent] = {}
+            for key, values in metrics.items():
+                if len(values) > 0:
+                    convergence[agent][key] = np.argmax(values) + 1
+                else:
+                    convergence[agent][key] = None  # Or some other default value indicating no data
         return convergence
 
     convergence_iterations = find_convergence_iterations(results)
@@ -169,7 +324,7 @@ def plot_metrics():
         performance_percentage[metric] = {
             agent: ((best_value - mean_values[agent][metric]) / best_value) * 100
             for agent in mean_values
-    }
+            }
 
     # Create figure with subplots
     plt.figure(figsize=(15, 10))
@@ -218,7 +373,12 @@ def plot_metrics():
     plt.show()
 
 if __name__ == '__main__':
-    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model_idx)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="TRPO", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="TD3", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="SAC", idx=0)
     sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
@@ -232,7 +392,10 @@ if __name__ == '__main__':
     async_results = [
         pool.apply_async(test_dqn, callback=process_callback),
         pool.apply_async(test_ppo, callback=process_callback),
-        pool.apply_async(test_a2c, callback=process_callback)
+        pool.apply_async(test_a2c, callback=process_callback),
+        pool.apply_async(test_trpo, callback=process_callback),
+        pool.apply_async(test_td3, callback=process_callback),
+        pool.apply_async(test_sac, callback=process_callback)
     ]
 
     # Close the pool and wait for all processes to finish
@@ -249,16 +412,19 @@ if __name__ == '__main__':
             logging.error(f"An error occurred in one of the processes: {e}")
 
     # # FIXME: this one is called only for debugging purposes
+    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
     # agent_name, agent_result = test_dqn()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result
     # save_metrics(agent_result, agent_name)
 
+    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
     # agent_name, agent_result = test_a2c()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result
     # save_metrics(agent_result, agent_name)
 
+    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
     # agent_name, agent_result = test_ppo()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result

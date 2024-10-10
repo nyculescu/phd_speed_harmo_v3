@@ -1,18 +1,21 @@
+from simulation_utilities.setup import create_sumocfg
+from simulation_utilities.flow_gen import *
+
 from matplotlib import pyplot as plt
-from stable_baselines3 import PPO, DQN, A2C
-from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import EvalCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+import multiprocessing
 import logging
 import logging.handlers
-from rl_gym_environments import SUMOEnv
 
+from sb3_contrib import TRPO
+from stable_baselines3 import PPO, DQN, A2C, SAC, TD3
+# from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
-import multiprocessing
-from time import sleep
-from simulation_utilities.setup import create_sumocfg
+from stable_baselines3.common.monitor import Monitor
+from rl_gym_environments import SUMOEnv, models
 
-from simulation_utilities.flow_gen import *
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
@@ -77,111 +80,116 @@ def setup_logger(name, log_file, level=logging.INFO):
 
     return logger
 
+def make_env_with_monitor(port, model, model_idx):
+    def _init():
+        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
+        return Monitor(env)  # Wrap with Monitor
+    return _init
+
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""" Configuration """
+
 eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
-# Define the number of environments per model
-num_envs_per_model = 5
-base_port = 8810
-models = ["DQN", "A2C", "PPO"]
-total_timesteps = 500000
+# The max limis is 1 process/1 physical CPU core. 
+# Total physical CPU cores: 24, but using 15 at once should be enough
+num_envs_per_model = 2
+base_port = 8800
+
+total_timesteps = 100000
 
 def train_ppo():
     model_name = 'PPO'
-    ports = [base_port + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports)])
+    # Get the index of the model in the list
+    try:
+        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
-    log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+        log_dir = f"./logs/{model_name}/"
+        model_dir = f"./rl_models/{model_name}/"
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
 
-    # Initialize PPO model with vectorized environments
-    ppo_model = PPO(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        verbose=1,
-        tensorboard_log=log_dir,
-        device='cuda'
-    )
+        # Initialize PPO model with vectorized environments
+        ppo_model = PPO(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=64,
+            n_epochs=10,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            verbose=1,
+            tensorboard_log=log_dir,
+            device='cuda'
+        )
 
-    ppo_eval_callback = EvalCallback(
-        env,
-        best_model_save_path=model_dir,
-        log_path=log_dir,
-        eval_freq=10000,
-        n_eval_episodes=5,
-        deterministic=True,
-        render=False
-    )
+        ppo_eval_callback = EvalCallback(
+            env,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=10000,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False
+        )
 
-    # Set up custom logger
-    ppo_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-
-    # Initialize LoggingCallback
-    logging_callback = LoggingCallback(ppo_logger, total_timesteps)
-
-    logging.info(f"Training {model_name} model...")
-    ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback, logging_callback])
+        logging.info(f"Training {model_name} model...")
+        ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback])
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_dqn():
     model_name = 'DQN'
-    ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports)])
+    try:
+        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
-    log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+        log_dir = f"./logs/{model_name}/"
+        model_dir = f"./rl_models/{model_name}/"
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
 
-    dqn_model = DQN(
-        "MlpPolicy",
-        env,
-        learning_rate=1e-4,
-        buffer_size=100000,
-        learning_starts=1000,
-        batch_size=32,
-        tau=1.0,
-        gamma=0.99,
-        train_freq=4,
-        target_update_interval=1000,
-        exploration_fraction=0.1,
-        exploration_final_eps=0.05,
-        verbose=1,
-        tensorboard_log=log_dir,
-        device='cuda'
-    )
+        dqn_model = DQN(
+            "MlpPolicy",
+            env,
+            learning_rate=1e-4,
+            buffer_size=100000,
+            learning_starts=1000,
+            batch_size=32,
+            tau=1.0,
+            gamma=0.99,
+            train_freq=4,
+            target_update_interval=1000,
+            exploration_fraction=0.1,
+            exploration_final_eps=0.05,
+            verbose=1,
+            tensorboard_log=log_dir,
+            device='cuda'
+        )
 
-    dqn_eval_callback = EvalCallback(
-        env,
-        best_model_save_path=model_dir,
-        log_path=log_dir,
-        eval_freq=10000,
-        n_eval_episodes=5,
-        deterministic=True,
-        render=False
-    )
+        dqn_eval_callback = EvalCallback(
+            env,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=10000,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False
+        )
 
-    # Set up custom logger
-    ppo_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-
-    # Initialize LoggingCallback
-    logging_callback = LoggingCallback(ppo_logger, total_timesteps)
-
-    logging.info(f"Training {model_name} model...")
-    dqn_model.learn(total_timesteps=total_timesteps, callback=[dqn_eval_callback, logging_callback])
+        logging.info(f"Training {model_name} model...")
+        dqn_model.learn(total_timesteps=total_timesteps, callback=[dqn_eval_callback])
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_a2c():
     model_name = 'A2C'
     ports = [(base_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports)])
+    env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
@@ -214,14 +222,146 @@ def train_a2c():
     )
 
     # Set up custom logger
-    ppo_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    # ppo_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
 
     # Initialize LoggingCallback
-    logging_callback = LoggingCallback(ppo_logger, total_timesteps)
+    # logging_callback = LoggingCallback(ppo_logger, total_timesteps)
 
     logging.info(f"Training {model_name} model...")
-    a2c_model.learn(total_timesteps=total_timesteps, callback=[a2c_eval_callback, logging_callback])
+    a2c_model.learn(total_timesteps=total_timesteps, callback=[a2c_eval_callback])
 
+def train_trpo():
+    model_name = 'TRPO'
+    
+    try:
+        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+    
+        # Set up directories for logging and model saving
+        log_dir = f"./logs/{model_name}/"
+        model_dir = f"./rl_models/{model_name}/"
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Initialize TRPO model with vectorized environments
+        trpo_model = TRPO(
+            "MlpPolicy",
+            env,
+            learning_rate=1e-3,
+            n_steps=2048,
+            gamma=0.99,
+            verbose=1,
+            tensorboard_log=log_dir,
+            device='cuda'
+        )
+        
+        # Set up evaluation callback
+        trpo_eval_callback = EvalCallback(
+            env,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=10000,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False
+        )
+        
+        logging.info(f"Training {model_name} model...")
+        trpo_model.learn(total_timesteps=total_timesteps, callback=[trpo_eval_callback])
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+
+def train_td3():
+    model_name = 'TD3'
+    
+    try:
+        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+
+        # Set up directories for logging and model saving
+        log_dir = f"./logs/{model_name}/"
+        model_dir = f"./rl_models/{model_name}/"
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Initialize TD3 model with the single environment
+        td3_model = TD3(
+            "MlpPolicy",
+            env,
+            learning_rate=1e-3,
+            buffer_size=1000000,
+            learning_starts=10000,
+            batch_size=100,
+            tau=0.005,
+            gamma=0.99,
+            train_freq=(1, "step"),  # Use "step" to ensure correct training frequency
+            gradient_steps=-1,
+            verbose=1,
+            tensorboard_log=log_dir,
+            device='cuda'
+        )
+        
+        # Set up evaluation callback
+        td3_eval_callback = EvalCallback(
+            env,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=10000,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False
+        )
+
+        logging.info(f"Training {model_name} model...")
+        td3_model.learn(total_timesteps=total_timesteps, callback=[td3_eval_callback])
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+
+def train_sac():
+    model_name = 'SAC'
+
+    try:
+        """ A singe instance is allowed for SAC because of this error: 
+            assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."""
+        port = base_port + num_envs_per_model * models.index(model_name)
+        env = DummyVecEnv([make_env_with_monitor(port, model_name, 0)])  # Use DummyVecEnv for single env
+        log_dir = f"./logs/{model_name}/"
+        model_dir = f"./rl_models/{model_name}/"
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+
+        sac_model = SAC(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            buffer_size=1000000,
+            learning_starts=10000,
+            batch_size=256,
+            tau=0.005,
+            gamma=0.99,
+            train_freq=(1, "episode"),
+            gradient_steps=1,
+            verbose=1,
+            tensorboard_log=log_dir,
+            device='cuda'
+        )
+
+        sac_eval_callback = EvalCallback(
+            env,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=10000,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False
+        )
+
+        logging.info(f"Training {model_name} model...")
+        sac_model.learn(total_timesteps=total_timesteps, callback=[sac_eval_callback])
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     create_sumocfg(models, num_envs_per_model)
 
@@ -232,16 +372,25 @@ if __name__ == '__main__':
     ppo_process = multiprocessing.Process(target=train_ppo)
     dqn_process = multiprocessing.Process(target=train_dqn)
     a2c_process = multiprocessing.Process(target=train_a2c)
+    trpo_process = multiprocessing.Process(target=train_trpo)
+    td3_process = multiprocessing.Process(target=train_td3)
+    sac_process = multiprocessing.Process(target=train_sac)
     
     # Start the processes
     ppo_process.start()
     dqn_process.start()
     a2c_process.start()
+    trpo_process.start()
+    td3_process.start()
+    sac_process.start()
     
     # Join the processes to ensure they complete before exiting
     ppo_process.join()
     dqn_process.join()
     a2c_process.join()
+    trpo_process.join()
+    td3_process.join()
+    sac_process.join()
 
     # train_ppo() # FIXME: this one is called only for debugging purposes
 

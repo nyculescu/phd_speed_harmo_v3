@@ -19,6 +19,8 @@ from simulation_utilities.flow_gen import *
 
 from simulation_utilities.flow_gen import car_generation_rates_per_lane
 
+models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
+
 # Initialize counters for vehicle types
 vehicle_counts = {
     "normal_car": 0,
@@ -35,8 +37,12 @@ class SUMOEnv(gym.Env):
         self.model = model
         self.model_idx = model_idx
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
-        self.speed_limits = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
-        self.action_space = gym.spaces.Discrete(len(self.speed_limits))
+        self.speed_limits = np.array([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
+        if model == "TD3" or model == "SAC":
+            self.action_space = gym.spaces.Box(low=np.min(self.speed_limits), high=np.max(self.speed_limits), shape=(1,), dtype=np.float32)
+        else:
+            self.action_space = gym.spaces.Discrete(len(self.speed_limits))
+        self.obs = np.array([0], dtype=np.float32)
         self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float32", shape=(1,))
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
@@ -52,7 +58,7 @@ class SUMOEnv(gym.Env):
         self.flows = []
         self.total_travel_time = 0 # [min]
         self.sumo_process = None
-        self.sumo_max_retries = 5
+        self.sumo_max_retries = 4 + models.index(model)
         self.day_index = 0
         self.flow_gen_max = 0
         self.emissions_t_minus_1 = 0  # Initial previous cumulative CO2 emissions
@@ -71,6 +77,8 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
+                if attempt > 1:
+                    sleep(models.index(self.model))
                 self.flow_gen_max = np.random.triangular(0.5, 1, 1.5)
             
                 flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
@@ -107,8 +115,13 @@ class SUMOEnv(gym.Env):
         if not is_sumo_running:
             self.start_sumo()
 
-        # Apply action
-        self.speed_limit = self.speed_limits[action]
+        if self.model == "TD3" or self.model == "SAC":
+            # Map continuous action to nearest discrete speed limit
+            self.speed_limit = self.speed_limits[np.argmin(np.abs(self.speed_limits - action[0]))]
+        else:
+            # Apply action
+            self.speed_limit = self.speed_limits[action]
+        
         speed_new_mps = self.speed_limit / 3.6  # km/h to m/s
 
         for segment in [seg_1_before]:
@@ -179,7 +192,9 @@ class SUMOEnv(gym.Env):
             self.rewards = []
             self.close_sumo("simulation done")
 
-        return np.array([avg_speed_now]), self.reward, done, False, {}
+        self.obs = np.array([avg_speed_now])
+
+        return self.obs, self.reward, done, False, {}
 
     def render(self):
         # Implement viz
