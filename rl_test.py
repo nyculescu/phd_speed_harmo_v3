@@ -3,7 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from sb3_contrib import TRPO
 from stable_baselines3 import PPO, DQN, A2C, SAC, TD3
-from stable_baselines3.common.env_checker import check_env
+# from stable_baselines3.common.env_checker import check_env
 from scipy import stats
 import logging
 import os
@@ -30,13 +30,20 @@ model_paths = {
     "PPO": "rl_models/PPO/best_model",
     "A2C": "rl_models/A2C/best_model",
     "DQN": "rl_models/DQN/best_model",
-    "TRPO": "rl_models/DQN/best_model",
-    "TD3": "rl_models/DQN/best_model",
-    "SAC": "rl_models/DQN/best_model"
+    "TRPO": "rl_models/TRPO/best_model",
+    "TD3": "rl_models/TD3/best_model",
+    "SAC": "rl_models/SAC/best_model"
 }
 
 # Define colors for each agent
-colors = {'PPO': 'blue', 'A2C': 'orange', 'DQN': 'green', 'TRPO': 'green', 'TD3': 'green', 'SAC': 'green'}
+colors = {
+    'PPO': 'grey',
+    'A2C': 'violet',
+    'DQN': 'turquoise',
+    'TRPO': 'lightgreen',
+    'TD3': 'khaki',
+    'SAC': 'chocolate'
+}
 ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815}
 
 results = {}
@@ -146,7 +153,7 @@ def test_td3():
     logging.debug(f"Starting {model_name} test")
     env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
-    model = DQN.load(model_paths[model_name])
+    model = TD3.load(model_paths[model_name])
 
     obs, _ = env.reset()
     done = False
@@ -228,7 +235,11 @@ def process_callback(result):
     results[agent_name] = agent_result
     save_metrics(agent_result, agent_name)
 
-def plot_metrics():
+def plot_metrics(selected_models=None):
+    # Default to all models if none are specified
+    if selected_models is None:
+        selected_models = list(results.keys())
+
     # Calculate mean values
     mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
 
@@ -236,57 +247,12 @@ def plot_metrics():
     variance_std_dev = {agent: {key: (np.var(values), np.std(values)) for key, values in metrics.items()} for agent, metrics in results.items()}
 
     # Perform ANOVA
-    # anova_results = {
-    #     'obs': stats.f_oneway(results['PPO']['obs'], results['A2C']['obs'], results['DQN']['obs'])
-    #     ,'rewards': stats.f_oneway(results['PPO']['rewards'], results['A2C']['rewards'], results['DQN']['rewards'])
-    #     ,'prev_emissions': stats.f_oneway(results['PPO']['prev_emissions'], results['A2C']['prev_emissions'], results['DQN']['prev_emissions'])
-    #     ,'prev_mean_speed': stats.f_oneway(results['PPO']['prev_mean_speed'], results['A2C']['prev_mean_speed'], results['DQN']['prev_mean_speed'])
-    #     ,'flow': stats.f_oneway(results['PPO']['flow'], results['A2C']['flow'], results['DQN']['flow'])
-    # }
-    anova_results = {
-        metric: stats.f_oneway(
-            results['PPO'][metric],
-            results['A2C'][metric],
-            results['DQN'][metric],
-            results['TRPO'][metric],
-            results['TD3'][metric],
-            results['SAC'][metric]
-        )
-        for metric in results['PPO'].keys()  # Use keys from one agent's metrics
-    }
-
-    # Perform ANOVA
     anova_results = {}
     for metric in results['PPO'].keys():
-        # Extract data for each agent
-        ppo_data = results['PPO'][metric]
-        a2c_data = results['A2C'][metric]
-        dqn_data = results['DQN'][metric]
-        trpo_data = results['TRPO'][metric]
-        sac_data = results['SAC'][metric]
-        td3_data = results['TD3'][metric]
-
-        # Ensure data is in the correct format (1D arrays/lists)
-        if isinstance(ppo_data, np.ndarray):
-            ppo_data = ppo_data.flatten()
-        if isinstance(a2c_data, np.ndarray):
-            a2c_data = a2c_data.flatten()
-        if isinstance(dqn_data, np.ndarray):
-            dqn_data = dqn_data.flatten()
-        if isinstance(trpo_data, np.ndarray):
-            trpo_data = trpo_data.flatten()
-        if isinstance(sac_data, np.ndarray):
-            sac_data = sac_data.flatten()
-        if isinstance(td3_data, np.ndarray):
-            td3_data = td3_data.flatten()
-
-        # Perform ANOVA
-        anova_result = stats.f_oneway(ppo_data, a2c_data, dqn_data, td3_data, sac_data, trpo_data)
-
-        # Extract scalar values using .item()
+        data_for_anova = [results[agent][metric] for agent in selected_models]
+        anova_result = stats.f_oneway(*data_for_anova)
         f_statistic = anova_result.statistic.item() if np.ndim(anova_result.statistic) > 0 else anova_result.statistic
         p_value = anova_result.pvalue.item() if np.ndim(anova_result.pvalue) > 0 else anova_result.pvalue
-
         anova_results[metric] = (f_statistic, p_value)
 
     # Log ANOVA Results to a file
@@ -308,6 +274,7 @@ def plot_metrics():
         return convergence
 
     convergence_iterations = find_convergence_iterations(results)
+    
     # Log convergence iterations
     with open('logs/convergence_iterations.log', 'w') as f:
         for agent in convergence_iterations:
@@ -326,6 +293,9 @@ def plot_metrics():
             for agent in mean_values
             }
 
+    # Enable interactive mode
+    # plt.ion()
+
     # Create figure with subplots
     plt.figure(figsize=(15, 10))
 
@@ -333,10 +303,10 @@ def plot_metrics():
     for i, metric in enumerate(metrics_to_plot):
         # Line plot for each metric
         plt.subplot(5, 2, i * 2 + 1)
-        for agent_name in results.keys():
+        for agent_name in selected_models:
             plt.plot(results[agent_name][metric],
-                    label=f"{agent_name} ({performance_percentage[metric][agent_name]:.2f}%)",
-                    color=colors[agent_name])
+                     label=f"{agent_name} ({performance_percentage[metric][agent_name]:.2f}%)",
+                     color=colors.get(agent_name, 'black'))  # Default color if not found
         plt.xlabel("Iteration")
         plt.ylabel(metric.replace('_', ' ').capitalize())
         plt.title(f"{metric.replace('_', ' ').capitalize()} Comparison")
@@ -344,19 +314,19 @@ def plot_metrics():
 
         # Bar plot for variance and std dev
         plt.subplot(5, 2, i * 2 + 2)
-        std_devs = [variance_std_dev[agent][metric][1] for agent in model_paths.keys()]
-        variances = [variance_std_dev[agent][metric][0] for agent in model_paths.keys()]
+        std_devs = [variance_std_dev[agent][metric][1] for agent in selected_models]
+        variances = [variance_std_dev[agent][metric][0] for agent in selected_models]
 
         bar_width = 0.35
-        index = np.arange(len(model_paths))
+        index = np.arange(len(selected_models))
 
-        bars1 = plt.bar(index, std_devs, bar_width, label='Std Dev', color='b')
-        bars2 = plt.bar(index + bar_width, variances, bar_width, label='Variance', color='r')
+        bars1 = plt.bar(index, std_devs, bar_width, label='Std Dev', color='deepskyblue')
+        bars2 = plt.bar(index + bar_width, variances, bar_width, label='Variance', color='tomato')
 
         plt.xlabel('Agent')
         plt.ylabel('Value')
         plt.title(f'{metric.replace("_", " ").capitalize()} Variance and Std Dev')
-        plt.xticks(index + bar_width / 2, model_paths.keys())
+        plt.xticks(index + bar_width / 2, selected_models)
 
         # Annotate bars with scaled values and adjusted position
         for bar in bars1:
@@ -370,9 +340,10 @@ def plot_metrics():
         plt.legend()
 
     plt.tight_layout()
-    plt.show()
+    plt.show(block=True)
 
 if __name__ == '__main__':
+    models_no = 6
     flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
     flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
     flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
@@ -386,7 +357,7 @@ if __name__ == '__main__':
 
     logging.debug("Creating pool of processes")
     # Create a pool of processes
-    pool = multiprocessing.Pool(processes=3)
+    pool = multiprocessing.Pool(processes=models_no)
 
     # Collect async results
     async_results = [
@@ -432,4 +403,5 @@ if __name__ == '__main__':
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
+    # plot_metrics()
     plot_metrics()

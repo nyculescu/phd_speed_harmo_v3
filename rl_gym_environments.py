@@ -56,13 +56,10 @@ class SUMOEnv(gym.Env):
         self.occupancy_curr = 0
         self.flow = 0
         self.flows = []
-        self.total_travel_time = 0 # [min]
         self.sumo_process = None
         self.sumo_max_retries = 3 + models.index(model)
         self.day_index = 0
         self.flow_gen_max = 0
-        self.emissions_t_minus_1 = 0  # Initial previous cumulative CO2 emissions
-        self.mean_speed_t_minus_1 = 0  # Initial previous average speed in m/s
         self.reward = 0
         self.total_emissions_now = 0
         self.rewards = []
@@ -216,7 +213,6 @@ class SUMOEnv(gym.Env):
         self.mean_occupancy = []
         self.flow = 0
         self.flows = []
-        self.total_travel_time = 0
         self.total_waiting_time = 0
         # self.sumo_process = None
         self.sumo_max_retries = 5

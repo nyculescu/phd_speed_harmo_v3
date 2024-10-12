@@ -84,6 +84,33 @@ class LoggingCallback(BaseCallback):
             self.last_logged_step = self.num_timesteps
         return True
 
+class EnhancedLoggingCallback(BaseCallback):
+    def __init__(self, custom_logger, total_timesteps, verbose=0):
+        super(EnhancedLoggingCallback, self).__init__(verbose)
+        self.custom_logger = custom_logger
+        self.total_timesteps = total_timesteps
+        self.one_percent_steps = total_timesteps // 100
+        self.last_logged_step = 0
+
+    def _on_step(self) -> bool:
+        if (self.num_timesteps - self.last_logged_step) >= self.one_percent_steps:
+            # Log progress
+            self.custom_logger.info(f"Progress: {self.num_timesteps / self.total_timesteps:.2%} completed.")
+            
+            # Log additional metrics
+            if 'loss' in self.locals:
+                self.custom_logger.info(f"Policy Loss: {self.locals['loss']}")
+            if 'entropy' in self.locals:
+                self.custom_logger.info(f"Entropy: {self.locals['entropy']}")
+            if 'grad_norm' in self.locals:
+                self.custom_logger.info(f"Gradient Norm: {self.locals['grad_norm']}")
+            if hasattr(self.model, 'lr_schedule'):
+                current_lr = self.model.lr_schedule(self.num_timesteps)
+                self.custom_logger.info(f"Learning Rate: {current_lr}")
+
+            self.last_logged_step = self.num_timesteps
+        return True
+
 def setup_logger(name, log_file, level=logging.INFO):
     """Function to setup as many loggers as you want"""
     handler = logging.FileHandler(log_file)        
@@ -108,9 +135,6 @@ def make_env_with_monitor(port, model, model_idx):
 eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
-# The max limis is 1 process/1 physical CPU core. 
-# Total physical CPU cores: 24, but using 15 at once should be enough
-num_envs_per_model = 2
 base_port = 8800
 
 total_timesteps = 100000
@@ -131,13 +155,14 @@ def train_ppo():
         ppo_model = PPO(
             "MlpPolicy",
             env,
-            learning_rate=3e-4,
+            learning_rate=1e-4, # old: 3e-4,
             n_steps=2048,
             batch_size=64,
             n_epochs=10,
             gamma=0.99,
             gae_lambda=0.95,
-            clip_range=0.2,
+            clip_range=0.1, # reduced from 0.2 to prevent large policy updates
+            ent_coef=0.01, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
             verbose=1,
             tensorboard_log=log_dir,
             device='cuda'
@@ -153,8 +178,11 @@ def train_ppo():
             render=False
         )
 
+        logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+        logging_callback = EnhancedLoggingCallback(logger, total_timesteps)
+
         logging.info(f"Training {model_name} model...")
-        ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback])
+        ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback, logging_callback])
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
@@ -179,7 +207,7 @@ def train_dqn():
             tau=1.0,
             gamma=0.99,
             train_freq=4,
-            target_update_interval=1000,
+            target_update_interval=500, # Old: reduced from 1000 for more frequent updates
             exploration_fraction=0.1,
             exploration_final_eps=0.05,
             verbose=1,
@@ -215,8 +243,8 @@ def train_a2c():
     a2c_model = A2C(
         "MlpPolicy",
         env,
-        learning_rate=7e-4,
-        n_steps=5,
+        learning_rate=5e-4, # trained before with 7e-4
+        n_steps=10, # increased from 5 to capture more information per update
         gamma=0.99,
         gae_lambda=0.95,
         ent_coef=0.01,
@@ -352,11 +380,12 @@ def train_sac():
             learning_rate=3e-4,
             buffer_size=1000000,
             learning_starts=10000,
-            batch_size=256,
+            batch_size=256, # Increase for more stable updates
             tau=0.005,
             gamma=0.99,
             train_freq=(1, "episode"),
-            gradient_steps=1,
+            gradient_steps=10, # increase for more thorough learning per update
+            ent_coef='auto', # automatic entropy tuning
             verbose=1,
             tensorboard_log=log_dir,
             device='cuda'
@@ -378,30 +407,35 @@ def train_sac():
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+# The max limis is 1 process/1 physical CPU core. 
+# Total physical CPU cores: 24, but using 15 at once should be enough
+num_envs_per_model = 18
+
 if __name__ == '__main__':
     create_sumocfg(models, num_envs_per_model)
 
-    # Ensure freeze_support() is called if necessary (typically for Windows)
-    multiprocessing.freeze_support()
+    # # Ensure freeze_support() is called if necessary (typically for Windows)
+    # multiprocessing.freeze_support()
 
-    # Create a list of processes for each training function
-    processes = [
-        multiprocessing.Process(target=train_ppo, name='PPO Process'),
-        multiprocessing.Process(target=train_dqn, name='DQN Process'),
-        multiprocessing.Process(target=train_a2c, name='A2C Process'),
-        multiprocessing.Process(target=train_trpo, name='TRPO Process'),
-        multiprocessing.Process(target=train_td3, name='TD3 Process'),
-        multiprocessing.Process(target=train_sac, name='SAC Process')
-    ]
+    # # Create a list of processes for each training function
+    # processes = [
+    #     multiprocessing.Process(target=train_ppo, name='PPO Process'),
+    #     multiprocessing.Process(target=train_dqn, name='DQN Process'),
+    #     multiprocessing.Process(target=train_a2c, name='A2C Process'),
+    #     multiprocessing.Process(target=train_trpo, name='TRPO Process'),
+    #     multiprocessing.Process(target=train_td3, name='TD3 Process'),
+    #     multiprocessing.Process(target=train_sac, name='SAC Process')
+    # ]
 
-    # Start each process with a 2-second delay between them
-    start_process_with_delay(processes, delay_seconds=2)
+    # # Start each process with a 2-second delay between them
+    # start_process_with_delay(processes, delay_seconds=2)
 
-    # Join the processes to ensure they complete before exiting
-    for process in processes:
-        process.join()
+    # # Join the processes to ensure they complete before exiting
+    # for process in processes:
+    #     process.join()
 
-    # train_ppo() # FIXME: this one is called only for debugging purposes
+    """ Run individually """
+    train_ppo()
 
 '''
 Run rl_learn.py through tunnel:
