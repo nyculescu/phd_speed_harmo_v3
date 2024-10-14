@@ -35,22 +35,21 @@ sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
 </configuration>
 """
 
-def create_sumocfg(models, num_envs_per_model):
+def create_sumocfg(model, num_envs_per_model):
      output_dir = "./sumo"
      os.makedirs(output_dir, exist_ok=True)
 
      # Generate configuration files
-     for model in models:
-          for i in range(num_envs_per_model):
-               # Create filename based on model and environment index
-               filename = f"3_2_merge_{model}_{i}.sumocfg"
-               filepath = os.path.join(output_dir, filename)
-               
-               # Format the template with current model and index
-               content = sumocfg_template.format(model=model, index=i)
-               
-               # Write the content to the file
-               with open(filepath, 'w') as file:
-                    file.write(content)
-               
-               print(f"Created {filepath}")
+     for i in range(num_envs_per_model):
+          # Create filename based on model and environment index
+          filename = f"3_2_merge_{model}_{i}.sumocfg"
+          filepath = os.path.join(output_dir, filename)
+          
+          # Format the template with current model and index
+          content = sumocfg_template.format(model=model, index=i)
+          
+          # Write the content to the file
+          with open(filepath, 'w') as file:
+               file.write(content)
+          
+          print(f"Created {filepath}")

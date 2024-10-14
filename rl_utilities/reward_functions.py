@@ -1,4 +1,5 @@
 import math
+import numpy as np
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -182,16 +183,20 @@ def complex_reward(target_speed_mps, mean_speeds_mps, occupancy, mean_emissions,
 
     return reward
 
-def reward_co2_avgspeed(emissions_t, emissions_t_minus_1, speed_t, speed_t_minus_1, k1=-0.2, b1=0.9, k3=-0.1, b3=0.9):
+"""
+    Emission Reduction: Increase the weight of emission reduction if it's a priority. For example, try k1 = -0.5 and b1 = 1.0 to emphasize reducing emissions more heavily.
+    Flow Efficiency: Adjust to prioritize speed consistency. Try k3 = -0.3 and b3 = 1.0 to focus more on maintaining speed.
+"""
+def reward_co2_avgspeed(prev_emissions, total_emissions_now, prev_mean_speed, avg_speed_now, k1=-0.4, b1=0.95, k3=-0.25, b3=0.95):
     # Normalize emissions
-    normalized_emissions_t = emissions_t / 30000000  # Example normalization factor
-    normalized_emissions_t_minus_1 = emissions_t_minus_1 / 30000000
+    normalized_emissions_t = total_emissions_now / 30000000  # Example normalization factor
+    normalized_emissions_t_minus_1 = np.sum(prev_emissions) / 30000000
 
     # Calculate emission reduction component
     emission_reduction = k1 * (normalized_emissions_t - b1 * normalized_emissions_t_minus_1)
     
     # Calculate traffic flow efficiency component
-    flow_efficiency = k3 * (speed_t - b3 * speed_t_minus_1)
+    flow_efficiency = k3 * (avg_speed_now - b3 * np.mean(prev_mean_speed))
     
     # Total reward
     reward = emission_reduction + flow_efficiency

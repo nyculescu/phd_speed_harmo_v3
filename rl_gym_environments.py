@@ -4,7 +4,6 @@ import gymnasium as gym
 import numpy as np
 import traci
 from traci.exceptions import FatalTraCIError, TraCIException
-from stable_baselines3.common.callbacks import BaseCallback
 import subprocess
 import psutil
 import logging
@@ -16,10 +15,11 @@ from rl_utilities.reward_functions import *
 from simulation_utilities.road import *
 from simulation_utilities.setup import *
 from simulation_utilities.flow_gen import *
-
-from simulation_utilities.flow_gen import car_generation_rates_per_lane
+from multiprocessing import Manager
 
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
+# num_envs_per_model = 19 # 7 days x 3 runs
+num_envs_per_model = 1
 
 # Initialize counters for vehicle types
 vehicle_counts = {
@@ -39,11 +39,11 @@ class SUMOEnv(gym.Env):
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = np.array([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
         if model == "TD3" or model == "SAC":
-            self.action_space = gym.spaces.Box(low=np.min(self.speed_limits), high=np.max(self.speed_limits), shape=(1,), dtype=np.float32)
+            self.action_space = gym.spaces.Box(low=np.min(self.speed_limits), high=np.max(self.speed_limits), shape=(1,), dtype=np.float64)
         else:
             self.action_space = gym.spaces.Discrete(len(self.speed_limits))
-        self.obs = np.array([0], dtype=np.float32)
-        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float32", shape=(1,))
+        self.obs = np.array([0], dtype=np.float64)
+        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float64", shape=(1,))
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
         self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time  # 60 x 1440 = 86400 steps
@@ -54,15 +54,21 @@ class SUMOEnv(gym.Env):
         self.occupancy_sum = 0
         self.occupancy_avg = 0
         self.occupancy_curr = 0
+        self.occupancy = 0
         self.flow = 0
         self.flows = []
         self.sumo_process = None
-        self.sumo_max_retries = 3 + models.index(model)
+        self.sumo_max_retries = 5
         self.day_index = 0
-        self.flow_gen_max = 0
+        self.flow_gen_max = np.random.triangular(0.45, np.random.uniform(0.9, 1.1), 1.55)
         self.reward = 0
         self.total_emissions_now = 0
+        self.avg_speed_now = 0
         self.rewards = []
+
+    def reward_func_wrap(self):
+        return quad_occ_reward(self.occupancy)
+        # reward_co2_avgspeed(self.prev_emissions, self.total_emissions_now, self.prev_mean_speed, self.avg_speed_now)
 
     def start_sumo(self):
         # If SUMO is running, then perform a restart
@@ -74,11 +80,9 @@ class SUMOEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                self.flow_gen_max = np.random.triangular(0.5, 1, 1.5)
-            
+                self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.95, 1.05) # add some deviation
                 flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
-                self.day_index %= 7
-
+                
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
                 self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] + ["--remote-port", str(port)], 
@@ -165,27 +169,22 @@ class SUMOEnv(gym.Env):
         self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
 
         # Calculate reward using the adapted reward function
-        self.reward = reward_co2_avgspeed(
-            self.total_emissions_now,
-            np.sum(self.prev_emissions),
-            avg_speed_now,
-            np.mean(self.prev_mean_speed),
-            k1=-2,
-            b1=0.9,
-            k3=-0.5,
-            b3=0.9
-        )
+        # quad_occ_reward()
+        self.reward = self.reward_func_wrap()
+        
         self.rewards.append(self.reward)
 
         flow = (veh_time_sum / self.aggregation_time) * len(car_generation_rates_per_lane) / 2 * 60 * 60
         self.flows.append(flow)
+
+        self.occupancy = self.occupancy_sum / self.aggregation_time
 
         self.sim_length -= 1  # Reduce simulation length by 1 second
         done = self.sim_length <= 0
         if done:
             self.log_info()
             self.rewards = []
-            self.close_sumo("simulation done")
+            self.close_sumo("simulation done")              
 
         self.obs = np.array([avg_speed_now])
 
@@ -217,9 +216,14 @@ class SUMOEnv(gym.Env):
         # self.sumo_process = None
         self.sumo_max_retries = 5
         self.occupancy_sum = 0
+        self.occupancy = 0
         self.occupancy_avg = 0
         self.occupancy_curr = 0
         self.rewards = []
+        self.avg_speed_now = 0
+        self.total_emissions_now = 0
+        self.prev_emissions = 0
+        self.prev_mean_speed = 0
 
         # Reset params
         self.speed_limit = 130
@@ -227,7 +231,7 @@ class SUMOEnv(gym.Env):
         # Reset time
         self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time
 
-        obs = np.array([0], dtype=np.float32)
+        obs = np.array([0], dtype=np.float64)
         
         return obs, {}
     

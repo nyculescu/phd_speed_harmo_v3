@@ -6,21 +6,24 @@ import multiprocessing
 import logging
 import logging.handlers
 
-from sb3_contrib import TRPO
-from stable_baselines3 import PPO, DQN, A2C, SAC, TD3
-# from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import EvalCallback
+from sb3_contrib import TRPO #, CrossQ, TQC
+from stable_baselines3 import PPO, DQN, A2C, SAC, TD3 #, DroQ
+from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
-from rl_gym_environments import SUMOEnv, models
+from stable_baselines3.common.logger import configure
+from rl_gym_environments import *
+from rl_utilities.reward_functions import *
+from simulation_utilities.flow_gen import *
 import time
-
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+from rl_zoo3.train import train
 
 '''
 Factors to Consider to determine the appropriate number of total timesteps
@@ -38,6 +41,24 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
+global_day_index = 0
+
+def make_env_with_monitor(port, model, model_idx):
+    def _init():
+        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
+        if model_idx == 0:
+            check_env(env) # useful when there are multiple reward functions
+        env.day_index = (global_day_index + model_idx) % 7
+        return Monitor(env)
+    return _init
+
+def make_env(port, model, model_idx):
+    def _init():
+        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
+        env.day_index = (global_day_index + model_idx) % 7
+        return env  # No Monitor
+    return _init
+
 def start_process_with_delay(processes, delay_seconds):
     last_start_time = time.time()
 
@@ -53,11 +74,6 @@ def start_process_with_delay(processes, delay_seconds):
         # Update the last start time
         last_start_time = time.time()
 
-def make_env(port, model, model_idx):
-    def _init():
-        return SUMOEnv(port=port, model=model, model_idx=model_idx)
-    return _init
-
 def plot_mean_speeds(mean_speeds, agent_name):
     if len(mean_speeds) > 0:
         plt.figure()
@@ -69,9 +85,9 @@ def plot_mean_speeds(mean_speeds, agent_name):
     else:
         logging.debug(f"No mean speeds data to plot for {agent_name}")
 
-class LoggingCallback(BaseCallback):
+class ShowProgressCallback(BaseCallback):
     def __init__(self, custom_logger, total_timesteps, verbose=0):
-        super(LoggingCallback, self).__init__(verbose)
+        super(ShowProgressCallback, self).__init__(verbose)
         self.custom_logger = custom_logger
         self.total_timesteps = total_timesteps
         self.one_percent_steps = total_timesteps // 100  # Calculate steps for 1%
@@ -81,33 +97,6 @@ class LoggingCallback(BaseCallback):
         # Check if we've reached the next 1% step
         if (self.num_timesteps - self.last_logged_step) >= self.one_percent_steps:
             self.custom_logger.info(f"Progress: {self.num_timesteps / self.total_timesteps:.2%} completed.")
-            self.last_logged_step = self.num_timesteps
-        return True
-
-class EnhancedLoggingCallback(BaseCallback):
-    def __init__(self, custom_logger, total_timesteps, verbose=0):
-        super(EnhancedLoggingCallback, self).__init__(verbose)
-        self.custom_logger = custom_logger
-        self.total_timesteps = total_timesteps
-        self.one_percent_steps = total_timesteps // 100
-        self.last_logged_step = 0
-
-    def _on_step(self) -> bool:
-        if (self.num_timesteps - self.last_logged_step) >= self.one_percent_steps:
-            # Log progress
-            self.custom_logger.info(f"Progress: {self.num_timesteps / self.total_timesteps:.2%} completed.")
-            
-            # Log additional metrics
-            if 'loss' in self.locals:
-                self.custom_logger.info(f"Policy Loss: {self.locals['loss']}")
-            if 'entropy' in self.locals:
-                self.custom_logger.info(f"Entropy: {self.locals['entropy']}")
-            if 'grad_norm' in self.locals:
-                self.custom_logger.info(f"Gradient Norm: {self.locals['grad_norm']}")
-            if hasattr(self.model, 'lr_schedule'):
-                current_lr = self.model.lr_schedule(self.num_timesteps)
-                self.custom_logger.info(f"Learning Rate: {current_lr}")
-
             self.last_logged_step = self.num_timesteps
         return True
 
@@ -123,87 +112,100 @@ def setup_logger(name, log_file, level=logging.INFO):
 
     return logger
 
-def make_env_with_monitor(port, model, model_idx):
-    def _init():
-        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
-        return Monitor(env)  # Wrap with Monitor
-    return _init
-
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Configuration """
 
-eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
-n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
+# eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
+# n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
 base_port = 8800
-
-total_timesteps = 100000
+# total_timesteps = 50000
 
 def train_ppo():
     model_name = 'PPO'
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
+
     # Get the index of the model in the list
     try:
-        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        create_sumocfg(model_name, num_envs_per_model)
+        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
         env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        env_eval = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
 
-        log_dir = f"./logs/{model_name}/"
-        model_dir = f"./rl_models/{model_name}/"
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
 
+        # Save a checkpoint every 1000 steps
+        checkpoint_cb = CheckpointCallback(
+            save_freq=1000,
+            save_path=model_dir,
+            name_prefix=f"rl_model_{model_name}",
+            save_replay_buffer=True,
+            save_vecnormalize=True,
+            )
+
         # Initialize PPO model with vectorized environments
-        ppo_model = PPO(
+        model = PPO(
             "MlpPolicy",
-            env,
-            learning_rate=1e-4, # old: 3e-4,
+            env_eval,
+            learning_rate=2e-4, # old: 3e-4,
             n_steps=2048,
             batch_size=64,
-            n_epochs=10,
+            n_epochs=15,
             gamma=0.99,
             gae_lambda=0.95,
-            clip_range=0.1, # reduced from 0.2 to prevent large policy updates
-            ent_coef=0.01, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
+            clip_range=0.2, # reduced from 0.2 to prevent large policy updates
+            ent_coef=0.02, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
             verbose=1,
             tensorboard_log=log_dir,
             device='cuda'
         )
-
-        ppo_eval_callback = EvalCallback(
+        
+        # Stop training if there is no improvement after more than 3 evaluations
+        stop_train_cb = StopTrainingOnNoModelImprovement(max_no_improvement_evals=3, min_evals=5, verbose=1)
+        eval_cb = EvalCallback(
             env,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=10000,
+            eval_freq=max(10000 // num_envs_per_model, 1),
+            callback_after_eval=stop_train_cb,
             n_eval_episodes=5,
             deterministic=True,
+            verbose=1,
             render=False
         )
 
-        logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-        logging_callback = EnhancedLoggingCallback(logger, total_timesteps)
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
         logging.info(f"Training {model_name} model...")
-        ppo_model.learn(total_timesteps=total_timesteps, callback=[ppo_eval_callback, logging_callback])
+        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_dqn():
     model_name = 'DQN'
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
-        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        create_sumocfg(model_name, num_envs_per_model)
+        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
+        env_mon = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        env_eval = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
 
-        log_dir = f"./logs/{model_name}/"
-        model_dir = f"./rl_models/{model_name}/"
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
 
-        dqn_model = DQN(
+        model = DQN(
             "MlpPolicy",
-            env,
-            learning_rate=1e-4,
+            env_mon,
+            learning_rate=2e-4,
             buffer_size=100000,
             learning_starts=1000,
-            batch_size=32,
+            batch_size=128, # Increase batch size to stabilize training updates
             tau=1.0,
             gamma=0.99,
             train_freq=4,
@@ -214,33 +216,44 @@ def train_dqn():
             tensorboard_log=log_dir,
             device='cuda'
         )
+        """
+        Notes:
+        1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
+        """
 
-        dqn_eval_callback = EvalCallback(
-            env,
+        eval_callback = EvalCallback(
+            env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=10000,
+            eval_freq=max(10000 // num_envs_per_model, 1),
             n_eval_episodes=5,
             deterministic=True,
             render=False
         )
 
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+
+        progress_callback = ShowProgressCallback(compl_logger, timesteps)
+
         logging.info(f"Training {model_name} model...")
-        dqn_model.learn(total_timesteps=total_timesteps, callback=[dqn_eval_callback])
+        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_a2c():
     model_name = 'A2C'
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
+    create_sumocfg(model_name, num_envs_per_model)
     ports = [(base_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
     env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
-    log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
-    a2c_model = A2C(
+    model = A2C(
         "MlpPolicy",
         env,
         learning_rate=5e-4, # trained before with 7e-4
@@ -255,7 +268,7 @@ def train_a2c():
         device='cuda'
     )
 
-    a2c_eval_callback = EvalCallback(
+    eval_callback = EvalCallback(
         env,
         best_model_save_path=model_dir,
         log_path=log_dir,
@@ -265,30 +278,29 @@ def train_a2c():
         render=False
     )
 
-    # Set up custom logger
-    # ppo_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
-    # Initialize LoggingCallback
-    # logging_callback = LoggingCallback(ppo_logger, total_timesteps)
+    progress_callback = ShowProgressCallback(compl_logger, timesteps)
 
     logging.info(f"Training {model_name} model...")
-    a2c_model.learn(total_timesteps=total_timesteps, callback=[a2c_eval_callback])
+    model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
 
 def train_trpo():
     model_name = 'TRPO'
-    
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
-        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        create_sumocfg(model_name, num_envs_per_model)
+        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
         env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
     
-        # Set up directories for logging and model saving
-        log_dir = f"./logs/{model_name}/"
-        model_dir = f"./rl_models/{model_name}/"
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
         
         # Initialize TRPO model with vectorized environments
-        trpo_model = TRPO(
+        model = TRPO(
             "MlpPolicy",
             env,
             learning_rate=1e-3,
@@ -300,7 +312,7 @@ def train_trpo():
         )
         
         # Set up evaluation callback
-        trpo_eval_callback = EvalCallback(
+        eval_callback = EvalCallback(
             env,
             best_model_save_path=model_dir,
             log_path=log_dir,
@@ -310,26 +322,30 @@ def train_trpo():
             render=False
         )
         
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+        progress_callback = ShowProgressCallback(compl_logger, timesteps)
+
         logging.info(f"Training {model_name} model...")
-        trpo_model.learn(total_timesteps=total_timesteps, callback=[trpo_eval_callback])
+        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_td3():
     model_name = 'TD3'
-    
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
-        ports = [(base_port + num_envs_per_model * models.index(model_name)) + i for i in range(num_envs_per_model)]
+        create_sumocfg(model_name, num_envs_per_model)
+        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
         env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
-        # Set up directories for logging and model saving
-        log_dir = f"./logs/{model_name}/"
-        model_dir = f"./rl_models/{model_name}/"
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
         
         # Initialize TD3 model with the single environment
-        td3_model = TD3(
+        model = TD3(
             "MlpPolicy",
             env,
             learning_rate=1e-3,
@@ -346,7 +362,7 @@ def train_td3():
         )
         
         # Set up evaluation callback
-        td3_eval_callback = EvalCallback(
+        eval_callback = EvalCallback(
             env,
             best_model_save_path=model_dir,
             log_path=log_dir,
@@ -356,25 +372,31 @@ def train_td3():
             render=False
         )
 
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+        progress_callback = ShowProgressCallback(compl_logger, timesteps)
+
         logging.info(f"Training {model_name} model...")
-        td3_model.learn(total_timesteps=total_timesteps, callback=[td3_eval_callback])
+        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 def train_sac():
     model_name = 'SAC'
-
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
+    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
+        create_sumocfg(model_name, num_envs_per_model)
         """ A singe instance is allowed for SAC because of this error: 
             assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."""
-        port = base_port + num_envs_per_model * models.index(model_name)
+        port = base_port + num_envs_per_model
         env = DummyVecEnv([make_env_with_monitor(port, model_name, 0)])  # Use DummyVecEnv for single env
-        log_dir = f"./logs/{model_name}/"
-        model_dir = f"./rl_models/{model_name}/"
+
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
 
-        sac_model = SAC(
+        model = SAC(
             "MlpPolicy",
             env,
             learning_rate=3e-4,
@@ -391,7 +413,7 @@ def train_sac():
             device='cuda'
         )
 
-        sac_eval_callback = EvalCallback(
+        eval_callback = EvalCallback(
             env,
             best_model_save_path=model_dir,
             log_path=log_dir,
@@ -401,41 +423,27 @@ def train_sac():
             render=False
         )
 
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+        progress_callback = ShowProgressCallback(compl_logger, timesteps)
+
         logging.info(f"Training {model_name} model...")
-        sac_model.learn(total_timesteps=total_timesteps, callback=[sac_eval_callback])
+        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-# The max limis is 1 process/1 physical CPU core. 
-# Total physical CPU cores: 24, but using 15 at once should be enough
-num_envs_per_model = 18
-
 if __name__ == '__main__':
-    create_sumocfg(models, num_envs_per_model)
-
-    # # Ensure freeze_support() is called if necessary (typically for Windows)
-    # multiprocessing.freeze_support()
-
-    # # Create a list of processes for each training function
-    # processes = [
-    #     multiprocessing.Process(target=train_ppo, name='PPO Process'),
-    #     multiprocessing.Process(target=train_dqn, name='DQN Process'),
-    #     multiprocessing.Process(target=train_a2c, name='A2C Process'),
-    #     multiprocessing.Process(target=train_trpo, name='TRPO Process'),
-    #     multiprocessing.Process(target=train_td3, name='TD3 Process'),
-    #     multiprocessing.Process(target=train_sac, name='SAC Process')
-    # ]
-
-    # # Start each process with a 2-second delay between them
-    # start_process_with_delay(processes, delay_seconds=2)
-
-    # # Join the processes to ensure they complete before exiting
-    # for process in processes:
-    #     process.join()
-
-    """ Run individually """
-    train_ppo()
+    episodes = 1
+    
+    for i in range(episodes):
+        train_ppo()
+        global_day_index = (global_day_index + num_envs_per_model) % 7
+        
+    # train_a2c()
+    # train_dqn()
+    # train_sac()
+    # train_td3()
+    # train_trpo()
 
 '''
 Run rl_learn.py through tunnel:
