@@ -9,9 +9,9 @@ import logging
 import os
 import multiprocessing
 from time import sleep
-from simulation_utilities.flow_gen import flow_generation
+from traffic_environment.flow_gen import flow_generation
 
-from rl_gym_environments import SUMOEnv
+from traffic_environment.rl_gym_environments import TrafficEnv
 
 # Configure logging
 logging.basicConfig(
@@ -68,7 +68,7 @@ def save_metrics(metrics, agent_name):
 def test_ppo():
     model_name = "PPO"
     logging.debug(f"Starting {model_name} test")
-    ppo_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    ppo_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(ppo_env)
     ppo_model = PPO.load(model_paths[model_name])
 
@@ -95,7 +95,7 @@ def test_ppo():
 def test_a2c():
     model_name = "A2C"
     logging.debug(f"Starting {model_name} test")
-    a2c_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    a2c_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(a2c_env)
     a2c_model = A2C.load(model_paths[model_name])
     
@@ -124,7 +124,7 @@ def test_a2c():
 def test_dqn():
     model_name = "DQN"
     logging.debug(f"Starting {model_name} test")
-    dqn_env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    dqn_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
     dqn_model = DQN.load(model_paths[model_name])
 
@@ -151,7 +151,7 @@ def test_dqn():
 def test_td3():
     model_name = "TD3"
     logging.debug(f"Starting {model_name} test")
-    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
     model = TD3.load(model_paths[model_name])
 
@@ -178,7 +178,7 @@ def test_td3():
 def test_trpo():
     model_name = "TRPO"
     logging.debug(f"Starting {model_name} test")
-    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
     model = TRPO.load(model_paths[model_name])
 
@@ -205,7 +205,7 @@ def test_trpo():
 def test_sac():
     model_name = "SAC"
     logging.debug(f"Starting {model_name} test")
-    env = SUMOEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     # check_env(dqn_env)
     model = SAC.load(model_paths[model_name])
 

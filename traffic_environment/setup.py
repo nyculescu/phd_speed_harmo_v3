@@ -21,22 +21,22 @@ Notes:
      A smaller step length (e.g., 0.5) => more frequent updates, which can slow down the simulation but increase accuracy. Conversely, increasing it (e.g., 1.0 or more) will speed up the simulation at the cost of some detail.  '--step-length', '0.5'
 
 '''
-sumoCmd = [sumoBinary, "-c", "sumo/3_2_merge.sumocfg", '--start']
+sumoCmd = [sumoBinary, "-c", "./traffic_environment/sumo/3_2_merge.sumocfg", '--start']
 
 # Template for the .sumocfg file content
 sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
 <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
     <input>
-        <net-file value="./3_2_merge.net.xml"/>
-        <route-files value="./generated_flows_{model}_{index}.rou.xml"/>
-        <additional-files value="./loops_detectors.xml"/>
+        <net-file value="3_2_merge.net.xml"/>
+        <route-files value="generated_flows_{model}_{index}.rou.xml"/>
+        <additional-files value="loops_detectors.xml"/>
         <gui-settings-file value="colored.view.xml"/>
     </input>
 </configuration>
 """
 
 def create_sumocfg(model, num_envs_per_model):
-     output_dir = "./sumo"
+     output_dir = "./traffic_environment/sumo"
      os.makedirs(output_dir, exist_ok=True)
 
      # Generate configuration files

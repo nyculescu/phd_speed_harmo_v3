@@ -1,8 +1,7 @@
-from simulation_utilities.setup import create_sumocfg
-from simulation_utilities.flow_gen import *
+from traffic_environment.setup import create_sumocfg
+from traffic_environment.flow_gen import *
 
 from matplotlib import pyplot as plt
-import multiprocessing
 import logging
 import logging.handlers
 
@@ -15,19 +14,22 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
-from rl_gym_environments import *
-from rl_utilities.reward_functions import *
-from simulation_utilities.flow_gen import *
-import time
+from traffic_environment.rl_gym_environments import *
+from traffic_environment.reward_functions import *
+from traffic_environment.flow_gen import *
+import multiprocessing
+# import time
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-from rl_zoo3.train import train
+
+# rl_zoo3 training script to train an agent /> python -m rl_zoo3.train --algo ppo --env TrafficEnv-v0 --eval-freq 10000 --save-freq 50000 --n-timesteps 1000000
+# Hyperparameter Optimization (Optuna with rl_zoo3) /> python -m rl_zoo3.train --algo dqn --env TrafficEnv-v0 -n 50000 -optimize --n-trials 1000 --n-jobs 2 --sampler random --pruner median
 
 '''
 Factors to Consider to determine the appropriate number of total timesteps
-1. Environment Complexity: SUMOEnv simulates traffic scenarios with a discrete action space of 11 actions, representing speed limits. The observation space is a simple 1-dimensional Box, indicating a relatively straightforward state representation. This simplicity suggests that fewer timesteps might be needed compared to more complex environments.
+1. Environment Complexity: TrafficEnv simulates traffic scenarios with a discrete action space of 11 actions, representing speed limits. The observation space is a simple 1-dimensional Box, indicating a relatively straightforward state representation. This simplicity suggests that fewer timesteps might be needed compared to more complex environments.
 2. Simulation Length: Each episode in the environment runs for 120 steps (sim_length is set to 3600 divided by aggregation_time of 30). This means that the agent has 120 opportunities to learn from each episode.
 3. Desired Performance: If the goal is to achieve a basic level of performance or to test feasibility, starting with fewer timesteps is reasonable. High performance -> more timesteps
 4. Computational Resources: The availability of computational power can limit or extend the feasible number of timesteps. Training on GPUs can significantly speed up the process.
@@ -42,48 +44,17 @@ Note about policies:
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
 global_day_index = 0
+base_sumo_port = 8800
 
-def make_env_with_monitor(port, model, model_idx):
+def get_traffic_env(port, model, model_idx, mon):
     def _init():
-        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
-        if model_idx == 0:
-            check_env(env) # useful when there are multiple reward functions
+        env = TrafficEnv(port=port, model=model, model_idx=model_idx)
         env.day_index = (global_day_index + model_idx) % 7
-        return Monitor(env)
+        if mon:
+            return Monitor(env)
+        else:
+            return env  # No Monitor
     return _init
-
-def make_env(port, model, model_idx):
-    def _init():
-        env = SUMOEnv(port=port, model=model, model_idx=model_idx)
-        env.day_index = (global_day_index + model_idx) % 7
-        return env  # No Monitor
-    return _init
-
-def start_process_with_delay(processes, delay_seconds):
-    last_start_time = time.time()
-
-    for process in processes:
-        # Wait until the required delay has passed
-        while time.time() - last_start_time < delay_seconds:
-            time.sleep(0.1)  # Sleep briefly to prevent busy-waiting
-
-        # Start the process
-        process.start()
-        print(f"Started {process.name} at {time.time()}")
-
-        # Update the last start time
-        last_start_time = time.time()
-
-def plot_mean_speeds(mean_speeds, agent_name):
-    if len(mean_speeds) > 0:
-        plt.figure()
-        plt.plot(mean_speeds)
-        plt.xlabel("Step")
-        plt.ylabel("Mean Speed")
-        plt.title(f"Mean Speed over Training for {agent_name}")
-        plt.show()
-    else:
-        logging.debug(f"No mean speeds data to plot for {agent_name}")
 
 class ShowProgressCallback(BaseCallback):
     def __init__(self, custom_logger, total_timesteps, verbose=0):
@@ -118,9 +89,6 @@ def setup_logger(name, log_file, level=logging.INFO):
 # eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
-base_port = 8800
-# total_timesteps = 50000
-
 def train_ppo():
     model_name = 'PPO'
     log_dir = f"./logs/{model_name}/"
@@ -130,9 +98,9 @@ def train_ppo():
     # Get the index of the model in the list
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
-        env_eval = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
+        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
+        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -149,7 +117,7 @@ def train_ppo():
         # Initialize PPO model with vectorized environments
         model = PPO(
             "MlpPolicy",
-            env_eval,
+            env,
             learning_rate=2e-4, # old: 3e-4,
             n_steps=2048,
             batch_size=64,
@@ -166,7 +134,7 @@ def train_ppo():
         # Stop training if there is no improvement after more than 3 evaluations
         stop_train_cb = StopTrainingOnNoModelImprovement(max_no_improvement_evals=3, min_evals=5, verbose=1)
         eval_cb = EvalCallback(
-            env,
+            env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
             eval_freq=max(10000 // num_envs_per_model, 1),
@@ -188,40 +156,51 @@ def train_dqn():
     model_name = 'DQN'
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
     timesteps = (len(car_generation_rates_per_lane) / 2) * 60
+
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env_mon = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
-        env_eval = SubprocVecEnv([make_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
+        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
+        env_mon = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        env_eval = SubprocVecEnv( get_traffic_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
 
-        model = DQN(
-            "MlpPolicy",
-            env_mon,
-            learning_rate=2e-4,
-            buffer_size=100000,
-            learning_starts=1000,
-            batch_size=128, # Increase batch size to stabilize training updates
-            tau=1.0,
-            gamma=0.99,
-            train_freq=4,
-            target_update_interval=500, # Old: reduced from 1000 for more frequent updates
-            exploration_fraction=0.1,
-            exploration_final_eps=0.05,
-            verbose=1,
-            tensorboard_log=log_dir,
-            device='cuda'
-        )
+        # Save a checkpoint every 1000 steps
+        checkpoint_cb = CheckpointCallback(
+            save_freq=1000,
+            save_path=model_dir,
+            name_prefix=f"rl_model_{model_name}",
+            save_replay_buffer=True,
+            save_vecnormalize=True,
+            )
+
+        # model = DQN(
+        #     "MlpPolicy",
+        #     env_mon,
+        #     learning_rate=2e-4,
+        #     buffer_size=100000,
+        #     learning_starts=1000,
+        #     batch_size=128, # Increase batch size to stabilize training updates
+        #     tau=1.0,
+        #     gamma=0.99,
+        #     train_freq=4,
+        #     target_update_interval=500, # Old: reduced from 1000 for more frequent updates
+        #     exploration_fraction=0.1,
+        #     exploration_final_eps=0.05,
+        #     verbose=1,
+        #     tensorboard_log=log_dir,
+        #     device='cuda'
+        # )
+        model = DQN("MlpPolicy", env_mon, learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
+            device='cuda')
         """
         Notes:
         1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
         """
 
-        eval_callback = EvalCallback(
+        eval_cb = EvalCallback(
             env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
@@ -230,13 +209,11 @@ def train_dqn():
             deterministic=True,
             render=False
         )
-
+        
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
-        progress_callback = ShowProgressCallback(compl_logger, timesteps)
-
         logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
+        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
     except ValueError:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
 
@@ -247,8 +224,8 @@ def train_a2c():
     compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
     timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     create_sumocfg(model_name, num_envs_per_model)
-    ports = [(base_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+    ports = [(base_sumo_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
+    env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
@@ -293,8 +270,8 @@ def train_trpo():
     timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
     
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -338,8 +315,8 @@ def train_td3():
     timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([make_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
+        env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -390,8 +367,8 @@ def train_sac():
         create_sumocfg(model_name, num_envs_per_model)
         """ A singe instance is allowed for SAC because of this error: 
             assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."""
-        port = base_port + num_envs_per_model
-        env = DummyVecEnv([make_env_with_monitor(port, model_name, 0)])  # Use DummyVecEnv for single env
+        port = base_sumo_port + num_envs_per_model
+        env = DummyVecEnv( get_traffic_env_with_monitor(port, model_name, 0)])  # Use DummyVecEnv for single env
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -433,12 +410,14 @@ def train_sac():
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
-    episodes = 1
+    multiprocessing.freeze_support()
+    episodes = 10
     
     for i in range(episodes):
-        train_ppo()
+        train_dqn()
         global_day_index = (global_day_index + num_envs_per_model) % 7
         
+    # train_ppo()
     # train_a2c()
     # train_dqn()
     # train_sac()

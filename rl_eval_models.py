@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from rl_gym_environments import models
+from traffic_environment.rl_gym_environments import models
 
 # for model in models:
 model = 'DQN'

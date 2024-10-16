@@ -10,16 +10,15 @@ import logging
 logging.basicConfig(level=logging.DEBUG) # FIXME: use WARNING for long runs. More info at: https://docs.python.org/3/library/logging.html#logging-levels
 from time import sleep
 
-from rl_utilities.reward_functions import *
+from traffic_environment.reward_functions import *
 # from rl_utilities.model import *
-from simulation_utilities.road import *
-from simulation_utilities.setup import *
-from simulation_utilities.flow_gen import *
-from multiprocessing import Manager
+from traffic_environment.road import *
+from traffic_environment.setup import *
+from traffic_environment.flow_gen import *
 
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 # num_envs_per_model = 19 # 7 days x 3 runs
-num_envs_per_model = 1
+num_envs_per_model = 10
 
 # Initialize counters for vehicle types
 vehicle_counts = {
@@ -31,8 +30,9 @@ vehicle_counts = {
     "truck": 0
 }
 
-class SUMOEnv(gym.Env):
+class TrafficEnv(gym.Env):
     def __init__(self, port, model, model_idx):
+        super(TrafficEnv, self).__init__()
         self.port = port
         self.model = model
         self.model_idx = model_idx
@@ -75,7 +75,7 @@ class SUMOEnv(gym.Env):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if is_sumo_running:
             logging.warning("SUMO process is still running. Terminating...")
-            self.close_sumo("restarting SUMO")
+            self.close_sumo("SUMO closed so that it can be restarted")
             sleep(2)
         
         for attempt in range(self.sumo_max_retries):
@@ -85,29 +85,35 @@ class SUMOEnv(gym.Env):
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
-                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] + ["--remote-port", str(port)], 
+                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] + ["--remote-port", str(port)], 
                                     stdout=subprocess.PIPE, 
                                     stderr=subprocess.PIPE)
                 logging.debug(f"Attempting to connect to SUMO on port {port}")
-                traci.init(port=port, numRetries=3)
+                traci.init(port=port)
                 logging.info(f"Successfully connected to SUMO on port {port}")
-                return
+                break
             except (FatalTraCIError, TraCIException) as e:
                 logging.error(f"Attempt {attempt + 1} failed: {e}")
-                self.close_sumo("failed at starting SUMO")
-        
-        raise RuntimeError("Failed to start SUMO after multiple attempts")
+                
+                if attempt <= self.sumo_max_retries:
+                    sleep(2)  # Wait before retrying
+                else:
+                    self.close_sumo("failed at starting SUMO")
+                    raise e  # Re-raise the exception if all retries fail
 
     def close_sumo(self, reason):
-        if not self.sumo_process is None:
+        print(f"Closing SUMO: {reason}")
+        if hasattr(self, 'sumo_process') and self.sumo_process is not None:
             try:
                 traci.close()
+                sleep(2)
                 logging.debug(f"The reason SUMO is closed: {reason}")
             except (FatalTraCIError, TraCIException):
-                pass  # Ignore errors when closing
-            self.sumo_process.terminate()
-            self.sumo_process.wait()
-            self.sumo_process = None
+                logging.debug(f"SUMO is not closing...: {reason}")
+            finally:
+                self.sumo_process.terminate()
+                self.sumo_process.wait()
+                self.sumo_process = None
 
     def step(self, action):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
@@ -182,7 +188,7 @@ class SUMOEnv(gym.Env):
         self.sim_length -= 1  # Reduce simulation length by 1 second
         done = self.sim_length <= 0
         if done:
-            self.log_info()
+            # self.log_info()
             self.rewards = []
             self.close_sumo("simulation done")              
 
@@ -236,10 +242,15 @@ class SUMOEnv(gym.Env):
         return obs, {}
     
     def close(self):
-        self.close_sumo("close() method called")
+        if hasattr(self, 'sumo_process') and self.sumo_process is not None:
+            self.close_sumo("close() method called")
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except AttributeError:
+            # Handle cases where attributes might not be initialized
+            print("Warning: Attempted to delete an uninitialized TrafficEnv instance.")
 
     # def get_current_occupancy(self):
     #     return self.occupancy_curr
