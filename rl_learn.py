@@ -225,7 +225,7 @@ def train_a2c():
     timesteps = (len(car_generation_rates_per_lane) / 2) * 60
     create_sumocfg(model_name, num_envs_per_model)
     ports = [(base_sumo_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+    env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
 
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
@@ -271,7 +271,7 @@ def train_trpo():
     try:
         create_sumocfg(model_name, num_envs_per_model)
         ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
     
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -316,7 +316,7 @@ def train_td3():
     try:
         create_sumocfg(model_name, num_envs_per_model)
         ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
+        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -368,7 +368,7 @@ def train_sac():
         """ A singe instance is allowed for SAC because of this error: 
             assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."""
         port = base_sumo_port + num_envs_per_model
-        env = DummyVecEnv( get_traffic_env_with_monitor(port, model_name, 0)])  # Use DummyVecEnv for single env
+        env = DummyVecEnv([get_traffic_env(port, model_name, 0, True)])  # Use DummyVecEnv for single env
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
