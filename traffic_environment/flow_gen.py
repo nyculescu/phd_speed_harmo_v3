@@ -4,31 +4,31 @@ import logging
 
 # Vehicle generation rates (bimodal distribution pattern)
 car_generation_rates_per_lane = [
-            75, 50,     # 00:00-00:30-01:00
-            50, 25,     # 01:00-01:30-02:00
-            25, 10,     # 02:00-02:30-03:00
-            10, 15,     # 03:00-03:30-04:00 
-            35, 50,     # 04:00-04:30-05:00
-            75, 125,    # 05:00-05:30-06:00
-            300, 480,   # 06:00-06:30-07:00
-            900, 1115,  # 07:00-07:30-08:00
-            1275, 1380, # 08:00-08:30-09:00   # start
-            1225, 1100, # 09:00-09:30-10:00
-            1090, 1075, # 10:00-10:30-11:00
-            1200, 1325, # 11:00-11:30-12:00
-            1425, 1525, # 12:00-12:30-13:00
-            1515, 1500, # 13:00-13:30-14:00
-            1400, 1300, # 14:00-14:30-15:00
-            1290, 1280, # 15:00-15:30-16:00
-            1375, 1400, # 16:00-16:30-17:00
-            1575, 1725, # 17:00-17:30-18:00
-            1575, 1400, # 18:00-18:30-19:00
-            1200, 1125, # 19:00-19:30-20:00   # end
-            850, 700,   # 20:00-20:30-21:00
-            575, 450,   # 21:00-21:30-22:00
-            350, 225,   # 22:00-22:30-23:00
-            200, 100    # 23:00-23:30-00:00
-]
+            np.random.uniform(25,  75 ) ,    np.random.uniform(50,    75),    # 00:00-00:30-01:00
+            np.random.uniform(25, 50  )  ,   np.random.uniform(25,     10  ),    # 01:00-01:30-02:00
+            np.random.uniform(25, 50  )  ,   np.random.uniform(10,      5 ),    # 02:00-02:30-03:00
+            np.random.uniform(5, 25  )   ,  np.random.uniform(10,       25 ),    # 03:00-03:30-04:00 
+            np.random.uniform(25, 50  )  ,   np.random.uniform(50,    75   ),    # 04:00-04:30-05:00
+            np.random.uniform(50,  100 ) ,    np.random.uniform(100,   150  ),    # 05:00-05:30-06:00
+            np.random.uniform(200, 500 ) ,    np.random.uniform( 250,   500 ),    # 06:00-06:30-07:00
+            np.random.uniform(750, 1000 ),     np.random.uniform( 1000,  1250),    # 07:00-07:30-08:00
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 08:00-08:30-09:00   # start
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 09:00-09:30-10:00
+            np.random.uniform(1000, 1250),      np.random.uniform( 1000, 1250),    # 10:00-10:30-11:00
+            np.random.uniform(1000, 1250),      np.random.uniform( 1000, 1500),    # 11:00-11:30-12:00
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 12:00-12:30-13:00
+            np.random.uniform(1250, 1750),      np.random.uniform( 1500, 1750),    # 13:00-13:30-14:00
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 14:00-14:30-15:00
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 15:00-15:30-16:00
+            np.random.uniform(1250, 1500),      np.random.uniform( 1250, 1500),    # 16:00-16:30-17:00
+            np.random.uniform(1500, 2000),      np.random.uniform( 1500, 1750),    # 17:00-17:30-18:00
+            np.random.uniform(1500, 1750),      np.random.uniform( 1750, 1250),    # 18:00-18:30-19:00
+            np.random.uniform(1000, 1250),      np.random.uniform( 1250, 1000),    # 19:00-19:30-20:00   # end
+            np.random.uniform(750,  1000),     np.random.uniform( 750,   1000),    # 20:00-20:30-21:00
+            np.random.uniform(500,  750) ,    np.random.uniform( 500,    750),    # 21:00-21:30-22:00
+            np.random.uniform(250,  500) ,    np.random.uniform( 100,    250),    # 22:00-22:30-23:00
+            np.random.uniform(50,  250)  ,   np.random.uniform( 50 ,    100 )       # 23:00-23:30-00:00
+] 
 
 # Day of the week factor # TODO: add this one in flow generation
 day_of_the_week_factor = [

@@ -45,6 +45,8 @@ Note about policies:
 
 # global_day_index = 0
 base_sumo_port = 8800
+num_envs_per_model = 14
+models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 
 def get_traffic_env(port, model, model_idx, mon):
     def _init():
@@ -58,37 +60,6 @@ def get_traffic_env(port, model, model_idx, mon):
             return env
     return _init
 
-class ShowProgressCallback(BaseCallback):
-    def __init__(self, custom_logger, total_timesteps, verbose=0):
-        super(ShowProgressCallback, self).__init__(verbose)
-        self.custom_logger = custom_logger
-        self.total_timesteps = total_timesteps
-        self.one_percent_steps = total_timesteps // 100  # Calculate steps for 1%
-        self.last_logged_step = 0
-
-    def _on_step(self) -> bool:
-        # Check if we've reached the next 1% step
-        if (self.num_timesteps - self.last_logged_step) >= self.one_percent_steps:
-            self.custom_logger.info(f"Progress: {self.num_timesteps / self.total_timesteps:.2%} completed.")
-            self.last_logged_step = self.num_timesteps
-        return True
-
-def setup_logger(name, log_file, level=logging.INFO):
-    """Function to setup as many loggers as you want"""
-    handler = logging.FileHandler(log_file)        
-    formatter = logging.Formatter('%(asctime)s %(message)s')
-    handler.setFormatter(formatter)
-
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    logger.addHandler(handler)
-
-    return logger
-
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-""" Configuration """
-
-# eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
 def train_model(model_name, model, ports):
@@ -108,7 +79,7 @@ def train_model(model_name, model, ports):
         # Save a checkpoint every 1000 steps
         checkpoint_cb = CheckpointCallback(
             save_freq=episode_lenght * num_envs_per_model,
-            save_path=model_dir,
+            save_path=10000,
             name_prefix=f"rl_model_{model_name}",
             save_replay_buffer=True,
             save_vecnormalize=True,
@@ -118,7 +89,7 @@ def train_model(model_name, model, ports):
             env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=episode_lenght * num_envs_per_model,
+            eval_freq=10000, # episode_lenght * num_envs_per_model = 20160
             n_eval_episodes=1,
             deterministic=True,
             render=False

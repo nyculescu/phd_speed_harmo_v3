@@ -16,9 +16,6 @@ from traffic_environment.road import *
 from traffic_environment.setup import *
 from traffic_environment.flow_gen import *
 
-models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
-num_envs_per_model = 14
-
 # Initialize counters for vehicle types
 vehicle_counts = {
     "normal_car": 0,
@@ -79,7 +76,7 @@ class TrafficEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.95, 1.05) # add some deviation
+                self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.9, 1.3) # add some deviation
                 flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
                 
                 port = self.port
