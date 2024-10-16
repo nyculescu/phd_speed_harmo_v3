@@ -17,8 +17,7 @@ from traffic_environment.setup import *
 from traffic_environment.flow_gen import *
 
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
-# num_envs_per_model = 19 # 7 days x 3 runs
-num_envs_per_model = 10
+num_envs_per_model = 14
 
 # Initialize counters for vehicle types
 vehicle_counts = {

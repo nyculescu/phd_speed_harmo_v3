@@ -43,17 +43,19 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-global_day_index = 0
+# global_day_index = 0
 base_sumo_port = 8800
 
 def get_traffic_env(port, model, model_idx, mon):
     def _init():
-        env = TrafficEnv(port=port, model=model, model_idx=model_idx)
-        env.day_index = (global_day_index + model_idx) % 7
         if mon:
+            env = TrafficEnv(port=port, model=model, model_idx=model_idx)
+            # env.day_index = (global_day_index + model_idx) % 7
+            env.day_index = model_idx % 7
             return Monitor(env)
         else:
-            return env  # No Monitor
+            env = TrafficEnv(port=port + num_envs_per_model, model=model, model_idx=model_idx)
+            return env
     return _init
 
 class ShowProgressCallback(BaseCallback):
@@ -89,150 +91,108 @@ def setup_logger(name, log_file, level=logging.INFO):
 # eval_freq = 10000 # Evaluate the model every 10,000 steps. This frequency allows you to monitor progress without interrupting training too often
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
+def train_model(model_name, model, ports):
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    episode_lenght = (len(car_generation_rates_per_lane) / 2) * 60
+    episodes = 5
+    timesteps = episode_lenght * num_envs_per_model * episodes
+
+    try:
+        create_sumocfg(model_name, num_envs_per_model)
+        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
+
+        os.makedirs(log_dir, exist_ok=True)
+        os.makedirs(model_dir, exist_ok=True)
+
+        # Save a checkpoint every 1000 steps
+        checkpoint_cb = CheckpointCallback(
+            save_freq=episode_lenght * num_envs_per_model,
+            save_path=model_dir,
+            name_prefix=f"rl_model_{model_name}",
+            save_replay_buffer=True,
+            save_vecnormalize=True,
+            )
+
+        eval_cb = EvalCallback(
+            env_eval,
+            best_model_save_path=model_dir,
+            log_path=log_dir,
+            eval_freq=episode_lenght * num_envs_per_model,
+            n_eval_episodes=1,
+            deterministic=True,
+            render=False
+        )
+        
+        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+
+        logging.info(f"Training {model_name} model...")
+        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
+    except ValueError:
+        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+
 def train_ppo():
     model_name = 'PPO'
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
 
-    # Get the index of the model in the list
-    try:
-        create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
-        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
-
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(model_dir, exist_ok=True)
-
-        # Save a checkpoint every 1000 steps
-        checkpoint_cb = CheckpointCallback(
-            save_freq=1000,
-            save_path=model_dir,
-            name_prefix=f"rl_model_{model_name}",
-            save_replay_buffer=True,
-            save_vecnormalize=True,
-            )
-
-        # Initialize PPO model with vectorized environments
-        model = PPO(
-            "MlpPolicy",
-            env,
-            learning_rate=2e-4, # old: 3e-4,
-            n_steps=2048,
-            batch_size=64,
-            n_epochs=15,
-            gamma=0.99,
-            gae_lambda=0.95,
-            clip_range=0.2, # reduced from 0.2 to prevent large policy updates
-            ent_coef=0.02, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
-            verbose=1,
-            tensorboard_log=log_dir,
-            device='cuda'
-        )
+    # Initialize PPO model with vectorized environments
+    model = PPO(
+        "MlpPolicy",
+        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
+        learning_rate=2e-4, # old: 3e-4,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=15,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2, # reduced from 0.2 to prevent large policy updates
+        ent_coef=0.02, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
         
-        # Stop training if there is no improvement after more than 3 evaluations
-        stop_train_cb = StopTrainingOnNoModelImprovement(max_no_improvement_evals=3, min_evals=5, verbose=1)
-        eval_cb = EvalCallback(
-            env_eval,
-            best_model_save_path=model_dir,
-            log_path=log_dir,
-            eval_freq=max(10000 // num_envs_per_model, 1),
-            callback_after_eval=stop_train_cb,
-            n_eval_episodes=5,
-            deterministic=True,
-            verbose=1,
-            render=False
-        )
-
-        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
-    except ValueError:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+    train_model(model_name, model, ports)
 
 def train_dqn():
     model_name = 'DQN'
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
-
-    try:
-        create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env_mon = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
-        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
-
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(model_dir, exist_ok=True)
-
-        # Save a checkpoint every 1000 steps
-        checkpoint_cb = CheckpointCallback(
-            save_freq=1000,
-            save_path=model_dir,
-            name_prefix=f"rl_model_{model_name}",
-            save_replay_buffer=True,
-            save_vecnormalize=True,
-            )
-
-        # model = DQN(
-        #     "MlpPolicy",
-        #     env_mon,
-        #     learning_rate=2e-4,
-        #     buffer_size=100000,
-        #     learning_starts=1000,
-        #     batch_size=128, # Increase batch size to stabilize training updates
-        #     tau=1.0,
-        #     gamma=0.99,
-        #     train_freq=4,
-        #     target_update_interval=500, # Old: reduced from 1000 for more frequent updates
-        #     exploration_fraction=0.1,
-        #     exploration_final_eps=0.05,
-        #     verbose=1,
-        #     tensorboard_log=log_dir,
-        #     device='cuda'
-        # )
-        model = DQN("MlpPolicy", env_mon, learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
-            device='cuda')
-        """
-        Notes:
-        1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
-        """
-
-        eval_cb = EvalCallback(
-            env_eval,
-            best_model_save_path=model_dir,
-            log_path=log_dir,
-            eval_freq=max(10000 // num_envs_per_model, 1),
-            n_eval_episodes=5,
-            deterministic=True,
-            render=False
-        )
-        
-        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
-    except ValueError:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+    # model = DQN(
+    #     "MlpPolicy",
+    #     env_mon,
+    #     learning_rate=2e-4,
+    #     buffer_size=100000,
+    #     learning_starts=1000,
+    #     batch_size=128, # Increase batch size to stabilize training updates
+    #     tau=1.0,
+    #     gamma=0.99,
+    #     train_freq=4,
+    #     target_update_interval=500, # Old: reduced from 1000 for more frequent updates
+    #     exploration_fraction=0.1,
+    #     exploration_final_eps=0.05,
+    #     verbose=1,
+    #     tensorboard_log=log_dir,
+    #     device='cuda'
+    # )
+    model = DQN("MlpPolicy", SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]), 
+                learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
+                device='cuda')
+    """
+    Notes:
+    1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
+    """
+    train_model(model_name, model, ports)
 
 def train_a2c():
     model_name = 'A2C'
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
-    create_sumocfg(model_name, num_envs_per_model)
-    ports = [(base_sumo_port + num_envs_per_model * 2) + i for i in range(num_envs_per_model)]
-    env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
-
-    os.makedirs(log_dir, exist_ok=True)
-    os.makedirs(model_dir, exist_ok=True)
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
 
     model = A2C(
         "MlpPolicy",
-        env,
+        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
         learning_rate=5e-4, # trained before with 7e-4
         n_steps=10, # increased from 5 to capture more information per update
         gamma=0.99,
@@ -245,181 +205,87 @@ def train_a2c():
         device='cuda'
     )
 
-    eval_callback = EvalCallback(
-        env,
-        best_model_save_path=model_dir,
-        log_path=log_dir,
-        eval_freq=10000,
-        n_eval_episodes=5,
-        deterministic=True,
-        render=False
-    )
-
-    model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-
-    progress_callback = ShowProgressCallback(compl_logger, timesteps)
-
-    logging.info(f"Training {model_name} model...")
-    model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
+    train_model(model_name, model, ports)
 
 def train_trpo():
     model_name = 'TRPO'
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
-    try:
-        create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
     
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(model_dir, exist_ok=True)
-        
-        # Initialize TRPO model with vectorized environments
-        model = TRPO(
-            "MlpPolicy",
-            env,
-            learning_rate=1e-3,
-            n_steps=2048,
-            gamma=0.99,
-            verbose=1,
-            tensorboard_log=log_dir,
-            device='cuda'
-        )
-        
-        # Set up evaluation callback
-        eval_callback = EvalCallback(
-            env,
-            best_model_save_path=model_dir,
-            log_path=log_dir,
-            eval_freq=10000,
-            n_eval_episodes=5,
-            deterministic=True,
-            render=False
-        )
-        
-        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-        progress_callback = ShowProgressCallback(compl_logger, timesteps)
+    # Initialize TRPO model with vectorized environments
+    model = TRPO(
+        "MlpPolicy",
+        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
+        learning_rate=1e-3,
+        n_steps=2048,
+        gamma=0.99,
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
 
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
-    except ValueError:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+    train_model(model_name, model, ports)
 
 def train_td3():
     model_name = 'TD3'
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
-    try:
-        create_sumocfg(model_name, num_envs_per_model)
-        ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
-
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(model_dir, exist_ok=True)
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
         
-        # Initialize TD3 model with the single environment
-        model = TD3(
-            "MlpPolicy",
-            env,
-            learning_rate=1e-3,
-            buffer_size=1000000,
-            learning_starts=10000,
-            batch_size=100,
-            tau=0.005,
-            gamma=0.99,
-            train_freq=(1, "step"),  # Use "step" to ensure correct training frequency
-            gradient_steps=-1,
-            verbose=1,
-            tensorboard_log=log_dir,
-            device='cuda'
-        )
+    # Initialize TD3 model with the single environment
+    model = TD3(
+        "MlpPolicy",
+        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
+        learning_rate=1e-3,
+        buffer_size=1000000,
+        learning_starts=10000,
+        batch_size=100,
+        tau=0.005,
+        gamma=0.99,
+        train_freq=(1, "step"),  # Use "step" to ensure correct training frequency
+        gradient_steps=-1,
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
         
-        # Set up evaluation callback
-        eval_callback = EvalCallback(
-            env,
-            best_model_save_path=model_dir,
-            log_path=log_dir,
-            eval_freq=10000,
-            n_eval_episodes=5,
-            deterministic=True,
-            render=False
-        )
-
-        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-        progress_callback = ShowProgressCallback(compl_logger, timesteps)
-
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
-    except ValueError:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+    train_model(model_name, model, ports)
 
 def train_sac():
     model_name = 'SAC'
     log_dir = f"./logs/{model_name}/"
-    model_dir = f"./rl_models/{model_name}/"
-    compl_logger = setup_logger(f'{model_name}', f'{log_dir}/{model_name}_training.log')
-    timesteps = (len(car_generation_rates_per_lane) / 2) * 60
-    try:
-        create_sumocfg(model_name, num_envs_per_model)
-        """ A singe instance is allowed for SAC because of this error: 
-            assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."""
-        port = base_sumo_port + num_envs_per_model
-        env = DummyVecEnv([get_traffic_env(port, model_name, 0, True)])  # Use DummyVecEnv for single env
+    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
 
-        os.makedirs(log_dir, exist_ok=True)
-        os.makedirs(model_dir, exist_ok=True)
+    model = SAC(
+        "MlpPolicy",
+        DummyVecEnv([get_traffic_env(port, model_name, 0, True)]),
+        learning_rate=3e-4,
+        buffer_size=1000000,
+        learning_starts=10000,
+        batch_size=256, # Increase for more stable updates
+        tau=0.005,
+        gamma=0.99,
+        train_freq=(1, "episode"),
+        gradient_steps=10, # increase for more thorough learning per update
+        ent_coef='auto', # automatic entropy tuning
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
 
-        model = SAC(
-            "MlpPolicy",
-            env,
-            learning_rate=3e-4,
-            buffer_size=1000000,
-            learning_starts=10000,
-            batch_size=256, # Increase for more stable updates
-            tau=0.005,
-            gamma=0.99,
-            train_freq=(1, "episode"),
-            gradient_steps=10, # increase for more thorough learning per update
-            ent_coef='auto', # automatic entropy tuning
-            verbose=1,
-            tensorboard_log=log_dir,
-            device='cuda'
-        )
-
-        eval_callback = EvalCallback(
-            env,
-            best_model_save_path=model_dir,
-            log_path=log_dir,
-            eval_freq=10000,
-            n_eval_episodes=5,
-            deterministic=True,
-            render=False
-        )
-
-        model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-        progress_callback = ShowProgressCallback(compl_logger, timesteps)
-
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_callback, progress_callback])
-    except ValueError:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+    train_model(model_name, model, ports)
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    episodes = 10
+    episodes = 1
     
-    for i in range(episodes):
-        train_dqn()
-        global_day_index = (global_day_index + num_envs_per_model) % 7
+    # for i in range(episodes):
+    #     train_dqn()
+    #     global_day_index = (global_day_index + num_envs_per_model) % 7
         
     # train_ppo()
     # train_a2c()
-    # train_dqn()
+    train_dqn()
     # train_sac()
     # train_td3()
     # train_trpo()
