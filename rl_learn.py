@@ -161,8 +161,8 @@ def train_dqn():
     try:
         create_sumocfg(model_name, num_envs_per_model)
         ports = [(base_sumo_port + num_envs_per_model) + i for i in range(num_envs_per_model)]
-        env_mon = SubprocVecEnv( get_traffic_env_with_monitor(port, model_name, idx) for idx, port in enumerate(ports)])
-        env_eval = SubprocVecEnv( get_traffic_env(port, model_name, idx) for idx, port in enumerate(ports[:7])])
+        env_mon = SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)])
+        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
 
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
