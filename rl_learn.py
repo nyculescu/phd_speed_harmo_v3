@@ -136,18 +136,17 @@ def train_ppo():
     log_dir = f"./logs/{model_name}/"
     ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
 
-    # Initialize PPO model with vectorized environments
     model = PPO(
         "MlpPolicy",
         SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
-        learning_rate=2e-4, # old: 3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=15,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2, # reduced from 0.2 to prevent large policy updates
-        ent_coef=0.02, # start with 0.01 to encourage more exploration -> help prevent the model from converging prematurely to suboptimal policies
+        learning_rate=1e-3,  # Similar to DQN for comparative analysis
+        n_steps=2048,        # Number of steps to run for each environment per update
+        batch_size=64,       # Batch size for each update
+        n_epochs=10,         # Number of epochs when optimizing the surrogate loss
+        gamma=0.99,          # Discount factor
+        gae_lambda=0.95,     # Factor for trade-off of bias vs variance for Generalized Advantage Estimator
+        clip_range=0.2,      # Clipping parameter for PPO
+        ent_coef=0.01,       # Entropy coefficient for exploration
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda'
@@ -190,20 +189,18 @@ def train_a2c():
     log_dir = f"./logs/{model_name}/"
     ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
 
-    model = A2C(
-        "MlpPolicy",
-        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
-        learning_rate=5e-4, # trained before with 7e-4
-        n_steps=10, # increased from 5 to capture more information per update
-        gamma=0.99,
-        gae_lambda=0.95,
-        ent_coef=0.01,
-        vf_coef=0.5,
+    model = A2C("MlpPolicy", 
+        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]), 
+        learning_rate=1e-3, 
+        n_steps=5,  # Adjust based on your environment's needs
+        gamma=0.99,  # Discount factor
+        gae_lambda=0.95,  # GAE parameter
+        ent_coef=0.01,  # Entropy coefficient
+        vf_coef=0.5,  # Value function coefficient
         max_grad_norm=0.5,
         verbose=1,
         tensorboard_log=log_dir,
-        device='cuda'
-    )
+        device='cuda')
 
     train_model(model_name, model, ports)
 
@@ -211,18 +208,13 @@ def train_trpo():
     model_name = 'TRPO'
     log_dir = f"./logs/{model_name}/"
     ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
-    
-    # Initialize TRPO model with vectorized environments
-    model = TRPO(
-        "MlpPolicy",
-        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
-        learning_rate=1e-3,
-        n_steps=2048,
-        gamma=0.99,
-        verbose=1,
-        tensorboard_log=log_dir,
-        device='cuda'
-    )
+
+    model = TRPO("MlpPolicy", 
+                 SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]), 
+                 learning_rate=1e-3, 
+                 verbose=1, 
+                 tensorboard_log=log_dir, 
+                 device='cuda')
 
     train_model(model_name, model, ports)
 
@@ -231,61 +223,42 @@ def train_td3():
     log_dir = f"./logs/{model_name}/"
     ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
         
-    # Initialize TD3 model with the single environment
-    model = TD3(
-        "MlpPolicy",
-        SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]),
-        learning_rate=1e-3,
-        buffer_size=1000000,
-        learning_starts=10000,
-        batch_size=100,
-        tau=0.005,
-        gamma=0.99,
-        train_freq=(1, "step"),  # Use "step" to ensure correct training frequency
-        gradient_steps=-1,
-        verbose=1,
-        tensorboard_log=log_dir,
-        device='cuda'
-    )
+    model = TD3("MlpPolicy", 
+                SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]), 
+                learning_rate=1e-3, 
+                buffer_size=50000, 
+                verbose=1, 
+                tensorboard_log=log_dir,
+                device='cuda', 
+                batch_size=100, 
+                policy_delay=2, 
+                train_freq=(1, "episode"), 
+                gradient_steps=-1)
         
     train_model(model_name, model, ports)
 
 def train_sac():
     model_name = 'SAC'
     log_dir = f"./logs/{model_name}/"
-    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
+    ports = [base_sumo_port]
 
-    model = SAC(
-        "MlpPolicy",
-        DummyVecEnv([get_traffic_env(port, model_name, 0, True)]),
-        learning_rate=3e-4,
-        buffer_size=1000000,
-        learning_starts=10000,
-        batch_size=256, # Increase for more stable updates
-        tau=0.005,
-        gamma=0.99,
-        train_freq=(1, "episode"),
-        gradient_steps=10, # increase for more thorough learning per update
-        ent_coef='auto', # automatic entropy tuning
+    model = SAC("MlpPolicy", 
+        DummyVecEnv([get_traffic_env(ports[0], model_name, 0, True)]), 
+        learning_rate=1e-3,  # Same as DQN
+        buffer_size=50000,  # Same as DQN
         verbose=1,
         tensorboard_log=log_dir,
-        device='cuda'
-    )
+        device='cuda')
 
     train_model(model_name, model, ports)
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    episodes = 1
-    
-    # for i in range(episodes):
-    #     train_dqn()
-    #     global_day_index = (global_day_index + num_envs_per_model) % 7
         
     # train_ppo()
-    # train_a2c()
-    train_dqn()
+    train_a2c()
+    # train_dqn()
     # train_sac()
     # train_td3()
     # train_trpo()
