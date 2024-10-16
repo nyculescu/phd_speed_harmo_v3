@@ -62,7 +62,6 @@ def train_model(model_name, model, ports):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
     episode_length = car_generation_rates * 60
-    # episodes = 5
     timesteps = episode_length * num_envs_per_model
 
     try:
@@ -223,13 +222,14 @@ def train_sac():
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-        
-    # train_ppo()
-    train_a2c()
-    train_dqn()
-    # train_sac()
-    # train_td3()
-    # train_trpo()
+    episodes = 5
+    for i in range(episodes):
+        train_ppo()
+        train_a2c()
+        train_dqn()
+        train_td3()
+        train_trpo()
+        # train_sac()
 
 '''
 Run rl_learn.py through tunnel:
