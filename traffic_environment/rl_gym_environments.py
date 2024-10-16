@@ -42,7 +42,7 @@ class TrafficEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float64", shape=(1,))
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
-        self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time  # 60 x 1440 = 86400 steps
+        self.sim_length = (car_generation_rates * 60 * 60) / self.aggregation_time
         self.mean_speeds_mps = []
         self.mean_emissions = []
         self.mean_num_halts = []
@@ -55,7 +55,6 @@ class TrafficEnv(gym.Env):
         self.flows = []
         self.sumo_process = None
         self.sumo_max_retries = 5
-        self.day_index = 0
         self.flow_gen_max = np.random.triangular(0.45, np.random.uniform(0.9, 1.1), 1.55)
         self.reward = 0
         self.total_emissions_now = 0
@@ -77,7 +76,7 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.9, 1.3) # add some deviation
-                flow_generation(self.flow_gen_max, self.day_index, self.model, self.model_idx)
+                flow_generation(self.flow_gen_max, self.model, self.model_idx)
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
@@ -176,7 +175,7 @@ class TrafficEnv(gym.Env):
         
         self.rewards.append(self.reward)
 
-        flow = (veh_time_sum / self.aggregation_time) * len(car_generation_rates_per_lane) / 2 * 60 * 60
+        flow = (veh_time_sum / self.aggregation_time) * (car_generation_rates * 60 * 60)
         self.flows.append(flow)
 
         self.occupancy = self.occupancy_sum / self.aggregation_time
@@ -184,9 +183,8 @@ class TrafficEnv(gym.Env):
         self.sim_length -= 1  # Reduce simulation length by 1 second
         done = self.sim_length <= 0
         if done:
-            # self.log_info()
+            self.close_sumo("simulation done")
             self.rewards = []
-            self.close_sumo("simulation done")              
 
         self.obs = np.array([avg_speed_now])
 
@@ -205,7 +203,6 @@ class TrafficEnv(gym.Env):
         logging.info(f"Mean flow: {np.mean(self.flows)}")
 
     def reset(self, seed=None):
-        self.day_index = 0
         self.flow_gen_max = 0
         self.isUnstableFlowConditions = False
         self.mean_speeds_mps = []
@@ -231,7 +228,7 @@ class TrafficEnv(gym.Env):
         self.speed_limit = 130
         
         # Reset time
-        self.sim_length = len(car_generation_rates_per_lane) / 2 * 60 * 60 / self.aggregation_time
+        self.sim_length = (car_generation_rates * 60 * 60) / self.aggregation_time
 
         obs = np.array([0], dtype=np.float64)
         

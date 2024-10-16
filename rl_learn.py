@@ -43,43 +43,38 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-# global_day_index = 0
 base_sumo_port = 8800
-num_envs_per_model = 14
+num_envs_per_model = 18 # it will replace the episodes, because through this, the episodes could be parallelized
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 
 def get_traffic_env(port, model, model_idx, mon):
     def _init():
+        env = TrafficEnv(port=port, model=model, model_idx=model_idx)
         if mon:
-            env = TrafficEnv(port=port, model=model, model_idx=model_idx)
-            # env.day_index = (global_day_index + model_idx) % 7
-            env.day_index = model_idx % 7
             return Monitor(env)
         else:
-            env = TrafficEnv(port=port + num_envs_per_model, model=model, model_idx=model_idx)
             return env
     return _init
 
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
-def train_model(model_name, model, ports):
+def train_model(model_name, model):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    episode_lenght = (len(car_generation_rates_per_lane) / 2) * 60
+    episode_length = car_generation_rates * 60
     episodes = 5
-    timesteps = episode_lenght * num_envs_per_model * episodes
+    timesteps = episode_length * num_envs_per_model * episodes
 
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
-
+        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate([base_sumo_port*num_envs_per_model+1])])
+        
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
 
-        # Save a checkpoint every 1000 steps
         checkpoint_cb = CheckpointCallback(
-            save_freq=episode_lenght * num_envs_per_model,
-            save_path=10000,
+            save_freq=episode_length * num_envs_per_model,
+            save_path=model_dir,
             name_prefix=f"rl_model_{model_name}",
             save_replay_buffer=True,
             save_vecnormalize=True,
@@ -89,18 +84,20 @@ def train_model(model_name, model, ports):
             env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=10000, # episode_lenght * num_envs_per_model = 20160
+            eval_freq=episode_length // episodes, # num_envs_per_model * (eval_freq * 7) = num_timesteps: a day could be enough for testing
             n_eval_episodes=1,
             deterministic=True,
-            render=False
+            render=False,
+            callback_after_eval = checkpoint_cb
         )
         
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
         logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[checkpoint_cb, eval_cb], progress_bar=True)
-    except ValueError:
+        model.learn(total_timesteps=timesteps, callback=[eval_cb], progress_bar=True)
+    except ValueError as e:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
+        print(f"Error: {e}")
 
 def train_ppo():
     model_name = 'PPO'
@@ -123,7 +120,7 @@ def train_ppo():
         device='cuda'
     )
         
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 def train_dqn():
     model_name = 'DQN'
@@ -153,7 +150,7 @@ def train_dqn():
     Notes:
     1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
     """
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 def train_a2c():
     model_name = 'A2C'
@@ -173,7 +170,7 @@ def train_a2c():
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 def train_trpo():
     model_name = 'TRPO'
@@ -187,7 +184,7 @@ def train_trpo():
                  tensorboard_log=log_dir, 
                  device='cuda')
 
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 def train_td3():
     model_name = 'TD3'
@@ -206,7 +203,7 @@ def train_td3():
                 train_freq=(1, "episode"), 
                 gradient_steps=-1)
         
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 def train_sac():
     model_name = 'SAC'
@@ -221,7 +218,7 @@ def train_sac():
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model, ports)
+    train_model(model_name, model)
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
@@ -229,7 +226,7 @@ if __name__ == '__main__':
         
     # train_ppo()
     train_a2c()
-    # train_dqn()
+    train_dqn()
     # train_sac()
     # train_td3()
     # train_trpo()

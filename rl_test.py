@@ -344,12 +344,12 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     models_no = 6
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="TRPO", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="TD3", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="SAC", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="DQN", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="A2C", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="PPO", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="TRPO", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="TD3", idx=0)
+    flow_generation(np.random.triangular(0.5, 1, 1.5), model="SAC", idx=0)
     sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
