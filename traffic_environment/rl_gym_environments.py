@@ -99,16 +99,21 @@ class TrafficEnv(gym.Env):
     def close_sumo(self, reason):
         print(f"Closing SUMO: {reason}")
         if hasattr(self, 'sumo_process') and self.sumo_process is not None:
-            try:
-                traci.close()
-                sleep(2)
-                logging.debug(f"The reason SUMO is closed: {reason}")
-            except (FatalTraCIError, TraCIException):
-                logging.debug(f"SUMO is not closing...: {reason}")
-            finally:
-                self.sumo_process.terminate()
-                self.sumo_process.wait()
-                self.sumo_process = None
+            for attempt in range(self.sumo_max_retries):
+                try:
+                    traci.close()
+                    sleep(2)
+                    logging.debug(f"The reason SUMO is closed: {reason}")
+                    break
+                except (FatalTraCIError, TraCIException):
+                    logging.debug(f"SUMO is not closing. {reason}")
+                    if attempt <= self.sumo_max_retries:
+                        sleep(2)  # Wait before retrying
+                    else:
+                        logging.debug("Failed stopping traci. sumo_process will be emptied")
+                        self.sumo_process.terminate()
+                        self.sumo_process.wait()
+                        self.sumo_process = None
 
     def step(self, action):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
@@ -235,8 +240,7 @@ class TrafficEnv(gym.Env):
         return obs, {}
     
     def close(self):
-        if hasattr(self, 'sumo_process') and self.sumo_process is not None:
-            self.close_sumo("close() method called")
+        self.close_sumo("close() method called")
 
     def __del__(self):
         try:

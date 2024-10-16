@@ -44,7 +44,7 @@ Note about policies:
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
 base_sumo_port = 8800
-num_envs_per_model = 18 # it will replace the episodes, because through this, the episodes could be parallelized
+num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 
 def get_traffic_env(port, model, model_idx, mon):
@@ -58,16 +58,16 @@ def get_traffic_env(port, model, model_idx, mon):
 
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
-def train_model(model_name, model):
+def train_model(model_name, model, ports):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
     episode_length = car_generation_rates * 60
-    episodes = 5
-    timesteps = episode_length * num_envs_per_model * episodes
+    # episodes = 5
+    timesteps = episode_length * num_envs_per_model
 
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate([base_sumo_port*num_envs_per_model+1])])
+        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -84,7 +84,7 @@ def train_model(model_name, model):
             env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=episode_length // episodes, # num_envs_per_model * (eval_freq * 7) = num_timesteps: a day could be enough for testing
+            eval_freq=episode_length, # num_envs_per_model * (eval_freq * 7) = num_timesteps: a day could be enough for testing
             n_eval_episodes=1,
             deterministic=True,
             render=False,
@@ -120,7 +120,7 @@ def train_ppo():
         device='cuda'
     )
         
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 def train_dqn():
     model_name = 'DQN'
@@ -150,7 +150,7 @@ def train_dqn():
     Notes:
     1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
     """
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 def train_a2c():
     model_name = 'A2C'
@@ -170,7 +170,7 @@ def train_a2c():
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 def train_trpo():
     model_name = 'TRPO'
@@ -184,7 +184,7 @@ def train_trpo():
                  tensorboard_log=log_dir, 
                  device='cuda')
 
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 def train_td3():
     model_name = 'TD3'
@@ -203,7 +203,7 @@ def train_td3():
                 train_freq=(1, "episode"), 
                 gradient_steps=-1)
         
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 def train_sac():
     model_name = 'SAC'
@@ -218,7 +218,7 @@ def train_sac():
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model)
+    train_model(model_name, model, ports)
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
