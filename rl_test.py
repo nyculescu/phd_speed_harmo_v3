@@ -12,6 +12,9 @@ from time import sleep
 from traffic_environment.flow_gen import flow_generation_wrapper
 from traci import close as traci_close
 from traci.exceptions import FatalTraCIError, TraCIException
+from stable_baselines3.common.evaluation import evaluate_policy
+from stable_baselines3.common.logger import configure
+from stable_baselines3.common.callbacks import BaseCallback
 
 from traffic_environment.rl_gym_environments import TrafficEnv
 
@@ -23,6 +26,28 @@ logging.basicConfig(
         logging.StreamHandler()  # Output logs to stderr (default)
     ]
 )
+
+# Define a custom TensorBoard callback that accepts an environment and model
+class TensorboardCallback(BaseCallback):
+    def __init__(self, env, model, verbose=0):
+        super(TensorboardCallback, self).__init__(verbose)
+        self.env = env  # Store the environment
+        self.model = model  # Store the model
+
+    def _on_step(self) -> bool:
+        # Access metrics from the environment
+        reward = self.locals['rewards']  # Access rewards from the environment
+        emissions = self.env.emissions_over_time[-1]  # Log latest emissions data
+        mean_speed = self.env.mean_speed_over_time[-1]  # Log latest mean speed data
+        flow = self.env.flows[-1]  # Log latest flow data
+        
+        # Record these values in TensorBoard using SB3's built-in logger
+        self.logger.record('test/reward', reward)
+        self.logger.record('test/emissions', emissions)
+        self.logger.record('test/mean_speed', mean_speed)
+        self.logger.record('test/flow', flow)
+        
+        return True  # Continue running the environment
 
 # Suppress matplotlib debug output
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -57,6 +82,7 @@ metrics_to_plot = ['rewards'
                    , 'flow'
                    ]
 
+""" Metric Storage and Analysis """
 def save_metrics(metrics, agent_name):
     # Open the file using a context manager
     with open(f'./logs/{agent_name}_metrics.csv', 'w+') as metrics_file:
@@ -69,145 +95,222 @@ def save_metrics(metrics, agent_name):
 
 def test_ppo():
     model_name = "PPO"
+    model = PPO.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
     # check_env(env)
-    ppo_model = PPO.load(model_paths[model_name])
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
 
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
-    while not done:
-        action, _ = ppo_model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
-        rewards.append(reward)
-    # obss = np.array(obss)
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
 
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
     return (model_name, result)
 
 def test_a2c():
     model_name = "A2C"
+    model = A2C.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
     # check_env(env)
-    a2c_model = A2C.load(model_paths[model_name])
     
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
     while not done:
-        action, _ = a2c_model.predict(obs, deterministic=True)
+        action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
         rewards.append(reward)
     
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-    
+
     return (model_name, result)
 
-# Note: redundant code on purpose, else it won't run on multi-process
 def test_dqn():
     model_name = "DQN"
+    model = DQN.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
     # check_env(env)
-    dqn_model = DQN.load(model_paths[model_name])
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
 
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
     while not done:
-        action, _ = dqn_model.predict(obs, deterministic=True)
+        action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
         rewards.append(reward)
     
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
     return (model_name, result)
 
 def test_td3():
     model_name = "TD3"
+    model = TD3.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
-    # check_env(dqn_env)
-    model = TD3.load(model_paths[model_name])
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
 
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
         rewards.append(reward)
     
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
     return (model_name, result)
 
 def test_trpo():
     model_name = "TRPO"
+    model = TRPO.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
-    # check_env(dqn_env)
-    model = TRPO.load(model_paths[model_name])
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
 
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
         rewards.append(reward)
     
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
     return (model_name, result)
 
 def test_sac():
     model_name = "SAC"
+    model = SAC.load(model_paths[model_name])
+    # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
-    # check_env(dqn_env)
-    model = SAC.load(model_paths[model_name])
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
 
     obs, _ = env.reset()
     done = False
 
     rewards = []
-    obss = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        obss.append(obs)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
         rewards.append(reward)
     
-    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
     return (model_name, result)
@@ -229,7 +332,10 @@ def plot_metrics(selected_models=None):
     # Calculate variance and standard deviation
     variance_std_dev = {agent: {key: (np.var(values), np.std(values)) for key, values in metrics.items()} for agent, metrics in results.items()}
 
-    # Perform ANOVA
+    """ Perform ANOVA 
+    The script performs statistical analysis on the results using ANOVA (Analysis of Variance) to compare the performance of different agents across various metrics.
+    This helps determine if there are statistically significant differences between the models' performances.
+    """
     anova_results = {}
     for metric in results['PPO'].keys():
         data_for_anova = [results[agent][metric] for agent in selected_models]
@@ -245,25 +351,29 @@ def plot_metrics(selected_models=None):
             f_statistic, p_value = anova_results[metric]
             f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
 
-    def find_convergence_iterations(results):
-        convergence = {}
-        for agent, metrics in results.items():
-            convergence[agent] = {}
-            for key, values in metrics.items():
-                if len(values) > 0:
-                    convergence[agent][key] = np.argmax(values) + 1
-                else:
-                    convergence[agent][key] = None  # Or some other default value indicating no data
-        return convergence
+    """ Convergence Detection
+        The script includes logic to detect when each agent's performance converged during training/testing.
+        This helps identify how quickly each agent reached its optimal performance.
+        """
+    # def find_convergence_iterations(results):
+    #     convergence = {}
+    #     for agent, metrics in results.items():
+    #         convergence[agent] = {}
+    #         for key, values in metrics.items():
+    #             if len(values) > 0:
+    #                 convergence[agent][key] = np.argmax(values) + 1
+    #             else:
+    #                 convergence[agent][key] = None  # Or some other default value indicating no data
+    #     return convergence
 
-    convergence_iterations = find_convergence_iterations(results)
+    # convergence_iterations = find_convergence_iterations(results)
     
-    # Log convergence iterations
-    with open('logs/convergence_iterations.log', 'w') as f:
-        for agent in convergence_iterations:
-            f.write(f"Convergence iterations for {agent}:\n")
-            for metric, iteration in convergence_iterations[agent].items():
-                f.write(f"  {metric}: {iteration}\n")
+    # # Log convergence iterations
+    # with open('logs/convergence_iterations.log', 'w') as f:
+    #     for agent in convergence_iterations:
+    #         f.write(f"Convergence iterations for {agent}:\n")
+    #         for metric, iteration in convergence_iterations[agent].items():
+    #             f.write(f"  {metric}: {iteration}\n")
 
     # Calculate mean values and performance percentages
     mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
@@ -327,7 +437,7 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     models_no = 6
-    flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0)
+    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0)
     # sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
@@ -343,8 +453,9 @@ if __name__ == '__main__':
         pool.apply_async(test_ppo, callback=process_callback),
         pool.apply_async(test_a2c, callback=process_callback),
         pool.apply_async(test_trpo, callback=process_callback),
-        # pool.apply_async(test_td3, callback=process_callback),
         pool.apply_async(test_sac, callback=process_callback)
+        
+        # pool.apply_async(test_td3, callback=process_callback)
     ]
 
     # Close the pool and wait for all processes to finish
@@ -359,25 +470,6 @@ if __name__ == '__main__':
             async_result.get(timeout=10)
         except Exception as e:
             logging.error(f"An error occurred in one of the processes: {e}")
-
-    # # FIXME: this one is called only for debugging purposes
-    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
-    # agent_name, agent_result = test_dqn()
-    # logging.debug(f"Processing result for {agent_name}")
-    # results[agent_name] = agent_result
-    # save_metrics(agent_result, agent_name)
-
-    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
-    # agent_name, agent_result = test_a2c()
-    # logging.debug(f"Processing result for {agent_name}")
-    # results[agent_name] = agent_result
-    # save_metrics(agent_result, agent_name)
-
-    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
-    # agent_name, agent_result = test_ppo()
-    # logging.debug(f"Processing result for {agent_name}")
-    # results[agent_name] = agent_result
-    # save_metrics(agent_result, agent_name)
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
