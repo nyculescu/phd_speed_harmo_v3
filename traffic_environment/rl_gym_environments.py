@@ -60,6 +60,7 @@ class TrafficEnv(gym.Env):
         self.total_emissions_now = 0
         self.avg_speed_now = 0
         self.rewards = []
+        self.is_learning = True
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -76,7 +77,8 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.9, 1.3) # add some deviation
-                flow_generation(self.flow_gen_max, self.model, self.model_idx)
+                if self.is_learning:
+                    flow_generation_wrapper(self.flow_gen_max, self.model, self.model_idx)
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
@@ -168,10 +170,10 @@ class TrafficEnv(gym.Env):
 
         # Calculate average speed and emissions over the aggregation period
         avg_speed_now = np.mean(mean_speeds_edges_mps) / self.aggregation_time
-        self.total_emissions_now = np.sum(emissions_edges)
+        self.total_emissions_now = np.mean(emissions_edges) / self.aggregation_time
 
         # Update previous state variables
-        self.prev_emissions = emissions_edges
+        self.prev_emissions = self.total_emissions_now
         self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
 
         # Calculate reward using the adapted reward function
@@ -203,7 +205,7 @@ class TrafficEnv(gym.Env):
         logging.info(f"\n-----------------------------------\n\
                      SUMO PID: {self.sumo_process.pid}")
         logging.info(f"Reward for this episode: {self.reward}")
-        logging.info(f"Max CO2 emis: {max(self.prev_emissions)} mg/s")
+        logging.info(f"Max CO2 emis: {max(self.total_emissions_now)} mg/s")
         logging.info(f"Max speed prev: {max(self.prev_mean_speed)} m/s")
         logging.info(f"Mean flow: {np.mean(self.flows)}")
 
@@ -248,53 +250,3 @@ class TrafficEnv(gym.Env):
         except AttributeError:
             # Handle cases where attributes might not be initialized
             print("Warning: Attempted to delete an uninitialized TrafficEnv instance.")
-
-    # def get_current_occupancy(self):
-    #     return self.occupancy_curr
-
-    # def track_vehicle_times(self, all_segments, departure_times, arrival_times, traci):
-    #     # Create a list of the keys to iterate over
-    #     departure_times_keys = list(departure_times.keys())
-    #     arrival_times_keys = list(arrival_times.keys())
-    #     for idx, seg in enumerate(all_segments):
-    #         for lane in seg:
-    #             ids = traci.lane.getLastStepVehicleIDs(lane)
-                
-    #             # Iterate over a copy of the keys
-    #             for id in departure_times_keys:
-    #                 if id not in ids:
-    #                     if id in arrival_times_keys:
-    #                         # Check if both keys exist before accessing them
-    #                         dep_time = departure_times.get(id)
-    #                         arr_time = arrival_times.get(id)
-    #                         if dep_time is not None and arr_time is not None:
-    #                             travel_time = max(0, arr_time - dep_time)
-    #                             self.total_travel_time += travel_time / 60
-    #                             # Remove entries from the original dictionaries
-    #                             del departure_times[id]
-    #                             del arrival_times[id]
-    #                             # logging.debug(f"Removed {id} from departure_times and arrival_times")
-
-    #             for id in ids:
-    #                 current_time = traci.simulation.getTime()
-    #                 if id in departure_times:
-    #                     arrival_times[id] = current_time
-    #                 else:
-    #                     departure_times[id] = current_time
-    #                     # logging.debug(f"Added {id} to departure_times with time {current_time}")
-    #                 # self.total_waiting_time += traci.vehicle.getAccumulatedWaitingTime(id) # Calculate total waiting time for all vehicles still in simulation
-    #                 traci.vehicle.isStopped(id)   # FIXME: a logic based on this will be used instead getAccumulatedWaitingTime() 
-
-
-# class PauseLearningOnCondition(BaseCallback): # FIXME: delete this one, no pause on training in stable_baselines3
-#     occupancy_threshold=0.3
-#     def __init__(self, occupancy_threshold, verbose=0):
-#         super(PauseLearningOnCondition, self).__init__(verbose)
-#         self.occupancy_threshold = occupancy_threshold
-#         self.last_occupancy = 0
-#     def _on_step(self) -> bool:
-#         current_occupancy = self.training_env.get_attr('get_current_occupancy')[0]()
-#         if self.occupancy_threshold is not None and current_occupancy < self.occupancy_threshold:
-#             if current_occupancy > 0:
-#                 print(f"Should stop training: Occupancy {current_occupancy} below threshold")
-#         return True
