@@ -49,6 +49,34 @@ class TensorboardCallback(BaseCallback):
         
         return True  # Continue running the environment
 
+def reward_filter_flat_lines(rewards, threshold=1e-2, flat_line_threshold=10):
+    # Compute differences between consecutive rewards
+    diffs = np.abs(np.diff(rewards))
+    
+    # Identify where differences are below the threshold
+    near_zero_diffs = diffs < threshold
+    
+    # Create a mask to keep only relevant points
+    mask = np.ones(len(rewards), dtype=bool)
+    
+    # Loop through and find "flat lines" (consecutive near-zero differences)
+    count_flat = 0
+    for i in range(1, len(near_zero_diffs)):
+        if near_zero_diffs[i-1]:
+            count_flat += 1
+        else:
+            count_flat = 0
+        
+        # If we have a flat line longer than the threshold, start filtering out points
+        if count_flat >= flat_line_threshold:
+            mask[i+1] = False
+    
+    # Apply the mask to filter out the irrelevant points
+    filtered_rewards = np.array(rewards)[mask]
+    filtered_indices = np.arange(len(rewards))[mask]
+    
+    return filtered_indices, filtered_rewards
+
 # Suppress matplotlib debug output
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
@@ -92,6 +120,7 @@ def save_metrics(metrics, agent_name):
             metrics_file.write(','.join(map(str, metrics[key])) + '\n')
     
     # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
+
 
 def test_ppo():
     model_name = "PPO"
@@ -351,30 +380,6 @@ def plot_metrics(selected_models=None):
             f_statistic, p_value = anova_results[metric]
             f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
 
-    """ Convergence Detection
-        The script includes logic to detect when each agent's performance converged during training/testing.
-        This helps identify how quickly each agent reached its optimal performance.
-        """
-    # def find_convergence_iterations(results):
-    #     convergence = {}
-    #     for agent, metrics in results.items():
-    #         convergence[agent] = {}
-    #         for key, values in metrics.items():
-    #             if len(values) > 0:
-    #                 convergence[agent][key] = np.argmax(values) + 1
-    #             else:
-    #                 convergence[agent][key] = None  # Or some other default value indicating no data
-    #     return convergence
-
-    # convergence_iterations = find_convergence_iterations(results)
-    
-    # # Log convergence iterations
-    # with open('logs/convergence_iterations.log', 'w') as f:
-    #     for agent in convergence_iterations:
-    #         f.write(f"Convergence iterations for {agent}:\n")
-    #         for metric, iteration in convergence_iterations[agent].items():
-    #             f.write(f"  {metric}: {iteration}\n")
-
     # Calculate mean values and performance percentages
     mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
     performance_percentage = {}
@@ -397,6 +402,8 @@ def plot_metrics(selected_models=None):
         # Line plot for each metric
         plt.subplot(5, 2, i * 2 + 1)
         for agent_name in selected_models:
+            _, results[agent_name]["rewards"] = reward_filter_flat_lines(results[agent_name]["rewards"])
+
             plt.plot(results[agent_name][metric],
                      label=f"{agent_name} ({performance_percentage[metric][agent_name]:.2f}%)",
                      color=colors.get(agent_name, 'black'))  # Default color if not found
@@ -405,7 +412,7 @@ def plot_metrics(selected_models=None):
         plt.title(f"{metric.replace('_', ' ').capitalize()} Comparison")
         plt.legend()
 
-        # Bar plot for variance and std dev
+        # Bar plot for variance and standard deviation
         plt.subplot(5, 2, i * 2 + 2)
         std_devs = [variance_std_dev[agent][metric][1] for agent in selected_models]
         variances = [variance_std_dev[agent][metric][0] for agent in selected_models]
@@ -413,12 +420,12 @@ def plot_metrics(selected_models=None):
         bar_width = 0.35
         index = np.arange(len(selected_models))
 
-        bars1 = plt.bar(index, std_devs, bar_width, label='Std Dev', color='deepskyblue')
+        bars1 = plt.bar(index, std_devs, bar_width, label='Standard Deviation', color='deepskyblue')
         bars2 = plt.bar(index + bar_width, variances, bar_width, label='Variance', color='tomato')
 
         plt.xlabel('Agent')
         plt.ylabel('Value')
-        plt.title(f'{metric.replace("_", " ").capitalize()} Variance and Std Dev')
+        plt.title(f'{metric.replace("_", " ").capitalize()} Variance and Standard Deviation')
         plt.xticks(index + bar_width / 2, selected_models)
 
         # Annotate bars with scaled values and adjusted position
@@ -454,7 +461,6 @@ if __name__ == '__main__':
         pool.apply_async(test_a2c, callback=process_callback),
         pool.apply_async(test_trpo, callback=process_callback),
         pool.apply_async(test_sac, callback=process_callback)
-        
         # pool.apply_async(test_td3, callback=process_callback)
     ]
 
@@ -473,7 +479,6 @@ if __name__ == '__main__':
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
-    # plot_metrics()
     plot_metrics()
 
     try:
