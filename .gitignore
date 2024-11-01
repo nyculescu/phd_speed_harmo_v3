@@ -9,4 +9,4 @@ traffic_environment/sumo/generated_flows_*.rou.xml
 traffic_environment/sumo/3_2_merge_*.sumocfg
 traffic_environment/sumo/loop_detector_metrics.xml
 multiprocessing_log.log
-eval/*_eval_mean_reward.png
+eval/*.png
