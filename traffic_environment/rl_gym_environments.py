@@ -61,6 +61,8 @@ class TrafficEnv(gym.Env):
         self.avg_speed_now = 0
         self.rewards = []
         self.is_learning = True
+        self.emissions_over_time = []
+        self.mean_speed_over_time = []
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -139,11 +141,6 @@ class TrafficEnv(gym.Env):
         emissions_edges = np.zeros(len(edges))
         veh_time_sum = 0
 
-        # Initialize previous state variables if not already set
-        if not hasattr(self, 'prev_emissions'):
-            self.prev_emissions = np.zeros(len(edges))
-            self.prev_mean_speed = np.zeros(len(edges))
-
         # Step simulation and collect data
         for i in range(self.aggregation_time):
             try:
@@ -170,11 +167,11 @@ class TrafficEnv(gym.Env):
 
         # Calculate average speed and emissions over the aggregation period
         avg_speed_now = np.mean(mean_speeds_edges_mps) / self.aggregation_time
-        self.total_emissions_now = np.mean(emissions_edges) / self.aggregation_time
+        self.total_emissions_now = np.sum(emissions_edges) / self.aggregation_time
 
         # Update previous state variables
-        self.prev_emissions = self.total_emissions_now
-        self.prev_mean_speed = mean_speeds_edges_mps / self.aggregation_time
+        self.emissions_over_time.append(self.total_emissions_now)
+        self.mean_speed_over_time.append(avg_speed_now * 3.6)  # m/s to km/h
 
         # Calculate reward using the adapted reward function
         # quad_occ_reward()
@@ -206,7 +203,7 @@ class TrafficEnv(gym.Env):
                      SUMO PID: {self.sumo_process.pid}")
         logging.info(f"Reward for this episode: {self.reward}")
         logging.info(f"Max CO2 emis: {max(self.total_emissions_now)} mg/s")
-        logging.info(f"Max speed prev: {max(self.prev_mean_speed)} m/s")
+        logging.info(f"Max speed prev: {max(self.mean_speed_over_time)} m/s")
         logging.info(f"Mean flow: {np.mean(self.flows)}")
 
     def reset(self, seed=None):
@@ -228,8 +225,8 @@ class TrafficEnv(gym.Env):
         self.rewards = []
         self.avg_speed_now = 0
         self.total_emissions_now = 0
-        self.prev_emissions = 0
-        self.prev_mean_speed = 0
+        self.emissions_over_time = []
+        self.mean_speed_over_time = []
 
         # Reset params
         self.speed_limit = 130

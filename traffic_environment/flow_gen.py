@@ -33,12 +33,12 @@ daily_pattern = [
 # Day of the week factor # TODO: add this one in flow generation
 day_of_the_week_factor = [
     np.random.triangular(0.95, 1, 1.05), # Monday
-    # np.random.triangular(0.90, 1, 1.10), # Tuesday
-    # np.random.triangular(0.90, 1, 1.10), # Wednesday
-    # np.random.triangular(0.90, 1, 1.10), # Thursday
-    # np.random.triangular(0.95, 1, 1.05), # Friday
-    # np.random.triangular(0.80, 1, 1.2),  # Saturday
-    # np.random.triangular(0.80, 1, 1.2)   # Sunday
+    np.random.triangular(0.90, 1, 1.10), # Tuesday
+    np.random.triangular(0.90, 1, 1.10), # Wednesday
+    np.random.triangular(0.90, 1, 1.10), # Thursday
+    np.random.triangular(0.95, 1, 1.05), # Friday
+    np.random.triangular(0.80, 1, 1.2),  # Saturday
+    np.random.triangular(0.80, 1, 1.2)   # Sunday
 ]
 
 car_generation_rates = len(daily_pattern) / 2 * len(day_of_the_week_factor)

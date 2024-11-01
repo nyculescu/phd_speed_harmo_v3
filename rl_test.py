@@ -9,7 +9,9 @@ import logging
 import os
 import multiprocessing
 from time import sleep
-from traffic_environment.flow_gen import flow_generation
+from traffic_environment.flow_gen import flow_generation_wrapper
+from traci import close as traci_close
+from traci.exceptions import FatalTraCIError, TraCIException
 
 from traffic_environment.rl_gym_environments import TrafficEnv
 
@@ -49,9 +51,9 @@ ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC'
 results = {}
 
 metrics_to_plot = ['rewards'
-                   , 'obs'
-                   , 'prev_emissions'
-                   , 'prev_mean_speed'
+                #    , 'obs'
+                   , 'emissions'
+                   , 'mean speed'
                    , 'flow'
                    ]
 
@@ -68,55 +70,48 @@ def save_metrics(metrics, agent_name):
 def test_ppo():
     model_name = "PPO"
     logging.debug(f"Starting {model_name} test")
-    ppo_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
-    # check_env(ppo_env)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
+    # check_env(env)
     ppo_model = PPO.load(model_paths[model_name])
 
-    obs, _ = ppo_env.reset()
+    obs, _ = env.reset()
     done = False
 
     rewards = []
     obss = []
     while not done:
         action, _ = ppo_model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = ppo_env.step(action)
+        obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
     # obss = np.array(obss)
 
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: ppo_env.prev_emissions
-              , metrics_to_plot[3]: ppo_env.prev_mean_speed
-              , metrics_to_plot[4]: ppo_env.flows
-              }
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
     return (model_name, result)
 
 def test_a2c():
     model_name = "A2C"
     logging.debug(f"Starting {model_name} test")
-    a2c_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
-    # check_env(a2c_env)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
+    # check_env(env)
     a2c_model = A2C.load(model_paths[model_name])
     
-    obs, _ = a2c_env.reset()
+    obs, _ = env.reset()
     done = False
 
     rewards = []
     obss = []
     while not done:
         action, _ = a2c_model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = a2c_env.step(action)
+        obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
-    # obss = np.array(obss)
     
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: a2c_env.prev_emissions
-              , metrics_to_plot[3]: a2c_env.prev_mean_speed
-              , metrics_to_plot[4]: a2c_env.flows
-              }
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
     
     return (model_name, result)
 
@@ -124,34 +119,32 @@ def test_a2c():
 def test_dqn():
     model_name = "DQN"
     logging.debug(f"Starting {model_name} test")
-    dqn_env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
-    # check_env(dqn_env)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
+    # check_env(env)
     dqn_model = DQN.load(model_paths[model_name])
 
-    obs, _ = dqn_env.reset()
+    obs, _ = env.reset()
     done = False
 
     rewards = []
     obss = []
     while not done:
         action, _ = dqn_model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = dqn_env.step(action)
+        obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
-    # obss = np.array(obss)
+    
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: dqn_env.prev_emissions
-              , metrics_to_plot[3]: dqn_env.prev_mean_speed
-              , metrics_to_plot[4]: dqn_env.flows
-              }
     return (model_name, result)
 
 def test_td3():
     model_name = "TD3"
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
     # check_env(dqn_env)
     model = TD3.load(model_paths[model_name])
 
@@ -165,20 +158,17 @@ def test_td3():
         obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
-    # obss = np.array(obss)
+    
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: env.prev_emissions
-              , metrics_to_plot[3]: env.prev_mean_speed
-              , metrics_to_plot[4]: env.flows
-              }
     return (model_name, result)
 
 def test_trpo():
     model_name = "TRPO"
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
     # check_env(dqn_env)
     model = TRPO.load(model_paths[model_name])
 
@@ -192,20 +182,17 @@ def test_trpo():
         obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
-    # obss = np.array(obss)
+    
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: env.prev_emissions
-              , metrics_to_plot[3]: env.prev_mean_speed
-              , metrics_to_plot[4]: env.flows
-              }
     return (model_name, result)
 
 def test_sac():
     model_name = "SAC"
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env.is_learning = False
     # check_env(dqn_env)
     model = SAC.load(model_paths[model_name])
 
@@ -219,14 +206,10 @@ def test_sac():
         obs, reward, done, _, _ = env.step(action)
         obss.append(obs)
         rewards.append(reward)
-    # obss = np.array(obss)
+    
+    metrics = [rewards, obss, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
-    result = {metrics_to_plot[0]: rewards
-              , metrics_to_plot[1]: obss
-              , metrics_to_plot[2]: env.prev_emissions
-              , metrics_to_plot[3]: env.prev_mean_speed
-              , metrics_to_plot[4]: env.flows
-              }
     return (model_name, result)
 
 def process_callback(result):
@@ -344,13 +327,8 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     models_no = 6
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="DQN", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="A2C", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="PPO", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="TRPO", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="TD3", idx=0)
-    flow_generation(np.random.triangular(0.5, 1, 1.5), model="SAC", idx=0)
-    sleep(1)
+    flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0)
+    # sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
@@ -365,7 +343,7 @@ if __name__ == '__main__':
         pool.apply_async(test_ppo, callback=process_callback),
         pool.apply_async(test_a2c, callback=process_callback),
         pool.apply_async(test_trpo, callback=process_callback),
-        pool.apply_async(test_td3, callback=process_callback),
+        # pool.apply_async(test_td3, callback=process_callback),
         pool.apply_async(test_sac, callback=process_callback)
     ]
 
@@ -383,19 +361,19 @@ if __name__ == '__main__':
             logging.error(f"An error occurred in one of the processes: {e}")
 
     # # FIXME: this one is called only for debugging purposes
-    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
+    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="DQN", idx=0)
     # agent_name, agent_result = test_dqn()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result
     # save_metrics(agent_result, agent_name)
 
-    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
+    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="A2C", idx=0)
     # agent_name, agent_result = test_a2c()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result
     # save_metrics(agent_result, agent_name)
 
-    # flow_generation(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
+    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), day_index=0, model="PPO", idx=0)
     # agent_name, agent_result = test_ppo()
     # logging.debug(f"Processing result for {agent_name}")
     # results[agent_name] = agent_result
@@ -405,3 +383,8 @@ if __name__ == '__main__':
     logging.debug("Plotting metrics")
     # plot_metrics()
     plot_metrics()
+
+    try:
+        traci_close()
+    except (FatalTraCIError, TraCIException):
+        logging.debug(f"SUMO is not closing.")
