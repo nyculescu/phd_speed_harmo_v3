@@ -1,24 +1,22 @@
 from traffic_environment.setup import create_sumocfg
 from traffic_environment.flow_gen import *
 
-from matplotlib import pyplot as plt
 import logging
 import logging.handlers
 
 from sb3_contrib import TRPO #, CrossQ, TQC
 from stable_baselines3 import PPO, DQN, A2C, SAC, TD3 #, DroQ
-from stable_baselines3.common.env_checker import check_env
+# from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.callbacks import BaseCallback
+# from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
 import multiprocessing
-# import time
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
@@ -191,16 +189,16 @@ def train_td3():
     ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
         
     model = TD3("MlpPolicy", 
-                SubprocVecEnv([get_traffic_env(port, model_name, idx, True) for idx, port in enumerate(ports)]), 
-                learning_rate=1e-3, 
-                buffer_size=50000, 
-                verbose=1, 
-                tensorboard_log=log_dir,
-                device='cuda', 
-                batch_size=100, 
-                policy_delay=2, 
-                train_freq=(1, "episode"), 
-                gradient_steps=-1)
+        DummyVecEnv([get_traffic_env(ports[0], model_name, 0, True)]),
+        learning_rate=1e-3, 
+        buffer_size=50000, 
+        verbose=1, 
+        tensorboard_log=log_dir,
+        device='cuda', 
+        batch_size=100, 
+        policy_delay=2, 
+        train_freq=(1, "episode"), 
+        gradient_steps=-1)
         
     train_model(model_name, model, ports)
 
@@ -223,12 +221,16 @@ def train_sac():
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     episodes = 5
-    for i in range(episodes):
-        train_ppo()
-        train_a2c()
-        train_dqn()
+
+    # for i in range(episodes):
+        # train_ppo()
+        # train_a2c()
+        # train_dqn()
+        # train_trpo()
+    
+    # Cover the constraint of AssertionError: You must use only one env when doing episodic training
+    for i in range(episodes * num_envs_per_model):
         train_td3()
-        train_trpo()
         # train_sac()
 
 '''
