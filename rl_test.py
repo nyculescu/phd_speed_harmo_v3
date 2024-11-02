@@ -477,8 +477,8 @@ if __name__ == '__main__':
         pool.apply_async(test_ppo, callback=process_callback),
         pool.apply_async(test_a2c, callback=process_callback),
         pool.apply_async(test_trpo, callback=process_callback),
-        pool.apply_async(test_sac, callback=process_callback)
-        # pool.apply_async(test_td3, callback=process_callback)
+        pool.apply_async(test_sac, callback=process_callback),
+        pool.apply_async(test_td3, callback=process_callback)
     ]
 
     # Close the pool and wait for all processes to finish

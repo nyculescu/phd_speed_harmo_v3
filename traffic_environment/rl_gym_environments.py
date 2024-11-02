@@ -65,6 +65,7 @@ class TrafficEnv(gym.Env):
         self.mean_speed_over_time = []
         self.test_without_electric = False
         self.test_without_disobedient = False
+        self.frictionValue = 1.0
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -125,6 +126,10 @@ class TrafficEnv(gym.Env):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if not is_sumo_running:
             self.start_sumo()
+        else:
+            for segment in [seg_1_before]:
+                [traci.lane.setMaxSpeed(segId, self.speed_limit / 3.6) for segId in segment] # km/h to m/s
+            [traci.edge.setFriction(edgeId, self.frictionValue) for edgeId in edges]
 
         if self.model == "TD3" or self.model == "SAC":
             # Map continuous action to nearest discrete speed limit
@@ -132,12 +137,6 @@ class TrafficEnv(gym.Env):
         else:
             # Apply action
             self.speed_limit = self.speed_limits[action]
-        
-        speed_new_mps = self.speed_limit / 3.6  # km/h to m/s
-
-        for segment in [seg_1_before]:
-            if is_sumo_running:
-                [traci.lane.setMaxSpeed(lane, speed_new_mps) for lane in segment]
 
         mean_speeds_edges_mps = np.zeros(len(edges))
         emissions_edges = np.zeros(len(edges))
@@ -197,8 +196,7 @@ class TrafficEnv(gym.Env):
         self.emissions_over_time.append(self.total_emissions_now)
         self.mean_speed_over_time.append(avg_speed_now * 3.6)  # m/s to km/h
 
-        # Calculate reward using the adapted reward function
-        # quad_occ_reward()
+        # Calculate reward
         self.reward = self.reward_func_wrap()
         
         self.rewards.append(self.reward)
@@ -251,6 +249,7 @@ class TrafficEnv(gym.Env):
         self.total_emissions_now = 0
         self.emissions_over_time = []
         self.mean_speed_over_time = []
+        self.frictionValue = 1.0 # Dry road: friction = 1.0; Wet road: friction = 0.7; Icy road: friction = 0.3
 
         # Reset params
         self.speed_limit = 130
