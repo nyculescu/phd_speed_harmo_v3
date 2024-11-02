@@ -41,7 +41,7 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-base_sumo_port = 8800
+base_sumo_port = 8816
 num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 
@@ -68,6 +68,12 @@ def train_model(model_name, model, ports):
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
+        
+        no_improve_cb = StopTrainingOnNoModelImprovement(
+            max_no_improvement_evals=2,
+            min_evals=2,
+            verbose=1
+        )
 
         checkpoint_cb = CheckpointCallback(
             save_freq=episode_length * num_envs_per_model,
@@ -76,7 +82,7 @@ def train_model(model_name, model, ports):
             save_replay_buffer=True,
             save_vecnormalize=True,
             )
-
+        
         eval_cb = EvalCallback(
             env_eval,
             best_model_save_path=model_dir,
@@ -85,13 +91,13 @@ def train_model(model_name, model, ports):
             n_eval_episodes=1,
             deterministic=True,
             render=False,
-            callback_after_eval = checkpoint_cb
+            callback_after_eval = no_improve_cb
         )
         
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
         logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_cb], progress_bar=True)
+        model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb], progress_bar=True)
     except ValueError as e:
         print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
         print(f"Error: {e}")

@@ -63,6 +63,8 @@ class TrafficEnv(gym.Env):
         self.is_learning = True
         self.emissions_over_time = []
         self.mean_speed_over_time = []
+        self.test_without_electric = False
+        self.test_without_disobedient = False
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -143,6 +145,28 @@ class TrafficEnv(gym.Env):
 
         # Step simulation and collect data
         for i in range(self.aggregation_time):
+            if not self.is_learning and self.test_without_electric:
+                # Identify vehicles of type "electric_passenger"
+                vehicle_ids = traci.vehicle.getIDList()
+                for vehicle_id in vehicle_ids:
+                    veh_id = traci.vehicle.getTypeID(vehicle_id)
+                    if veh_id == "electric_passenger":
+                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-4")
+                    if veh_id == "electric_passenger/hatchback" or veh_id == "electric_passenger/van":
+                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-5")
+                    if veh_id == "electric_bus" or veh_id == "electric_truck" or veh_id == "electric_truck/trailer":
+                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/RT_le7.5t_Euro-VI_A-C")
+                    if veh_id == "electric_motorcycle":
+                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-6ab")
+            if not self.is_learning and self.test_without_disobedient:
+                # Identify vehicles of type "disobedient"
+                vehicle_ids = traci.vehicle.getIDList()
+                for vehicle_id in vehicle_ids:
+                    veh_id = traci.vehicle.getTypeID(vehicle_id)
+                    if "disobedient" in veh_id:
+                        traci.vehicle.setImperfection(vehicle_id, 0.1)
+                        traci.vehicle.setImpatience(vehicle_id, 0.1)
+
             try:
                 traci.simulationStep()
             except (FatalTraCIError, TraCIException):

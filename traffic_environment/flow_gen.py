@@ -12,7 +12,7 @@ daily_pattern = [
             np.random.uniform(50,    100),   np.random.uniform(100,    150), # 05:00-05:30-06:00
             np.random.uniform(200,   500),   np.random.uniform( 250,   500), # 06:00-06:30-07:00
             np.random.uniform(750,  1000),   np.random.uniform( 1000, 1250), # 07:00-07:30-08:00
-            np.random.uniform(1250, 1500),   np.random.uniform( 1250, 1500), # 08:00-08:30-09:00   # start
+            np.random.uniform(1250, 1500),   np.random.uniform( 1250, 1500), # 08:00-08:30-09:00
             np.random.uniform(1250, 1500),   np.random.uniform( 1250, 1500), # 09:00-09:30-10:00
             np.random.uniform(1000, 1250),   np.random.uniform( 1000, 1250), # 10:00-10:30-11:00
             np.random.uniform(1000, 1250),   np.random.uniform( 1000, 1500), # 11:00-11:30-12:00
@@ -23,7 +23,7 @@ daily_pattern = [
             np.random.uniform(1250, 1500),   np.random.uniform( 1250, 1500), # 16:00-16:30-17:00
             np.random.uniform(1500, 2000),   np.random.uniform( 1500, 1750), # 17:00-17:30-18:00
             np.random.uniform(1500, 1750),   np.random.uniform( 1750, 1250), # 18:00-18:30-19:00
-            np.random.uniform(1000, 1250),   np.random.uniform( 1250, 1000), # 19:00-19:30-20:00   # end
+            np.random.uniform(1000, 1250),   np.random.uniform( 1250, 1000), # 19:00-19:30-20:00
             np.random.uniform(750,  1000),   np.random.uniform( 750,  1000), # 20:00-20:30-21:00
             np.random.uniform(500,   750),   np.random.uniform( 500,   750), # 21:00-21:30-22:00
             np.random.uniform(250,   500),   np.random.uniform( 100,   250), # 22:00-22:30-23:00
@@ -295,36 +295,50 @@ def flow_generation(base_traffic_jam_exponent, model, idx):
         accel = np.random.uniform(2.4, 2.8)
         decel = np.random.uniform(4.3, 4.7)
         length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
+        impatience = np.random.uniform(0.5, 1)
+        sigma=np.random.uniform(0.5, 1)
         emissionClass = "HBEFA4/PC_petrol_Euro-4"
-        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="200" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="200" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
+        impatience = np.random.uniform(0.75, 1)
+        sigma=np.random.uniform(0.85, 1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="240" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="240" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
+        impatience = np.random.uniform(0.5, 1)
+        sigma=np.random.uniform(0.5, 1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="130" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="130" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
+        impatience = np.random.uniform(0.5, 1)
+        sigma=np.random.uniform(0.5, 1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="100" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="100" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
+        impatience = np.random.uniform(0.75, 1)
+        sigma=np.random.uniform(0.75, 1)
         emissionClass = "HBEFA4/PC_petrol_Euro-6ab"
-        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="180" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="180" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
+        impatience = np.random.uniform(0.5, 1)
+        sigma=np.random.uniform(0.5, 1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="100" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="100" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
+        impatience = np.random.uniform(0.5, 1)
+        sigma=np.random.uniform(0.5, 1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="100" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="1.0" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="100" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="1.2" speedDev="0.2" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
 
         """ Electric vehicle types """
         emissionClass = "PHEMlight/zero" # ref: https://sumo.dlr.de/docs/Models/Emissions/PHEMlight.html

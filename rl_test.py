@@ -27,6 +27,9 @@ logging.basicConfig(
     ]
 )
 
+test_without_electric = False
+test_without_disobedient = False
+
 # Define a custom TensorBoard callback that accepts an environment and model
 class TensorboardCallback(BaseCallback):
     def __init__(self, env, model, verbose=0):
@@ -129,6 +132,8 @@ def test_ppo():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -166,6 +171,8 @@ def test_a2c():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -203,6 +210,8 @@ def test_dqn():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -240,6 +249,8 @@ def test_td3():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -277,6 +288,8 @@ def test_trpo():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -314,6 +327,8 @@ def test_sac():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
     env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -445,7 +460,9 @@ def plot_metrics(selected_models=None):
 if __name__ == '__main__':
     models_no = 6
     # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0)
-    # sleep(1)
+    test_without_electric = False
+    test_without_disobedient = True
+    sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
