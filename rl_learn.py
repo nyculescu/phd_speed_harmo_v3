@@ -64,7 +64,10 @@ def train_model(model_name, model, ports):
 
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
+        if model_name in ["DQN", "A2C", "PPO", "TRPO"]:
+            env_eval = SubprocVecEnv([get_traffic_env(port, model_name, idx, False) for idx, port in enumerate(ports[:7])])
+        elif model_name in ["TD3", "SAC"]:
+            env_eval = DummyVecEnv([get_traffic_env(ports, model_name, 0, False)])
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -192,10 +195,9 @@ def train_trpo():
 def train_td3():
     model_name = 'TD3'
     log_dir = f"./logs/{model_name}/"
-    ports = [(base_sumo_port + i) for i in range(num_envs_per_model)]
         
     model = TD3("MlpPolicy", 
-        DummyVecEnv([get_traffic_env(ports[0], model_name, 0, True)]),
+        DummyVecEnv([get_traffic_env(base_sumo_port, model_name, 0, True)]),
         learning_rate=1e-3, 
         buffer_size=50000, 
         verbose=1, 
@@ -206,38 +208,47 @@ def train_td3():
         train_freq=(1, "episode"), 
         gradient_steps=-1)
         
-    train_model(model_name, model, ports)
+    train_model(model_name, model, base_sumo_port)
 
 def train_sac():
     model_name = 'SAC'
     log_dir = f"./logs/{model_name}/"
-    ports = [base_sumo_port]
 
     model = SAC("MlpPolicy", 
-        DummyVecEnv([get_traffic_env(ports[0], model_name, 0, True)]), 
+        DummyVecEnv([get_traffic_env(base_sumo_port + 1, model_name, 0, True)]), 
         learning_rate=1e-3,  # Same as DQN
         buffer_size=50000,  # Same as DQN
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model, ports)
+    train_model(model_name, model, base_sumo_port + 1)
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     episodes = 5
 
+    # The training is splin into 2 processes that shall run independently
+    # Training process 1
     # for i in range(episodes):
         # train_ppo()
         # train_a2c()
         # train_dqn()
         # train_trpo()
     
+    # Training process 2
     # Cover the constraint of AssertionError: You must use only one env when doing episodic training
     for i in range(episodes * num_envs_per_model):
-        train_td3()
-        # train_sac()
+        # Create a process for each training function
+        td3_process = multiprocessing.Process(target=train_td3)
+        sac_process = multiprocessing.Process(target=train_sac)
+        # Start the processes
+        td3_process.start()
+        sac_process.start() 
+        # Join the processes to ensure they complete before exiting
+        td3_process.join()
+        sac_process.join()
 
 '''
 Run rl_learn.py through tunnel:
