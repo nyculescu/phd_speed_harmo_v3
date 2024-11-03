@@ -27,7 +27,7 @@ vehicle_counts = {
 }
 
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model, model_idx):
+    def __init__(self, port, model, model_idx, is_learning):
         super(TrafficEnv, self).__init__()
         self.port = port
         self.model = model
@@ -42,7 +42,6 @@ class TrafficEnv(gym.Env):
         self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float64", shape=(1,))
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
-        self.sim_length = (car_generation_rates * 60 * 60) / self.aggregation_time
         self.mean_speeds_mps = []
         self.mean_emissions = []
         self.mean_num_halts = []
@@ -60,7 +59,7 @@ class TrafficEnv(gym.Env):
         self.total_emissions_now = 0
         self.avg_speed_now = 0
         self.rewards = []
-        self.is_learning = True
+        self.is_learning = is_learning
         self.emissions_over_time = []
         self.mean_speed_over_time = []
         self.test_without_electric = False
@@ -72,6 +71,11 @@ class TrafficEnv(gym.Env):
         self.target_friction = None
         self.target_min = None
         self.target_max = None
+
+        if self.is_learning:
+            self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
+        else:
+            self.sim_length = round(len(daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -135,8 +139,8 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.9, 1.3) # add some deviation
-                if self.is_learning:
-                    flow_generation_wrapper(self.flow_gen_max, self.model, self.model_idx)
+                no_days_to_run_the_simu = 7 if self.is_learning else 1
+                flow_generation_wrapper(self.flow_gen_max, np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, days=no_days_to_run_the_simu)
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
@@ -171,7 +175,9 @@ class TrafficEnv(gym.Env):
                     if attempt <= self.sumo_max_retries:
                         sleep(2)  # Wait before retrying
                         logging.debug("Killing SUMO process due to non-responsive close") 
-                        self.sumo_process.kill()                 
+                        # self.sumo_process.kill()
+                finally:
+                    self.sumo_process = None               
 
     def step(self, action):
         # # Update frictionValue incrementally
@@ -323,7 +329,10 @@ class TrafficEnv(gym.Env):
         self.speed_limit = 130
         
         # Reset time
-        self.sim_length = (car_generation_rates * 60 * 60) / self.aggregation_time
+        if self.is_learning:
+            self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
+        else:
+            self.sim_length = round(len(daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
 
         obs = np.array([0], dtype=np.float64)
         

@@ -9,7 +9,6 @@ import logging
 import os
 import multiprocessing
 from time import sleep
-from traffic_environment.flow_gen import flow_generation_wrapper
 from traci import close as traci_close
 from traci.exceptions import FatalTraCIError, TraCIException
 from stable_baselines3.common.evaluation import evaluate_policy
@@ -130,7 +129,7 @@ def test_ppo():
     model = PPO.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -169,7 +168,7 @@ def test_a2c():
     model = A2C.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -208,7 +207,7 @@ def test_dqn():
     model = DQN.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -247,7 +246,7 @@ def test_td3():
     model = TD3.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -286,7 +285,7 @@ def test_trpo():
     model = TRPO.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -325,7 +324,7 @@ def test_sac():
     model = SAC.load(model_paths[model_name])
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
     env.test_without_electric = test_without_electric
     env.test_without_disobedient = test_without_disobedient
@@ -459,7 +458,7 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     models_no = 6
-    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0)
+    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0, days=1)
     test_without_electric = False
     test_without_disobedient = True
     sleep(1)

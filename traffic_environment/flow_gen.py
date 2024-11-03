@@ -2,6 +2,10 @@ import numpy as np
 import math
 import logging
 
+# Adjust the amplitude of the daily pattern
+def adjust_amplitude(daily_pattern, amplitude_factor):
+    return [round(value * math.exp(amplitude_factor * (value / max(daily_pattern)))) for value in daily_pattern]
+
 # Vehicle generation rates (bimodal distribution pattern)
 daily_pattern = [
     np.random.randint(25,     75),   np.random.randint(50,     75), # 00:00-00:30-01:00
@@ -29,12 +33,6 @@ daily_pattern = [
     np.random.randint(250,   500),   np.random.randint(100,   250), # 22:00-22:30-23:00
     np.random.randint(50,    250),   np.random.randint(50 ,   100)  # 23:00-23:30-00:00
 ]
-
-# Adjust the amplitude of the daily pattern
-def adjust_amplitude(daily_pattern, amplitude_factor):
-    return [round(value * math.exp(amplitude_factor * (value / max(daily_pattern)))) for value in daily_pattern]
-amplitude_factor = -0.3
-daily_pattern_ampl = adjust_amplitude(daily_pattern, amplitude_factor)
 
 # Day of the week factor # TODO: add this one in flow generation
 day_of_the_week_factor = [
@@ -69,11 +67,19 @@ depart_pos = "free"
 depart_speed = "speedLimit"
 lanes = 3
 
-def flow_generation_wrapper(base_traffic_jam_exponent, model, idx):
+def flow_generation_wrapper(base_traffic_jam_exponent, daily_pattern_amplitude, model, idx, days):
+    day_of_the_week_factor_temp = []
+    if days == 1:
+        day_of_the_week_factor_temp.append(day_of_the_week_factor[np.random.randint(0, len(day_of_the_week_factor) - 1)])
+    else:
+        day_of_the_week_factor_temp = day_of_the_week_factor.copy()
+
+    daily_pattern_ampl = adjust_amplitude(daily_pattern, daily_pattern_amplitude)
+
     models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
     if model == "all":
         # Generate content for DQN model
-        flow_generation(base_traffic_jam_exponent, "DQN", idx)
+        flow_generation(base_traffic_jam_exponent, "DQN", idx, daily_pattern_ampl, day_of_the_week_factor_temp)
         
         # Read the content from the DQN file
         firstmodel_file_path = f"./traffic_environment/sumo/generated_flows_{models[0]}_{idx}.rou.xml"
@@ -86,11 +92,11 @@ def flow_generation_wrapper(base_traffic_jam_exponent, model, idx):
             with open(file_path, 'w') as f:
                 f.write(firstmodel_file_path_content)
     elif model in models:
-        flow_generation(base_traffic_jam_exponent, model, idx)
+        flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, day_of_the_week_factor_temp)
     else:
         logging.error(f"Model {model} is not supported. Supported models are: {models}")
 
-def flow_generation(base_traffic_jam_exponent, model, idx):
+def flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, day_of_the_week_factor):
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
@@ -98,7 +104,7 @@ def flow_generation(base_traffic_jam_exponent, model, idx):
 
         # Iterate over each pair of rates
         for day_index in range(0, len(day_of_the_week_factor)):
-            for i in range(0, len(daily_pattern), 2):
+            for i in range(0, len(daily_pattern_ampl), 2):
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
                 cars = np.random.uniform(70, 85) * 1.15
@@ -201,15 +207,15 @@ def flow_generation(base_traffic_jam_exponent, model, idx):
                 }
 
                 # Calculate start and end times for each flow
-                begin_time = (day_index * len(daily_pattern)*1800) + (i * 1800)
+                begin_time = (day_index * len(daily_pattern_ampl) * 1800) + (i * 1800)
 
                 # Get vehsPerHour for current interval
-                low = math.exp(base_traffic_jam_exponent) * 0.75 * day_off_factor[day_index]
-                high = math.exp(base_traffic_jam_exponent) * 1.25 * day_off_factor[day_index]
-                mid = math.exp(base_traffic_jam_exponent) * day_off_factor[day_index]
+                low = math.exp(base_traffic_jam_exponent) * 0.75 * day_off_factor[day_index] * day_of_the_week_factor[day_index]
+                high = math.exp(base_traffic_jam_exponent) * 1.25 * day_off_factor[day_index] * day_of_the_week_factor[day_index]
+                mid = math.exp(base_traffic_jam_exponent) * day_off_factor[day_index] * day_of_the_week_factor[day_index]
                 traffic_jam_factor = np.random.triangular(low, mid, high)
-                vehs_per_hour_1 = daily_pattern[i] * traffic_jam_factor
-                vehs_per_hour_2 = daily_pattern[i+1] * traffic_jam_factor
+                vehs_per_hour_1 = daily_pattern_ampl[i] * traffic_jam_factor
+                vehs_per_hour_2 = daily_pattern_ampl[i+1] * traffic_jam_factor
                 
                 # Calculate the flow index based on the current iteration
                 flow_index = i // 2
@@ -238,17 +244,17 @@ def flow_generation(base_traffic_jam_exponent, model, idx):
                     
                     if vehs_2 > 0:
                         if "disobedient" in vehicle_type and addDisobedientVehicles:
-                            flows.append((day_index, begin_time + (30 * len(daily_pattern)),
+                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
                                     f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                         elif "electric" in vehicle_type and addElectricVehicles:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
-                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                        f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
+                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
+                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                    f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
                         else:
-                            flows.append((day_index, begin_time + (30 * len(daily_pattern)),
+                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
                                     f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type}"/>\n'))
