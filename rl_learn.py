@@ -48,6 +48,7 @@ models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC"]
 def get_traffic_env(port, model, model_idx, mon):
     def _init():
         env = TrafficEnv(port=port, model=model, model_idx=model_idx)
+        # env.update_environment()  # Simulate a change in road conditions
         if mon:
             return Monitor(env)
         else:

@@ -66,10 +66,63 @@ class TrafficEnv(gym.Env):
         self.test_without_electric = False
         self.test_without_disobedient = False
         self.frictionValue = 1.0
+        self.road_condition = "dry"  # Initial condition
+        self.frictionValue = None
+        self.adjustment_rate = 0
+        self.target_friction = None
+        self.target_min = None
+        self.target_max = None
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
         # reward_co2_avgspeed(self.prev_emissions, self.total_emissions_now, self.prev_mean_speed, self.avg_speed_now)
+    
+    def calc_friction(self, desired_transition_steps):
+        # Define target ranges based on road conditions
+        if self.road_condition == "dry":
+            target_min, target_max = 0.75, 1.0
+        elif self.road_condition == "wet":
+            target_min, target_max = 0.5, 0.75
+        elif self.road_condition == "icy":
+            target_min, target_max = 0.1, 0.5
+        else:
+            # Default to dry conditions if unspecified
+            target_min, target_max = 0.75, 1.0
+
+        # Select a target friction value within the target range
+        target_friction = np.random.uniform(target_min, target_max)
+
+        # Initialize frictionValue if it doesn't exist
+        if not hasattr(self, 'frictionValue'):
+            self.frictionValue = target_friction
+            self.adjustment_rate = 0  # No adjustment needed initially
+        else:
+            # Calculate the adjustment rate dynamically
+            friction_difference = target_friction - self.frictionValue
+
+            # Prevent division by zero
+            if desired_transition_steps == 0:
+                self.adjustment_rate = friction_difference
+            else:
+                self.adjustment_rate = friction_difference / desired_transition_steps
+
+            # Store target values
+            self.target_friction = target_friction
+            self.target_min = target_min
+            self.target_max = target_max
+
+    def update_environment(self):
+        # Simulate changing road conditions
+        conditions = ["dry", "wet", "icy"]
+        self.road_condition = np.random.choice(conditions)
+
+        # Transition time in steps (e.g., over 2 hours)
+        desired_transition_time_hours = 2
+        steps_per_second = 60
+        desired_transition_steps = desired_transition_time_hours * 3600 * steps_per_second
+
+        self.calc_friction(desired_transition_steps)
+        print(f"Road condition: {self.road_condition}, Target friction: {self.target_friction}")
 
     def start_sumo(self):
         # If SUMO is running, then perform a restart
@@ -87,7 +140,9 @@ class TrafficEnv(gym.Env):
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
-                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] + ["--remote-port", str(port)], 
+                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui')
+                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] 
+                                                     + ["--remote-port", str(port)] + ["--quit-on-end"], 
                                     stdout=subprocess.PIPE, 
                                     stderr=subprocess.PIPE)
                 logging.debug(f"Attempting to connect to SUMO on port {port}")
@@ -109,20 +164,27 @@ class TrafficEnv(gym.Env):
             for attempt in range(self.sumo_max_retries):
                 try:
                     traci.close()
-                    sleep(2)
                     logging.debug(f"The reason SUMO is closed: {reason}")
                     break
                 except (FatalTraCIError, TraCIException):
-                    logging.debug(f"SUMO is not closing. {reason}")
+                    logging.debug(f"SUMO is not closing when {reason}")
                     if attempt <= self.sumo_max_retries:
                         sleep(2)  # Wait before retrying
-                    else:
-                        logging.debug("Failed stopping traci. sumo_process will be emptied")
-                        self.sumo_process.terminate()
-                        self.sumo_process.wait()
-                        self.sumo_process = None
+                        logging.debug("Killing SUMO process due to non-responsive close") 
+                        self.sumo_process.kill()                 
 
     def step(self, action):
+        # # Update frictionValue incrementally
+        # self.frictionValue += self.adjustment_rate
+
+        # # Ensure frictionValue stays within the target range
+        # if self.frictionValue > self.target_max:
+        #     self.frictionValue = self.target_max
+        # elif self.frictionValue < self.target_min:
+        #     self.frictionValue = self.target_min
+
+        self.frictionValue = 1.0
+
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if not is_sumo_running:
             self.start_sumo()
@@ -211,6 +273,12 @@ class TrafficEnv(gym.Env):
         if done:
             self.close_sumo("simulation done")
             self.rewards = []
+
+        # if self.sim_length % 60 == 0:
+        #     self.hour += 1
+        # if self.hour % 24 == 0:
+        #     self.day += 1
+        #     self.hour = 0
 
         self.obs = np.array([avg_speed_now])
 
