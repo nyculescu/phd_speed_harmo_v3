@@ -425,7 +425,7 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     models_no = 6
-    # flow_generation_wrapper(np.random.triangular(0.5, 1, 1.5), model="all", idx=0, days=1)
+    # flow_generation_wrapper(model="all", idx=0, days=1)
     test_without_electric = False
     test_without_disobedient = True
     sleep(1)

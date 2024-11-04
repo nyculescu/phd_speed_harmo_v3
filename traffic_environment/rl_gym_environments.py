@@ -55,7 +55,6 @@ class TrafficEnv(gym.Env):
         self.flows = []
         self.sumo_process = None
         self.sumo_max_retries = 5
-        self.flow_gen_max = np.random.triangular(0.45, np.random.uniform(0.9, 1.1), 1.55)
         self.reward = 0
         self.total_emissions_now = 0
         self.avg_speed_now = 0
@@ -76,7 +75,7 @@ class TrafficEnv(gym.Env):
         if self.is_learning:
             self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
         else:
-            self.sim_length = round(len(daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
+            self.sim_length = round(len(mock_daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -139,9 +138,8 @@ class TrafficEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                self.flow_gen_max = self.flow_gen_max * np.random.uniform(0.9, 1.3) # add some deviation
-                no_days_to_run_the_simu = 7 if self.is_learning else 1
-                flow_generation_wrapper(self.flow_gen_max, np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, days=no_days_to_run_the_simu)
+                days_to_run_the_simu = 7 if self.is_learning else 1
+                flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, days=days_to_run_the_simu)
                 
                 port = self.port
                 logging.debug(f"Attempting to start SUMO on port {port}")
@@ -304,7 +302,6 @@ class TrafficEnv(gym.Env):
         logging.info(f"Mean flow: {np.mean(self.flows)}")
 
     def reset(self, seed=None):
-        self.flow_gen_max = 0
         self.isUnstableFlowConditions = False
         self.mean_speeds_mps = []
         self.mean_emissions = []
@@ -333,7 +330,7 @@ class TrafficEnv(gym.Env):
         if self.is_learning:
             self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
         else:
-            self.sim_length = round(len(daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
+            self.sim_length = round(len(mock_daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
 
         obs = np.array([0], dtype=np.float64)
         

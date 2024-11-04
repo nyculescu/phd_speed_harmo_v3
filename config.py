@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
 """ General configuration """
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC", "DDPG"]
@@ -42,8 +43,7 @@ metrics_to_plot = ['rewards'
                    ]
 
 """  Configuration for the flow generation """
-# Vehicle generation rates (bimodal distribution pattern)
-daily_pattern = [
+mock_daily_pattern = [
     np.random.randint(25,     75),   np.random.randint(50,     75), # 00:00-00:30-01:00
     np.random.randint(25,     50),   np.random.randint(10,     25), # 01:00-01:30-02:00
     np.random.randint(25,     50),   np.random.randint(5,      10), # 02:00-02:30-03:00
@@ -72,26 +72,28 @@ daily_pattern = [
 
 # Day of the week factor # TODO: add this one in flow generation
 day_of_the_week_factor = [
-    np.random.triangular(0.95, 1, 1.05), # Monday
-    np.random.triangular(0.90, 1, 1.10), # Tuesday
-    np.random.triangular(0.90, 1, 1.10), # Wednesday
-    np.random.triangular(0.90, 1, 1.10), # Thursday
-    np.random.triangular(0.95, 1, 1.05), # Friday
-    np.random.triangular(0.80, 1, 1.2),  # Saturday
-    np.random.triangular(0.80, 1, 1.2)   # Sunday
+    np.random.uniform(0.95, 1.05), # Monday
+    np.random.uniform(0.90, 1.10), # Tuesday
+    np.random.uniform(0.90, 1.10), # Wednesday
+    np.random.uniform(0.90, 1.10), # Thursday
+    np.random.uniform(0.95, 1.05), # Friday
+    np.random.uniform(0.80, 1.2),  # Saturday
+    np.random.uniform(0.80, 1.2)   # Sunday
 ]
 
-car_generation_rates = len(daily_pattern) / 2 * len(day_of_the_week_factor)
+mock_days_and_weeks = False
+base_demand = np.random.randint(1300, 1800) # max no. of vehicles expected in any interval
+car_generation_rates = len(mock_daily_pattern) / 2 * len(day_of_the_week_factor)
 addDisobedientVehicles = True
 addElectricVehicles = True
 
 # Day off factor (assuming no day off effect) # TODO: add this one in flow generation
 day_off_factor = [
-    1.0,  # Monday
-    1.05, # Tuesday
-    1.05, # Wednesday
-    1.0,  # Thursday
-    1.10, # Friday
-    0.75, # Saturday
-    0.8   # Sunday
+    np.random.uniform(0.95, 1.05),  # Monday
+    np.random.uniform(1.0, 1.05), # Tuesday
+    np.random.uniform(1.0, 1.05), # Wednesday
+    np.random.uniform(0.95, 1.05),  # Thursday
+    np.random.uniform(1.0, 1.10), # Friday
+    np.random.uniform(0.7, 0.8), # Saturday
+    np.random.uniform(0.7, 0.8)   # Sunday
 ]

@@ -4,8 +4,8 @@ import logging
 from config import *
 
 # Adjust the amplitude of the daily pattern
-def adjust_amplitude(daily_pattern, amplitude_factor):
-    return [round(value * math.exp(amplitude_factor * (value / max(daily_pattern)))) for value in daily_pattern]
+def adjust_amplitude(dly_pattern, amplitude_factor):
+    return [round(value * math.exp(amplitude_factor * (value / max(dly_pattern)))) for value in dly_pattern]
 
 # Define route and other common flow attributes
 route_id = "r_0"
@@ -14,18 +14,62 @@ depart_pos = "free"
 depart_speed = "speedLimit"
 lanes = 3
 
-def flow_generation_wrapper(base_traffic_jam_exponent, daily_pattern_amplitude, model, idx, days):
-    day_of_the_week_factor_temp = []
-    if days == 1:
-        day_of_the_week_factor_temp.append(day_of_the_week_factor[np.random.randint(0, len(day_of_the_week_factor) - 1)])
-    else:
-        day_of_the_week_factor_temp = day_of_the_week_factor.copy()
+def bimodal_distribution(x = np.arange(0, 24.5, 0.5)): # 24.5 is used to include 24:00
+    baseline = np.random.uniform(0.001, 0.025) 
+    mu1 = 8.0 + np.random.uniform(-0.5, 0.5) # Morning peak
+    mu2 = 17.0 + np.random.uniform(-0.5, 0.5)# Evening peak
+    sigma1 = 2.0 + np.random.uniform(-0.2, 0.2) # Range for morning peak width
+    sigma2 = 2.0 + np.random.uniform(-0.2, 0.2) # Range for evening peak width
+    A1 = 1.0 + np.random.uniform(-0.05, 0.05) # Amplitude for morning peak
+    A2 = 0.8 + np.random.uniform(-0.04, 0.04) # Amplitude for evening peak
+    # Compute the bimodal distribution
+    y = (
+        A1 * np.exp(-((x - mu1) ** 2) / (2 * sigma1 ** 2)) +
+        A2 * np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)) + 
+        baseline
+    )
+    if np.random.rand() < 0.25:  # 25% chance to add a third peak
+        mu3 = 13.0 + np.random.uniform(-1.0, 1.0)  # Midday peak
+        sigma3 = np.random.uniform(0.5, 1.0)
+        A3 = np.random.uniform(0.3, 0.6)
+        y += A3 * np.exp(-((x - mu3) ** 2) / (2 * sigma3 ** 2))
+    y = y * (1 + gaussian_filter(np.random.normal(0, 0.02, size=y.shape), sigma=2)) # Add smoothed random noise to simulate natural fluctuations
+    y = y / np.max(y) # Normalize to 1
+    y = y * base_demand # Scale up to base demand
+    return y.astype(int)[:48] # Return first 48 entries for 24 hours at half-hour intervals
 
-    daily_pattern_ampl = adjust_amplitude(daily_pattern, daily_pattern_amplitude)
+def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
+    # Define the peak time for traffic
+    peak_time = 13.0 + np.random.uniform(-1.0, 1.0)  # Slight randomness in peak time
+    morning_start = 6.0 + np.random.uniform(-0.5, 0.5)  # Start of morning traffic
+    evening_end = 19.0 + np.random.uniform(-0.5, 0.5)   # End of evening traffic
+    # Create a triangular distribution
+    y = np.piecewise(
+        x,
+        [x <= peak_time, x > peak_time],
+        [
+            lambda x: np.clip((x - morning_start) / (peak_time - morning_start), 0, None),  # Rising slope
+            lambda x: np.clip((evening_end - x) / (evening_end - peak_time), 0, None)       # Falling slope
+        ]
+    )
+    # Add random noise and smooth it to simulate natural fluctuations
+    y = y * (1 + gaussian_filter(np.random.normal(0, 0.02, size=y.shape), sigma=2))
+    # Normalize to base demand
+    y = y / np.max(y) * base_demand
+    # Ensure no negative values and set minimum values between (0, 50)
+    y[y < 50] = np.random.uniform(0, 50)
+    return y.astype(int)[:48]  # Return first 48 entries for half-hour intervals
+
+def flow_generation_wrapper(daily_pattern_amplitude, model, idx, days):
+    if mock_days_and_weeks:
+        dly_pattern = mock_daily_pattern
+    else:
+        dly_pattern = triangular_distribution() if np.random.choice([False, True]) else bimodal_distribution()
+    daily_pattern_ampl = adjust_amplitude(dly_pattern, daily_pattern_amplitude)
 
     if model == "all":
         # Generate content for DQN model
-        flow_generation(base_traffic_jam_exponent, "DQN", idx, daily_pattern_ampl, day_of_the_week_factor_temp)
+        flow_generation("DQN", idx, daily_pattern_ampl, days)
         
         # Read the content from the DQN file
         firstmodel_file_path = f"./traffic_environment/sumo/generated_flows_{models[0]}_{idx}.rou.xml"
@@ -38,18 +82,18 @@ def flow_generation_wrapper(base_traffic_jam_exponent, daily_pattern_amplitude, 
             with open(file_path, 'w') as f:
                 f.write(firstmodel_file_path_content)
     elif model in models:
-        flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, day_of_the_week_factor_temp)
+        flow_generation(model, idx, daily_pattern_ampl, days)
     else:
         logging.error(f"Model {model} is not supported. Supported models are: {models}")
 
-def flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, day_of_the_week_factor):
+def flow_generation(model, idx, daily_pattern_ampl, days):
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
         # Iterate over each pair of rates
-        for day_index in range(0, len(day_of_the_week_factor)):
+        for day_index in range(0, days):
             for i in range(0, len(daily_pattern_ampl), 2):
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
@@ -156,12 +200,8 @@ def flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, d
                 begin_time = (day_index * len(daily_pattern_ampl) * 1800) + (i * 1800)
 
                 # Get vehsPerHour for current interval
-                low = math.exp(base_traffic_jam_exponent) * 0.75 * day_off_factor[day_index] * day_of_the_week_factor[day_index]
-                high = math.exp(base_traffic_jam_exponent) * 1.25 * day_off_factor[day_index] * day_of_the_week_factor[day_index]
-                mid = math.exp(base_traffic_jam_exponent) * day_off_factor[day_index] * day_of_the_week_factor[day_index]
-                traffic_jam_factor = np.random.triangular(low, mid, high)
-                vehs_per_hour_1 = daily_pattern_ampl[i] * traffic_jam_factor
-                vehs_per_hour_2 = daily_pattern_ampl[i+1] * traffic_jam_factor
+                vehs_per_hour_1 = daily_pattern_ampl[i] * day_of_the_week_factor[day_index]
+                vehs_per_hour_2 = daily_pattern_ampl[i+1] * day_of_the_week_factor[day_index]
                 
                 # Calculate the flow index based on the current iteration
                 flow_index = i // 2
@@ -340,4 +380,3 @@ def flow_generation(base_traffic_jam_exponent, model, idx, daily_pattern_ampl, d
 
     logging.info(f"Flow generation complete for model {model} id {idx}.")
 
-# flow_generation(0, "DQN")
