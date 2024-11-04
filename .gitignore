@@ -5,6 +5,8 @@ __pycache__/
 logs/
 metrics/
 rl_models/*/*/events.out.tfevents.*
+rl_models/*/rl_model_*.pkl
+rl_models/*/rl_model_*.zip
 traffic_environment/sumo/generated_flows_*.rou.xml
 traffic_environment/sumo/3_2_merge_*.sumocfg
 traffic_environment/sumo/loop_detector_metrics.xml

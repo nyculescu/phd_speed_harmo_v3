@@ -5,7 +5,7 @@ import logging
 import logging.handlers
 
 from sb3_contrib import TRPO #, CrossQ, TQC
-from stable_baselines3 import PPO, DQN, A2C, SAC, TD3 #, DroQ
+from stable_baselines3 import PPO, DQN, A2C, SAC, TD3, DDPG #, DroQ
 # from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -22,7 +22,8 @@ import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import torch
 logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
-# from gymnasium.wrappers import TimeLimit
+from datetime import datetime 
+from config import *
 
 # rl_zoo3 training script to train an agent /> python -m rl_zoo3.train --algo ppo --env TrafficEnv-v0 --eval-freq 10000 --save-freq 50000 --n-timesteps 1000000
 # Hyperparameter Optimization (Optuna with rl_zoo3) /> python -m rl_zoo3.train --algo dqn --env TrafficEnv-v0 -n 50000 -optimize --n-trials 1000 --n-jobs 2 --sampler random --pruner median
@@ -43,19 +44,12 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-base_sumo_port = 8800
-num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
-models = ["DQN", "A2C", "PPO", "TRPO", "TD3", "SAC"]
-
 def get_traffic_env(port, model, model_idx, is_learning):
     def _init():
         env = Monitor(TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=is_learning))
         # check_env(env, warn=True)
 
         # env.update_environment()  # Simulate a change in road conditions
-        
-        # if not is_learning:
-            # env = TimeLimit(Monitor(env), max_episode_steps = 60)
         
         return env
     return _init
@@ -70,12 +64,10 @@ def train_model(model_name, model, ports):
 
     try:
         create_sumocfg(model_name, num_envs_per_model)
-        if model_name in ["DQN", "A2C", "PPO", "TRPO"]:
+        if model_name in discrete_act_space_models:
             env_eval = SubprocVecEnv([get_traffic_env(base_sumo_port + len(ports) + i, model_name, i, is_learning = False) for i in len(ports)])
-        elif model_name == "TD3":
-            env_eval = DummyVecEnv([get_traffic_env(8850, model_name, 0, is_learning = False)])
-        elif model_name in "SAC":
-            env_eval = DummyVecEnv([get_traffic_env(8851, model_name, 0, is_learning = False)])
+        elif model_name in cont_act_space_models:
+            env_eval = DummyVecEnv([get_traffic_env(ports[0] + len(cont_act_space_models), model_name, 0, is_learning = False)])
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -87,12 +79,13 @@ def train_model(model_name, model, ports):
         )
 
         checkpoint_cb = CheckpointCallback(
-            save_freq=episode_length * num_envs_per_model,
+            save_freq=episode_length,
             save_path=model_dir,
-            name_prefix=f"rl_model_{model_name}",
+            name_prefix=f"rl_model_{model_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
             save_replay_buffer=True,
             save_vecnormalize=True,
-            )
+            verbose=1
+        )
         
         eval_cb = EvalCallback(
             env_eval,
@@ -102,7 +95,8 @@ def train_model(model_name, model, ports):
             n_eval_episodes=2,
             deterministic=True,
             render=False,
-            callback_after_eval = no_improve_cb
+            callback_after_eval = no_improve_cb,
+            verbose=1
         )
         
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
@@ -203,9 +197,9 @@ def train_trpo():
 def train_td3(): # NOTE: is has progress bar
     model_name = 'TD3'
     log_dir = f"./logs/{model_name}/"
-        
+    sumo_port = base_sumo_port + cont_act_space_models.index(model_name)
     model = TD3("MlpPolicy", 
-        DummyVecEnv([get_traffic_env(base_sumo_port, model_name, 0, is_learning = True)]),
+        DummyVecEnv([get_traffic_env(sumo_port, model_name, 0, is_learning = True)]),
         learning_rate=1e-3, 
         buffer_size=50000, 
         verbose=1, 
@@ -216,21 +210,45 @@ def train_td3(): # NOTE: is has progress bar
         train_freq=(1, "episode"), 
         gradient_steps=-1)
         
-    train_model(model_name, model, [base_sumo_port])
+    train_model(model_name, model, [sumo_port])
 
 def train_sac():
     model_name = 'SAC'
     log_dir = f"./logs/{model_name}/"
+    sumo_port = base_sumo_port + cont_act_space_models.index(model_name)
 
     model = SAC("MlpPolicy", 
-        DummyVecEnv([get_traffic_env(base_sumo_port + 1, model_name, 0, is_learning = True)]), 
+        DummyVecEnv([get_traffic_env(sumo_port, model_name, 0, is_learning = True)]), 
         learning_rate=1e-3,  # Same as DQN
         buffer_size=50000,  # Same as DQN
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda')
 
-    train_model(model_name, model, [base_sumo_port + 1])
+    train_model(model_name, model, [sumo_port])
+
+def train_ddpg():
+    model_name = 'DDPG'
+    log_dir = f"./logs/{model_name}/"
+    sumo_port = base_sumo_port + cont_act_space_models.index(model_name)
+
+    # Create the model
+    model = DDPG(
+        "MlpPolicy",
+        DummyVecEnv([get_traffic_env(sumo_port, model_name, 0, is_learning = True)]),
+        learning_rate=1e-3,
+        buffer_size=50000,
+        batch_size=64,
+        gamma=0.99,
+        tau=0.005,
+        train_freq=(1, 'episode'),
+        gradient_steps=-1,
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
+
+    train_model(model_name, model, [sumo_port])
 
 # FIXME: This is used to log the results of the training process, but for now is a mock
 def train_process_callback(result):
@@ -253,18 +271,20 @@ if __name__ == '__main__':
     # Cover the constraint of AssertionError: You must use only one env when doing episodic training
     for i in range(episodes * num_envs_per_model):
         # Create a pool of processes
-        pool = multiprocessing.Pool(processes=3)
+        pool = multiprocessing.Pool(processes=len(cont_act_space_models))
 
         # Collect async results
         async_results = [
             pool.apply_async(train_td3, callback=train_process_callback),
-            pool.apply_async(train_sac, callback=train_process_callback)
+            pool.apply_async(train_sac, callback=train_process_callback),
+            pool.apply_async(train_ddpg, callback=train_process_callback)
         ]
 
         # Close the pool and wait for all processes to finish
         logging.debug("Closing pool")
         pool.close()
         pool.join()
+        
 
 '''
 Run rl_learn.py through tunnel:

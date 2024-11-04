@@ -14,8 +14,8 @@ from traci.exceptions import FatalTraCIError, TraCIException
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
-
 from traffic_environment.rl_gym_environments import TrafficEnv
+from config import *
 
 # Configure logging
 logging.basicConfig(
@@ -25,9 +25,6 @@ logging.basicConfig(
         logging.StreamHandler()  # Output logs to stderr (default)
     ]
 )
-
-test_without_electric = False
-test_without_disobedient = False
 
 # Define a custom TensorBoard callback that accepts an environment and model
 class TensorboardCallback(BaseCallback):
@@ -83,35 +80,6 @@ def reward_filter_flat_lines(rewards, threshold=1e-2, flat_line_threshold=10):
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 logging.getLogger('PIL').setLevel(logging.WARNING)
 
-model_paths = {
-    "PPO": "rl_models/PPO/best_model",
-    "A2C": "rl_models/A2C/best_model",
-    "DQN": "rl_models/DQN/best_model",
-    "TRPO": "rl_models/TRPO/best_model",
-    "TD3": "rl_models/TD3/best_model",
-    "SAC": "rl_models/SAC/best_model"
-}
-
-# Define colors for each agent
-colors = {
-    'PPO': 'grey',
-    'A2C': 'violet',
-    'DQN': 'turquoise',
-    'TRPO': 'lightgreen',
-    'TD3': 'khaki',
-    'SAC': 'chocolate'
-}
-ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815}
-
-results = {}
-
-metrics_to_plot = ['rewards'
-                #    , 'obs'
-                   , 'emissions'
-                   , 'mean speed'
-                   , 'flow'
-                   ]
-
 """ Metric Storage and Analysis """
 def save_metrics(metrics, agent_name):
     # Open the file using a context manager
@@ -122,7 +90,6 @@ def save_metrics(metrics, agent_name):
             metrics_file.write(','.join(map(str, metrics[key])) + '\n')
     
     # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
-
 
 def test_ppo():
     model_name = "PPO"

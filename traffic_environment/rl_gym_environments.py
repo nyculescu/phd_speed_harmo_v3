@@ -15,6 +15,7 @@ from traffic_environment.reward_functions import *
 from traffic_environment.road import *
 from traffic_environment.setup import *
 from traffic_environment.flow_gen import *
+from config import *
 
 # Initialize counters for vehicle types
 vehicle_counts = {
@@ -34,7 +35,7 @@ class TrafficEnv(gym.Env):
         self.model_idx = model_idx
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = np.array([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
-        if model == "TD3" or model == "SAC":
+        if model in cont_act_space_models:
             self.action_space = gym.spaces.Box(low=np.min(self.speed_limits), high=np.max(self.speed_limits), shape=(1,), dtype=np.float64)
         else:
             self.action_space = gym.spaces.Discrete(len(self.speed_limits))
@@ -199,7 +200,7 @@ class TrafficEnv(gym.Env):
                 [traci.lane.setMaxSpeed(segId, self.speed_limit / 3.6) for segId in segment] # km/h to m/s
             [traci.edge.setFriction(edgeId, self.frictionValue) for edgeId in edges]
 
-        if self.model == "TD3" or self.model == "SAC":
+        if self.model in cont_act_space_models:
             # Map continuous action to nearest discrete speed limit
             self.speed_limit = self.speed_limits[np.argmin(np.abs(self.speed_limits - action[0]))]
         else:
