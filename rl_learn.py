@@ -65,7 +65,7 @@ def train_model(model_name, model, ports):
     try:
         create_sumocfg(model_name, num_envs_per_model)
         if model_name in discrete_act_space_models:
-            env_eval = SubprocVecEnv([get_traffic_env(base_sumo_port + len(ports) + i, model_name, i, is_learning = False) for i in len(ports)])
+            env_eval = SubprocVecEnv([get_traffic_env(base_sumo_port + len(ports) + i, model_name, i, is_learning = False) for i in range(len(ports))])
         elif model_name in cont_act_space_models:
             env_eval = DummyVecEnv([get_traffic_env(ports[0] + len(cont_act_space_models), model_name, 0, is_learning = False)])
         
@@ -261,29 +261,29 @@ if __name__ == '__main__':
 
     # The training is splin into 2 processes that shall run independently
     # Training process 1
-    # for i in range(episodes):
-        # train_ppo()
-        # train_a2c()
-        # train_dqn()
-        # train_trpo()
+    for i in range(episodes):
+        train_ppo()
+        train_a2c()
+        train_dqn()
+        train_trpo()
     
     # Training process 2
     # Cover the constraint of AssertionError: You must use only one env when doing episodic training
-    for i in range(episodes * num_envs_per_model):
-        # Create a pool of processes
-        pool = multiprocessing.Pool(processes=len(cont_act_space_models))
+    # for i in range(episodes * num_envs_per_model):
+    #     # Create a pool of processes
+    #     pool = multiprocessing.Pool(processes=len(cont_act_space_models))
 
-        # Collect async results
-        async_results = [
-            pool.apply_async(train_td3, callback=train_process_callback),
-            pool.apply_async(train_sac, callback=train_process_callback),
-            pool.apply_async(train_ddpg, callback=train_process_callback)
-        ]
+    #     # Collect async results
+    #     async_results = [
+    #         pool.apply_async(train_td3, callback=train_process_callback),
+    #         pool.apply_async(train_sac, callback=train_process_callback),
+    #         pool.apply_async(train_ddpg, callback=train_process_callback)
+    #     ]
 
-        # Close the pool and wait for all processes to finish
-        logging.debug("Closing pool")
-        pool.close()
-        pool.join()
+    #     # Close the pool and wait for all processes to finish
+    #     logging.debug("Closing pool")
+    #     pool.close()
+    #     pool.join()
         
 
 '''
