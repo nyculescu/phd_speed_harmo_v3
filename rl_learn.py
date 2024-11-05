@@ -20,10 +20,16 @@ from traffic_environment.flow_gen import *
 import multiprocessing
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-import torch
-logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
+# import torch
+# logging.info(f"CUDA device name: {torch.cuda.get_device_name(torch.cuda.current_device())}")
 from datetime import datetime 
 from config import *
+from time import sleep
+import gc
+from memory_profiler import profile
+
+# import platform
+# logging.info(platform.architecture())
 
 # rl_zoo3 training script to train an agent /> python -m rl_zoo3.train --algo ppo --env TrafficEnv-v0 --eval-freq 10000 --save-freq 50000 --n-timesteps 1000000
 # Hyperparameter Optimization (Optuna with rl_zoo3) /> python -m rl_zoo3.train --algo dqn --env TrafficEnv-v0 -n 50000 -optimize --n-trials 1000 --n-jobs 2 --sampler random --pruner median
@@ -56,6 +62,7 @@ def get_traffic_env(port, model, model_idx, is_learning):
 
 # n_eval_episodes = 10  # Number of episodes for evaluation to obtain a reliable estimate of performance. https://stable-baselines.readthedocs.io/en/master/guide/rl_tips.html#how-to-evaluate-an-rl-algorithm
 
+@profile
 def train_model(model_name, model, ports):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
@@ -261,11 +268,20 @@ if __name__ == '__main__':
 
     # The training is splin into 2 processes that shall run independently
     # Training process 1
-    for i in range(episodes):
-        train_ppo()
-        train_a2c()
-        train_dqn()
-        train_trpo()
+    for m in discrete_act_space_models:
+        for i in range(episodes):
+            print(f"Starting training for {m}, Episode {i+1}/{episodes}")
+            # Train the model based on its name
+            if m == 'PPO':
+                train_ppo()
+            elif m == 'A2C':
+                train_a2c()
+            elif m == 'DQN':
+                train_dqn()
+            elif m == 'TRPO':
+                train_trpo()
+            sleep(30)
+            gc.collect()
     
     # Training process 2
     # Cover the constraint of AssertionError: You must use only one env when doing episodic training
@@ -287,6 +303,8 @@ if __name__ == '__main__':
         
 
 '''
+Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py
+
 Run rl_learn.py through tunnel:
 />  d:/phd_ws/speed_harmo/phd_speed_harmo_v3/.py310_tf_env/Scripts/python.exe d:/phd_ws/speed_harmo/phd_speed_harmo_v3/rl_learn.py
 '''

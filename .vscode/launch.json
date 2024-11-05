@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug RL Learn with Memory Profiler",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "memory_profiler",
+            "args": ["rl_learn.py"],
+            "justMyCode": false,
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "D:\\progr_files\\Eclipse\\Sumo\\tools;${workspaceFolder};${env:PYTHONPATH}",
+                "PYTHONUNBUFFERED": "1"
+            },
+            "envFile": "${workspaceFolder}/.py310_tf_env"
+        }
+    ]
+}
