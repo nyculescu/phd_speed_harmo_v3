@@ -29,9 +29,10 @@ colors = {
     'DQN': 'turquoise',
     'TRPO': 'lightgreen',
     'TD3': 'khaki',
-    'SAC': 'chocolate'
+    'SAC': 'chocolate',
+    'DDPG': 'darkblue'
 }
-ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815}
+ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815, 'DDPG': 8816}
 
 results = {}
 
