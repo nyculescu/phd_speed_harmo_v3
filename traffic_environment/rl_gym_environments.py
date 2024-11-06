@@ -115,6 +115,7 @@ class TrafficEnv(gym.Env):
             self.target_min = target_min
             self.target_max = target_max
 
+    # FIXME: not enabled for now, because the training could take longer and the reward function could require adjustements
     def update_environment(self):
         # Simulate changing road conditions
         conditions = ["dry", "wet", "icy"]

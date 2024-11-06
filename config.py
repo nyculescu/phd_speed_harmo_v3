@@ -3,7 +3,7 @@ import os
 import sys
 
 """ General configuration """
-cont_act_space_models = ["TD3", "SAC", "DDPG"] # Models with continuous action spaces
+cont_act_space_models = ["TD3", "SAC", "DDPG", "PRDDPG"] # Models with continuous action spaces
 discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] # Models with discrete action spaces
 all_models = cont_act_space_models + discrete_act_space_models
 

@@ -16,6 +16,7 @@ from stable_baselines3.common.logger import configure
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
+from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
 # import gymnasium as gym
 import multiprocessing
 import os
@@ -206,7 +207,7 @@ def train_trpo():
 
     train_model(model_name, model)
 
-def train_td3(): # NOTE: is has progress bar
+def train_td3():
     model_name = 'TD3'
     log_dir = f"./logs/{model_name}/"
 
@@ -260,6 +261,27 @@ def train_ddpg():
 
     train_model(model_name, model)
 
+def train_prddpg():
+    model_name = 'PRDDPG'
+    log_dir = f"./logs/{model_name}/"
+
+    model = PRDDPG(
+        "MlpPolicy",
+        DummyVecEnv([get_traffic_env(base_sumo_port + cont_act_space_models.index(model_name), model_name, 0, is_learning = True)]),
+        learning_rate=1e-3,
+        buffer_size=50000,
+        batch_size=64,
+        gamma=0.99,
+        tau=0.005,
+        train_freq=(1, 'episode'),
+        gradient_steps=-1,
+        verbose=1,
+        tensorboard_log=log_dir,
+        device='cuda'
+    )
+
+    train_model(model_name, model)
+
 # FIXME: This is used to log the results of the training process, but for now is a mock
 def train_process_callback(result):
     logging.debug(f"Process finished with result: {result}")
@@ -273,28 +295,27 @@ if __name__ == '__main__':
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
 
     # The training is splin into 2 processes that shall run independently
-    # Training process 1
-    for m in discrete_act_space_models:
-        for i in range(episodes):
-            logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
-            # Train the model based on its name
-            if m == 'TRPO':
-                train_trpo()
-                # logging.info(f"Skipping {m} training.")
-            elif m == 'A2C':
-                # train_a2c()
-                logging.info(f"Skipping {m} training.")
-            elif m == 'DQN':
-                # train_dqn()
-                logging.info(f"Skipping {m} training.")
-            elif m == 'PPO':
-                # train_ppo()
-                logging.info(f"Skipping {m} training.")
-            # sleep(2)
-            gc.collect()
+    # # Training process 1
+    # for m in discrete_act_space_models:
+    #     for i in range(episodes):
+    #         logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
+    #         # Train the model based on its name
+    #         if m == 'TRPO':
+    #             train_trpo()
+    #             # logging.info(f"Skipping {m} training.")
+    #         elif m == 'A2C':
+    #             # train_a2c()
+    #             logging.info(f"Skipping {m} training.")
+    #         elif m == 'DQN':
+    #             # train_dqn()
+    #             logging.info(f"Skipping {m} training.")
+    #         elif m == 'PPO':
+    #             # train_ppo()
+    #             logging.info(f"Skipping {m} training.")
+    #         # sleep(2)
+    #         gc.collect()
     
-    # Training process 2
-    # Cover the constraint of AssertionError: You must use only one env when doing episodic training
+    # # Training process 2 [Cover the constraint of AssertionError: You must use only one env when doing episodic training]
     # for i in range(episodes * num_envs_per_model):
     #     # Create a pool of processes
     #     pool = multiprocessing.Pool(processes=len(cont_act_space_models))
@@ -310,7 +331,9 @@ if __name__ == '__main__':
     #     logging.debug("Closing pool")
     #     pool.close()
     #     pool.join()
-        
+
+    # Debug section
+    train_prddpg()
 
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py

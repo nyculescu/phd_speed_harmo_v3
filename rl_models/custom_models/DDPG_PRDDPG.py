@@ -10,40 +10,45 @@ class PRReplayBuffer(ReplayBuffer):
         self.beta_increment_per_sampling = beta_increment_per_sampling
         self.priorities = np.zeros((self.buffer_size,), dtype=np.float32)
 
-    def add(self, obs, next_obs, action, reward, done):
+    def add(self, obs, next_obs, action, reward, done, infos=None):
         # Add new experience and set initial priority
-        super().add(obs, next_obs, action, reward, done)
-        max_priority = np.max(self.priorities) if self.size > 0 else 1.0
-        self.priorities[self.pos] = max_priority
+        super().add(obs, next_obs, action, reward, done, infos)
+        current_size = len(self)
+        # Get valid priorities
+        if current_size > 0:
+            max_priority = np.max(self.priorities[:current_size])
+        else:
+            max_priority = 1.0  # Initial priority
+        # Update priority at the correct index
+        idx = (self.pos - 1) % self.buffer_size
+        self.priorities[idx] = max_priority
 
     def sample(self, batch_size):
+        current_size = len(self)
         # Compute probabilities based on priorities
-        priorities = self.priorities[:self.size] ** self.alpha
-        probabilities = priorities / np.sum(priorities)
+        priorities = self.priorities[:current_size] ** self.alpha
+        probabilities = priorities / priorities.sum()
 
         # Sample indices based on probability distribution
-        indices = np.random.choice(self.size, batch_size, p=probabilities)
+        indices = np.random.choice(current_size, batch_size, p=probabilities)
 
         # Importance-sampling weights
-        total = self.size
-        weights = (total * probabilities[indices]) ** (-self.beta)
-        weights /= weights.max()
-
-        # Increment beta towards 1 over time
+        total = current_size
         self.beta = min(1.0, self.beta + self.beta_increment_per_sampling)
+        weights = (total * probabilities[indices]) ** (-self.beta)
+        weights /= weights.max()  # Normalize for stability
 
-        # Get samples from replay buffer
-        batch = super().sample(batch_size)
-        
-        # Add importance-sampling weights and indices to the batch
-        batch['weights'] = weights
-        batch['indices'] = indices
-
-        return batch
+        # Get samples from the base class method
+        data = super()._get_samples(indices)
+        data = data._replace(weights=weights)
+        return data
 
     def update_priorities(self, indices, td_errors):
         # Update priorities based on TD-errors
-        self.priorities[indices] = np.abs(td_errors) + 1e-5  # Add small epsilon to avoid zero priority
+        self.priorities[indices] = (np.abs(td_errors) + 1e-5) ** self.alpha
+
+    def __len__(self):
+        return self.pos if not self.full else self.buffer_size
 
 from stable_baselines3 import DDPG
 
@@ -52,7 +57,7 @@ class PRDDPG(DDPG):
         super(PRDDPG, self).__init__(*args, **kwargs)
         
         # Use custom prioritized replay buffer
-        self.replay_buffer = PrioritizedReplayBuffer(
+        self.replay_buffer = PRReplayBuffer(
             self.buffer_size,
             self.observation_space,
             self.action_space,
