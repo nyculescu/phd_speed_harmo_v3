@@ -139,7 +139,8 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 days_to_run_the_simu = 7 if self.is_learning else 1
-                flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, days=days_to_run_the_simu)
+                if self.is_learning:
+                    flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, num_days=days_to_run_the_simu)
                 
                 port = self.port
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)

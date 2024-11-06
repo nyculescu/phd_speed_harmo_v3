@@ -61,7 +61,7 @@ def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
     y[y < 50] = np.random.uniform(0, 50)
     return y.astype(int)[:48]  # Return first 48 entries for half-hour intervals
 
-def flow_generation_wrapper(daily_pattern_amplitude, model, idx, days):
+def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days):
     if mock_days_and_weeks:
         dly_pattern = mock_daily_pattern
     else:
@@ -70,31 +70,30 @@ def flow_generation_wrapper(daily_pattern_amplitude, model, idx, days):
 
     if model == "all":
         # Generate content for DQN model
-        flow_generation("DQN", idx, daily_pattern_ampl, days)
+        flow_generation(all_models[0], 0, daily_pattern_ampl, num_days)
         
         # Read the content from the DQN file
-        firstmodel_file_path = f"./traffic_environment/sumo/generated_flows_{all_models[0]}_{idx}.rou.xml"
-        with open(firstmodel_file_path, 'r') as f:
+        with open(f"./traffic_environment/sumo/generated_flows_{all_models[0]}_{0}.rou.xml", 'r') as f:
             firstmodel_file_path_content = f.read()
 
         # Write the content to the files for the other models (except the first one)
         for m in all_models[1:]:
-            file_path = f"./traffic_environment/sumo/generated_flows_{m}_{idx}.rou.xml"
+            file_path = f"./traffic_environment/sumo/generated_flows_{m}_{0}.rou.xml"
             with open(file_path, 'w') as f:
                 f.write(firstmodel_file_path_content)
     elif model in all_models:
-        flow_generation(model, idx, daily_pattern_ampl, days)
+        flow_generation(model, idx, daily_pattern_ampl, num_days)
     else:
         logging.error(f"Model {model} is not supported. Supported models are: {all_models}")
 
-def flow_generation(model, idx, daily_pattern_ampl, days):
+def flow_generation(model, idx, daily_pattern_ampl, num_days):
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
         # Iterate over each pair of rates
-        for day_index in range(0, days):
+        for day_index in range(0, num_days):
             for i in range(0, len(daily_pattern_ampl), 2):
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)

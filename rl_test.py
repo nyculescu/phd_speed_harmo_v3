@@ -465,9 +465,9 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     async_results = []
-    flow_generation_wrapper(daily_pattern_amplitude = 0.1, model = "all", idx = 0, days = 1)
+    flow_generation_wrapper(daily_pattern_amplitude = 0.1, model = "all", idx = 0, num_days = 1)
     test_without_electric = False
-    test_without_disobedient = True
+    test_without_disobedient = False
     sleep(1)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
