@@ -99,8 +99,6 @@ def test_ppo():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -138,8 +136,6 @@ def test_a2c():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -177,8 +173,6 @@ def test_dqn():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -216,8 +210,6 @@ def test_td3():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -255,8 +247,6 @@ def test_trpo():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -294,8 +284,6 @@ def test_sac():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -333,8 +321,6 @@ def test_ddpg():
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
     env.is_learning = False
-    env.test_without_electric = test_without_electric
-    env.test_without_disobedient = test_without_disobedient
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -465,10 +451,12 @@ def plot_metrics(selected_models=None):
 
 if __name__ == '__main__':
     async_results = []
-    flow_generation_wrapper(daily_pattern_amplitude = 0.1, model = "all", idx = 0, num_days = 1)
-    test_without_electric = False
-    test_without_disobedient = False
-    sleep(1)
+
+    flow_generation_wrapper(daily_pattern_amplitude = -0.2, model = "all", idx = 0, num_days = 1)
+    
+    # override the default values defined in config.py
+    test_with_electric = True 
+    test_with_disobedient = False
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()

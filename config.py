@@ -9,8 +9,8 @@ all_models = cont_act_space_models + discrete_act_space_models
 
 base_sumo_port = 8800
 num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
-test_without_electric = False
-test_without_disobedient = False
+test_with_electric = True # default value
+test_with_disobedient = True # default value
 
 model_paths = {
     "PPO": "rl_models/PPO/best_model",

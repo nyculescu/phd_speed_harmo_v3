@@ -62,8 +62,8 @@ class TrafficEnv(gym.Env):
         self.is_learning = is_learning
         self.emissions_over_time = []
         self.mean_speed_over_time = []
-        self.test_without_electric = False
-        self.test_without_disobedient = False
+        self.test_with_electric = test_with_electric
+        self.test_with_disobedient = test_with_disobedient
         self.frictionValue = 1.0
         self.road_condition = "dry"  # Initial condition
         self.frictionValue = None
@@ -211,8 +211,8 @@ class TrafficEnv(gym.Env):
 
         # Step simulation and collect data
         for i in range(self.aggregation_time):
-            if not self.is_learning and self.test_without_electric:
-                # Identify vehicles of type "electric_passenger"
+            if not self.is_learning and not self.test_with_electric:
+                # Identify vehicles of type "electric_passenger" and change their emission class to match the corresponding petrol vehicle
                 vehicle_ids = traci.vehicle.getIDList()
                 for vehicle_id in vehicle_ids:
                     veh_id = traci.vehicle.getTypeID(vehicle_id)
@@ -224,7 +224,7 @@ class TrafficEnv(gym.Env):
                         traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/RT_le7.5t_Euro-VI_A-C")
                     if veh_id == "electric_motorcycle":
                         traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-6ab")
-            if not self.is_learning and self.test_without_disobedient:
+            if not self.is_learning and not self.test_with_disobedient:
                 # Identify vehicles of type "disobedient"
                 vehicle_ids = traci.vehicle.getIDList()
                 for vehicle_id in vehicle_ids:
