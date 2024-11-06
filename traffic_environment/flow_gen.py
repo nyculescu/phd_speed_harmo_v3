@@ -61,6 +61,12 @@ def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
     y[y < 50] = np.random.uniform(0, 50)
     return y.astype(int)[:48]  # Return first 48 entries for half-hour intervals
 
+"""
+    Wrapper function to generate flows for all models or a specific model.
+
+    Note: A daily_pattern_amplitude of -0.5 means 50% reduction from the high peak. 
+    The lower values of the distribution will be reducted by exponential decay (e.g., from 51 to 50 for the -50% from peak).
+"""
 def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days):
     if mock_days_and_weeks:
         dly_pattern = mock_daily_pattern
