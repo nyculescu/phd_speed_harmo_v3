@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from sb3_contrib import TRPO
-from stable_baselines3 import PPO, DQN, A2C, SAC, TD3
+from stable_baselines3 import PPO, DQN, A2C, SAC, TD3, DDPG
 # from stable_baselines3.common.env_checker import check_env
 from scipy import stats
 import logging
@@ -16,6 +16,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
 from traffic_environment.rl_gym_environments import TrafficEnv
 from config import *
+from traffic_environment.flow_gen import flow_generation_wrapper
 
 # Configure logging
 logging.basicConfig(
@@ -325,6 +326,45 @@ def test_sac():
 
     return (model_name, result)
 
+def test_ddpg():
+    model_name = "DDPG"
+    model = DDPG.load(model_paths[model_name])
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env.is_learning = False
+    env.test_without_electric = test_without_electric
+    env.test_without_disobedient = test_without_disobedient
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _ = env.reset()
+    done = False
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
 def process_callback(result):
     agent_name, agent_result = result
     logging.debug(f"Processing result for {agent_name}")
@@ -424,8 +464,8 @@ def plot_metrics(selected_models=None):
     plt.show(block=True)
 
 if __name__ == '__main__':
-    models_no = 6
-    # flow_generation_wrapper(model="all", idx=0, days=1)
+    async_results = []
+    flow_generation_wrapper(daily_pattern_amplitude = 0.1, model = "all", idx = 0, days = 1)
     test_without_electric = False
     test_without_disobedient = True
     sleep(1)
@@ -435,17 +475,17 @@ if __name__ == '__main__':
 
     logging.debug("Creating pool of processes")
     # Create a pool of processes
-    pool = multiprocessing.Pool(processes=models_no)
+    pool = multiprocessing.Pool(processes=len(all_models))
 
     # Collect async results
-    async_results = [
-        pool.apply_async(test_dqn, callback=process_callback),
-        pool.apply_async(test_ppo, callback=process_callback),
-        pool.apply_async(test_a2c, callback=process_callback),
-        pool.apply_async(test_trpo, callback=process_callback),
-        pool.apply_async(test_sac, callback=process_callback),
-        pool.apply_async(test_td3, callback=process_callback)
-    ]
+    for model_name in all_models:
+        test_func_name = f'test_{model_name.lower()}'
+        test_func = globals().get(test_func_name)
+        if test_func:
+            async_result = pool.apply_async(test_func, callback=process_callback)
+            async_results.append(async_result)
+        else:
+            print(f"Function {test_func_name} not found.")
 
     # Close the pool and wait for all processes to finish
     logging.debug("Closing pool")

@@ -3,9 +3,9 @@ import os
 import sys
 
 """ General configuration """
-models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC", "DDPG"]
 cont_act_space_models = ["TD3", "SAC", "DDPG"] # Models with continuous action spaces
 discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] # Models with discrete action spaces
+all_models = cont_act_space_models + discrete_act_space_models
 
 base_sumo_port = 8800
 num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized

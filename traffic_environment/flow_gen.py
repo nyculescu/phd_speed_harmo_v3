@@ -73,19 +73,19 @@ def flow_generation_wrapper(daily_pattern_amplitude, model, idx, days):
         flow_generation("DQN", idx, daily_pattern_ampl, days)
         
         # Read the content from the DQN file
-        firstmodel_file_path = f"./traffic_environment/sumo/generated_flows_{models[0]}_{idx}.rou.xml"
+        firstmodel_file_path = f"./traffic_environment/sumo/generated_flows_{all_models[0]}_{idx}.rou.xml"
         with open(firstmodel_file_path, 'r') as f:
             firstmodel_file_path_content = f.read()
 
         # Write the content to the files for the other models (except the first one)
-        for m in models[1:]:
+        for m in all_models[1:]:
             file_path = f"./traffic_environment/sumo/generated_flows_{m}_{idx}.rou.xml"
             with open(file_path, 'w') as f:
                 f.write(firstmodel_file_path_content)
-    elif model in models:
+    elif model in all_models:
         flow_generation(model, idx, daily_pattern_ampl, days)
     else:
-        logging.error(f"Model {model} is not supported. Supported models are: {models}")
+        logging.error(f"Model {model} is not supported. Supported models are: {all_models}")
 
 def flow_generation(model, idx, daily_pattern_ampl, days):
     # Open a .rou.xml file to write flows
