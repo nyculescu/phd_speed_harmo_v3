@@ -95,6 +95,7 @@ def save_metrics(metrics, agent_name):
 def test_ppo():
     model_name = "PPO"
     model = PPO.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -113,6 +114,10 @@ def test_ppo():
     tensorboard_callback = TensorboardCallback(env, model)
 
     while not done:
+        """ Note: deterministic=True: This parameter ensures that the agent selects actions without any exploration noise. 
+                For deterministic policies (like DDPG, TD3), this means no added noise. 
+                For stochastic policies (like PPO, A2C), the most probable action is chosen.
+        """
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
         
@@ -132,6 +137,7 @@ def test_ppo():
 def test_a2c():
     model_name = "A2C"
     model = A2C.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -169,6 +175,7 @@ def test_a2c():
 def test_dqn():
     model_name = "DQN"
     model = DQN.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -206,6 +213,7 @@ def test_dqn():
 def test_td3():
     model_name = "TD3"
     model = TD3.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -243,6 +251,7 @@ def test_td3():
 def test_trpo():
     model_name = "TRPO"
     model = TRPO.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -280,6 +289,7 @@ def test_trpo():
 def test_sac():
     model_name = "SAC"
     model = SAC.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -317,6 +327,7 @@ def test_sac():
 def test_ddpg():
     model_name = "DDPG"
     model = DDPG.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
@@ -453,9 +464,9 @@ if __name__ == '__main__':
     async_results = []
 
     flow_generation_wrapper(daily_pattern_amplitude = -0.2, model = "all", idx = 0, num_days = 1)
-    
+
     # override the default values defined in config.py
-    test_with_electric = True 
+    test_with_electric = False 
     test_with_disobedient = False
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
