@@ -142,8 +142,7 @@ class TrafficEnv(gym.Env):
                 flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, days=days_to_run_the_simu)
                 
                 port = self.port
-                logging.debug(f"Attempting to start SUMO on port {port}")
-                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui')
+                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
                 self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] 
                                                      + ["--remote-port", str(port)] + ["--quit-on-end"], 
                                     stdout=subprocess.PIPE, 

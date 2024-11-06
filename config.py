@@ -1,10 +1,11 @@
 import numpy as np
-from scipy.ndimage import gaussian_filter
+import os
+import sys
 
 """ General configuration """
 models = ["DQN", "A2C", "PPO", "TD3", "TRPO", "SAC", "DDPG"]
 cont_act_space_models = ["TD3", "SAC", "DDPG"] # Models with continuous action spaces
-discrete_act_space_models = ["DQN", "A2C", "PPO", "TRPO"] # Models with discrete action spaces
+discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] # Models with discrete action spaces
 
 base_sumo_port = 8800
 num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
@@ -98,3 +99,19 @@ day_off_factor = [
     np.random.uniform(0.7, 0.8), # Saturday
     np.random.uniform(0.7, 0.8)   # Sunday
 ]
+
+""" Configuration for the environment """
+# from https://sumo.dlr.de/docs/TraCI/Interfacing_TraCI_from_Python.html
+def check_sumo_env():
+    if 'SUMO_HOME' in os.environ:
+        tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
+        sys.path.append(tools)
+    else:
+        sys.exit("please declare environment variable 'SUMO_HOME'")
+# Notes: 
+#     A smaller step length (e.g., 0.5) => more frequent updates, which can slow down the simulation but increase accuracy. Conversely, increasing it (e.g., 1.0 or more) will speed up the simulation at the cost of some detail.  '--step-length', '0.5'
+# Running SUMO without the graphical interface can significantly speed up the simulation
+# sumoExecutable = 'sumo.exe' if os.name == 'nt' else 'sumo'
+# -d, --delay FLOAT  Use FLOAT in ms as delay between simulation steps
+sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
+sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)

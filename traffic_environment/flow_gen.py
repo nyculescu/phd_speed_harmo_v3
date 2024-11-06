@@ -2,6 +2,7 @@ import numpy as np
 import math
 import logging
 from config import *
+from scipy.ndimage import gaussian_filter
 
 # Adjust the amplitude of the daily pattern
 def adjust_amplitude(dly_pattern, amplitude_factor):
@@ -28,7 +29,7 @@ def bimodal_distribution(x = np.arange(0, 24.5, 0.5)): # 24.5 is used to include
         A2 * np.exp(-((x - mu2) ** 2) / (2 * sigma2 ** 2)) + 
         baseline
     )
-    if np.random.rand() < 0.25:  # 25% chance to add a third peak
+    if np.random.rand() < 0.5:  # 25% chance to add a third peak
         mu3 = 13.0 + np.random.uniform(-1.0, 1.0)  # Midday peak
         sigma3 = np.random.uniform(0.5, 1.0)
         A3 = np.random.uniform(0.3, 0.6)
