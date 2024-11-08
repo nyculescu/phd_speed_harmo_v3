@@ -75,7 +75,10 @@ class TrafficEnv(gym.Env):
         if self.is_learning:
             self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
         else:
-            self.sim_length = round(len(mock_daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
+            self.sim_length = round(len(mock_daily_pattern()) / 2 * 60 * 60 / self.aggregation_time)
+        
+        self.prev_act_spdlim = None
+        self.act_spdlim_change_amounts = []
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -141,7 +144,7 @@ class TrafficEnv(gym.Env):
             try:
                 days_to_run_the_simu = 7 if self.is_learning else 1
                 if self.is_learning:
-                    flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, num_days=days_to_run_the_simu)
+                    flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, num_days=days_to_run_the_simu, is_daily_pattern_mocked=False)
                 
                 port = self.port
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
@@ -288,6 +291,18 @@ class TrafficEnv(gym.Env):
 
         self.obs = np.array([avg_speed_now])
 
+        # If there is a previous action, compare it to the current action
+        if self.prev_act_spdlim is not None:
+            # Calculate the change in action
+            action_change = abs(self.speed_limit - self.prev_act_spdlim)
+            if action_change != 0:
+                self.act_spdlim_change_amounts.append(action_change)
+        else:
+            # First step, no previous action to compare
+            pass
+        # Update the previous action
+        self.prev_act_spdlim = self.speed_limit
+
         return self.obs, self.reward, done, False, {}
 
     def render(self):
@@ -331,9 +346,12 @@ class TrafficEnv(gym.Env):
         if self.is_learning:
             self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
         else:
-            self.sim_length = round(len(mock_daily_pattern) / 2 * 60 * 60 / self.aggregation_time)
+            self.sim_length = round(len(mock_daily_pattern()) / 2 * 60 * 60 / self.aggregation_time)
 
         obs = np.array([0], dtype=np.float64)
+
+        self.prev_act_spdlim = None
+        self.act_spdlim_change_amounts = []
         
         return obs, {}
     
