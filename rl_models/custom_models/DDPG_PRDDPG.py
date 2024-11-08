@@ -95,3 +95,5 @@ class PRDDPG(DDPG):
 
             # Update priorities in the replay buffer based on TD-errors
             self.replay_buffer.update_priorities(replay_data.indices.cpu().numpy(), td_errors.cpu().numpy())
+
+# FIXME: ERROR:root:An error occurred in one of the processes: 'PRDDPG' object has no attribute 'observation_space'
