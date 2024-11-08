@@ -3,8 +3,10 @@ import os
 import sys
 
 """ General configuration """
-cont_act_space_models = ["TD3", "SAC", "DDPG", "PRDDPG"] # Models with continuous action spaces
-discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] # Models with discrete action spaces
+# cust_cont_act_space_models = ["PRDDPG"]
+cont_act_space_models = ["TD3", "SAC", "DDPG"] #+ cust_cont_act_space_models # Models with continuous action spaces
+# cust_discrete_act_space_models = ["PFWDDQN"]
+discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] #+ cust_discrete_act_space_models # Models with discrete action spaces
 all_models = cont_act_space_models + discrete_act_space_models
 
 base_sumo_port = 8800
@@ -19,7 +21,8 @@ model_paths = {
     "TRPO": "rl_models/TRPO/best_model",
     "TD3": "rl_models/TD3/best_model",
     "SAC": "rl_models/SAC/best_model",
-    "DDPG": "rl_models/DDPG/best_model"
+    "DDPG": "rl_models/DDPG/best_model"#,
+    # "PRDDPG": "rl_models/PRDDPG/best_model"
 }
 
 """ Configuration for the model testing """
@@ -31,9 +34,18 @@ colors = {
     'TRPO': 'lightgreen',
     'TD3': 'khaki',
     'SAC': 'chocolate',
-    'DDPG': 'darkblue'
+    'DDPG': 'darkblue'#,
+    # 'PRDDPG': 'darkred'
 }
-ports = {'PPO': 8810, 'A2C': 8811, 'DQN': 8812, 'TRPO': 8813, 'TD3': 8814, 'SAC': 8815, 'DDPG': 8816}
+ports = {'PPO': 8850, 
+         'A2C': 8851, 
+         'DQN': 8852, 
+         'TRPO': 8853, 
+         'TD3': 8854, 
+         'SAC': 8855, 
+         'DDPG': 8856#, 
+        #  'PRDDPG': 8857
+         }
 
 results = {}
 
@@ -45,7 +57,7 @@ metrics_to_plot = ['rewards'
                    ]
 
 """  Configuration for the flow generation """
-mock_daily_pattern = [
+mock_daily_pattern_rand = [
     np.random.randint(25,     75),   np.random.randint(50,     75), # 00:00-00:30-01:00
     np.random.randint(25,     50),   np.random.randint(10,     25), # 01:00-01:30-02:00
     np.random.randint(25,     50),   np.random.randint(5,      10), # 02:00-02:30-03:00
@@ -72,33 +84,54 @@ mock_daily_pattern = [
     np.random.randint(50,    250),   np.random.randint(50 ,   100)  # 23:00-23:30-00:00
 ]
 
+mock_daily_pattern_fixed = [
+    10,    9, # 00:00-00:30-01:00
+    8,     6, # 01:00-01:30-02:00
+    5,     3, # 02:00-02:30-03:00
+    3,     5, # 03:00-03:30-04:00 
+    7,    10, # 04:00-04:30-05:00
+    25,   50, # 05:00-05:30-06:00
+    60,   75, # 06:00-06:30-07:00
+    100, 150, # 07:00-07:30-08:00
+    175, 225, # 08:00-08:30-09:00
+    150, 100, # 09:00-09:30-10:00
+    100, 125, # 10:00-10:30-11:00
+    125, 100, # 11:00-11:30-12:00
+    125, 150, # 12:00-12:30-13:00
+    175, 175, # 13:00-13:30-14:00
+    150, 125, # 14:00-14:30-15:00
+    75,  100, # 15:00-15:30-16:00
+    125, 150, # 16:00-16:30-17:00
+    200, 250, # 17:00-17:30-18:00
+    200, 175, # 18:00-18:30-19:00
+    100,  75, # 19:00-19:30-20:00
+    75,   50, # 20:00-20:30-21:00
+    50,   25, # 21:00-21:30-22:00
+    25,   15, # 22:00-22:30-23:00
+    15,   10  # 23:00-23:30-00:00
+]
+
 # Day of the week factor # TODO: add this one in flow generation
 day_of_the_week_factor = [
-    np.random.uniform(0.95, 1.05), # Monday
-    np.random.uniform(0.90, 1.10), # Tuesday
-    np.random.uniform(0.90, 1.10), # Wednesday
-    np.random.uniform(0.90, 1.10), # Thursday
-    np.random.uniform(0.95, 1.05), # Friday
+    1,                             # Monday
+    np.random.uniform(0.95, 1.05), # Tuesday
+    np.random.uniform(0.95, 1.05), # Wednesday
+    np.random.uniform(0.95, 1.05), # Thursday
+    np.random.uniform(0.95, 1.15), # Friday
     np.random.uniform(0.80, 1.2),  # Saturday
     np.random.uniform(0.80, 1.2)   # Sunday
 ]
 
-mock_days_and_weeks = False
-base_demand = np.random.randint(1300, 1800) # max no. of vehicles expected in any interval
-car_generation_rates = len(mock_daily_pattern) / 2 * len(day_of_the_week_factor)
+def mock_daily_pattern(isFixed = True):
+    retVal = np.array(mock_daily_pattern_fixed, dtype=int) # or mock_daily_pattern_rand
+    if not isFixed:
+        retVal = np.divide(retVal, 3)
+    return retVal
+
+base_demand = 1200 # max no. of vehicles expected in any interval / hour
+car_generation_rates = len(mock_daily_pattern()) / 2 * len(day_of_the_week_factor)
 addDisobedientVehicles = True
 addElectricVehicles = True
-
-# Day off factor (assuming no day off effect) # TODO: add this one in flow generation
-day_off_factor = [
-    np.random.uniform(0.95, 1.05),  # Monday
-    np.random.uniform(1.0, 1.05), # Tuesday
-    np.random.uniform(1.0, 1.05), # Wednesday
-    np.random.uniform(0.95, 1.05),  # Thursday
-    np.random.uniform(1.0, 1.10), # Friday
-    np.random.uniform(0.7, 0.8), # Saturday
-    np.random.uniform(0.7, 0.8)   # Sunday
-]
 
 """ Configuration for the environment """
 # from https://sumo.dlr.de/docs/TraCI/Interfacing_TraCI_from_Python.html

@@ -3,6 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from sb3_contrib import TRPO
 from stable_baselines3 import PPO, DQN, A2C, SAC, TD3, DDPG
+from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
 # from stable_baselines3.common.env_checker import check_env
 from scipy import stats
 import logging
@@ -17,6 +18,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from traffic_environment.rl_gym_environments import TrafficEnv
 from config import *
 from traffic_environment.flow_gen import flow_generation_wrapper
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -99,7 +101,6 @@ def test_ppo():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -128,7 +129,9 @@ def test_ppo():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
-
+    
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+    
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
@@ -141,7 +144,6 @@ def test_a2c():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -166,6 +168,8 @@ def test_a2c():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
 
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
@@ -179,7 +183,7 @@ def test_dqn():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
+    
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -204,6 +208,8 @@ def test_dqn():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
 
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
@@ -217,7 +223,7 @@ def test_td3():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
+    
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -242,6 +248,8 @@ def test_td3():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
 
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
@@ -255,7 +263,7 @@ def test_trpo():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
+    
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -280,6 +288,8 @@ def test_trpo():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
 
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
@@ -293,7 +303,7 @@ def test_sac():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
+    
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -318,6 +328,8 @@ def test_sac():
         rewards.append(reward)
     
     tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
 
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
@@ -331,7 +343,7 @@ def test_ddpg():
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    env.is_learning = False
+    
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -357,10 +369,53 @@ def test_ddpg():
     
     tf_logger.dump(step=0)  # Ensure logs are written
 
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
     metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
     result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
 
     return (model_name, result)
+
+def test_prddpg():
+    model_name = "DDPG"
+    model = PRDDPG.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _ = env.reset()
+    done = False
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
 
 def process_callback(result):
     agent_name, agent_result = result
@@ -368,23 +423,13 @@ def process_callback(result):
     results[agent_name] = agent_result
     save_metrics(agent_result, agent_name)
 
-def plot_metrics(selected_models=None):
-    # Default to all models if none are specified
-    if selected_models is None:
-        selected_models = list(results.keys())
-
-    # Calculate mean values
-    mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
-
-    # Calculate variance and standard deviation
-    variance_std_dev = {agent: {key: (np.var(values), np.std(values)) for key, values in metrics.items()} for agent, metrics in results.items()}
-
+def calc_anova(selected_models):
     """ Perform ANOVA 
     The script performs statistical analysis on the results using ANOVA (Analysis of Variance) to compare the performance of different agents across various metrics.
     This helps determine if there are statistically significant differences between the models' performances.
     """
     anova_results = {}
-    for metric in results['PPO'].keys():
+    for metric in results[all_models[0]].keys():
         data_for_anova = [results[agent][metric] for agent in selected_models]
         anova_result = stats.f_oneway(*data_for_anova)
         f_statistic = anova_result.statistic.item() if np.ndim(anova_result.statistic) > 0 else anova_result.statistic
@@ -397,6 +442,19 @@ def plot_metrics(selected_models=None):
         for metric in anova_results:
             f_statistic, p_value = anova_results[metric]
             f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
+
+def plot_metrics(test_with_electric, test_with_disobedient, selected_models=None):
+    # Default to all models if none are specified
+    if selected_models is None:
+        selected_models = list(results.keys())
+
+    # Calculate mean values
+    mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
+
+    # Calculate variance and standard deviation
+    variance_std_dev = {agent: {key: (np.var(values), np.std(values)) for key, values in metrics.items()} for agent, metrics in results.items()}
+
+    # calc_anova(selected_models)
 
     # Calculate mean values and performance percentages
     mean_values = {agent: {metric: np.mean(data[metric]) for metric in data} for agent, data in results.items()}
@@ -457,17 +515,33 @@ def plot_metrics(selected_models=None):
 
         plt.legend()
 
+    # Save figure before showing it
+    os.makedirs('eval/test_results', exist_ok=True)
+    
+    # Generate filename with date and time
+    current_time_str = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    file_name = f"full-day_elec-{test_with_electric}_disob-{test_with_disobedient}_{current_time_str}.png"
+    
+    # Save figure to eval/test_results folder with generated filename
+    save_path = os.path.join('eval', 'test_results', file_name)
+    
     plt.tight_layout()
-    plt.show(block=True)
+    
+    # Save the plot as a PNG file before showing it interactively
+    plt.savefig(save_path)  # Save figure
+    
+    # Show plot interactively (optional)
+    # plt.show(block=True)
 
 if __name__ == '__main__':
     async_results = []
 
-    flow_generation_wrapper(daily_pattern_amplitude = -0.2, model = "all", idx = 0, num_days = 1)
-
     # override the default values defined in config.py
     test_with_electric = False 
     test_with_disobedient = False
+    addDisobedientVehicles = True if test_with_electric else False
+    addElectricVehicles = True if test_with_disobedient else False
+    flow_generation_wrapper(daily_pattern_amplitude = -0.05, model = "all", idx = 0, num_days = 1, is_daily_pattern_mocked = True)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
@@ -501,7 +575,9 @@ if __name__ == '__main__':
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
-    plot_metrics()
+    plot_metrics(test_with_electric, test_with_disobedient)
+    
+    # test_prddpg()
 
     try:
         traci_close()

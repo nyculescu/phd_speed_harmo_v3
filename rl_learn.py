@@ -6,6 +6,8 @@ import logging.handlers
 
 from sb3_contrib import TRPO #, CrossQ, TQC
 from stable_baselines3 import PPO, DQN, A2C, SAC, TD3, DDPG #, DroQ
+from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
+from rl_models.custom_models.DQN_FPWDDQN import FPWDDQN
 # from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -16,7 +18,6 @@ from stable_baselines3.common.logger import configure
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
-from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
 # import gymnasium as gym
 import multiprocessing
 import os
@@ -74,9 +75,11 @@ def train_model(model_name, model):
         create_sumocfg(model_name, num_envs_per_model)
         if model_name in discrete_act_space_models:
             # The port is set as base + num_envs_per_model + 1 to avoid potential conflicts in case some SUMO processes are still running
-            env_eval = SubprocVecEnv([get_traffic_env(base_sumo_port + num_envs_per_model + 1, model_name, i, is_learning = False)])
+            env_eval = SubprocVecEnv([get_traffic_env(base_sumo_port + num_envs_per_model + 1, model_name, 0, is_learning = False)])
         elif model_name in cont_act_space_models:
             env_eval = DummyVecEnv([get_traffic_env(base_sumo_port + len(cont_act_space_models) + 1, model_name, 0, is_learning = False)])
+        else:
+            raise ValueError(f"Model '{model_name}' not found in the models list.")
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
@@ -166,6 +169,22 @@ def train_dqn():
                        ]), 
                 learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
                 device='cuda')
+    """
+    Notes:
+    1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
+    """
+    train_model(model_name, model)
+
+def train_fpwddqn():
+    model_name = 'PFWDDQN'
+    log_dir = f"./logs/{model_name}/"
+
+    model = FPWDDQN("MlpPolicy", 
+        SubprocVecEnv([get_traffic_env(base_sumo_port + idx, model_name, idx, is_learning=True) 
+               for idx in range(num_envs_per_model)
+               ]), 
+        learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
+        device='cuda')
     """
     Notes:
     1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
@@ -294,6 +313,7 @@ if __name__ == '__main__':
     if not check_sumo_env():
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
 
+    ########################################################
     # The training is splin into 2 processes that shall run independently
     # # Training process 1
     # for m in discrete_act_space_models:
@@ -315,6 +335,7 @@ if __name__ == '__main__':
     #         # sleep(2)
     #         gc.collect()
     
+    ########################################################
     # # Training process 2 [Cover the constraint of AssertionError: You must use only one env when doing episodic training]
     # for i in range(episodes * num_envs_per_model):
     #     # Create a pool of processes
@@ -332,8 +353,9 @@ if __name__ == '__main__':
     #     pool.close()
     #     pool.join()
 
+    ########################################################
     # Debug section
-    train_prddpg()
+    # train_fpwddqn()
 
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py

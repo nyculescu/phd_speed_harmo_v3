@@ -13,3 +13,4 @@ traffic_environment/sumo/loop_detector_metrics.xml
 multiprocessing_log.log
 eval/*.png
 tensorboard_logs/*_test/events.out.tfevents.*
+eval/test_results/*.png

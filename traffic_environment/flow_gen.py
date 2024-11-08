@@ -11,8 +11,10 @@ def adjust_amplitude(dly_pattern, amplitude_factor):
 # Define route and other common flow attributes
 route_id = "r_0"
 depart_lane = "free"
-depart_pos = "free"
-depart_speed = "speedLimit"
+# "base": the vehicle is tried to be inserted at the position which lets its back be at the beginning of the lane (vehicle's front position=vehicle length)
+depart_pos = "base"
+# "avg": The average speed on the departure lane is used (or the minimum of 'speedLimit' and 'desired' if the lane is empty). If that speed is unsafe, departure is delayed.
+depart_speed = "avg"
 lanes = 3
 
 def bimodal_distribution(x = np.arange(0, 24.5, 0.5)): # 24.5 is used to include 24:00
@@ -36,7 +38,7 @@ def bimodal_distribution(x = np.arange(0, 24.5, 0.5)): # 24.5 is used to include
         y += A3 * np.exp(-((x - mu3) ** 2) / (2 * sigma3 ** 2))
     y = y * (1 + gaussian_filter(np.random.normal(0, 0.02, size=y.shape), sigma=2)) # Add smoothed random noise to simulate natural fluctuations
     y = y / np.max(y) # Normalize to 1
-    y = y * base_demand # Scale up to base demand
+    y = y * (base_demand / 3) # Scale up to base demand
     return y.astype(int)[:48] # Return first 48 entries for 24 hours at half-hour intervals
 
 def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
@@ -56,7 +58,7 @@ def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
     # Add random noise and smooth it to simulate natural fluctuations
     y = y * (1 + gaussian_filter(np.random.normal(0, 0.02, size=y.shape), sigma=2))
     # Normalize to base demand
-    y = y / np.max(y) * base_demand
+    y = y / np.max(y) * (base_demand / 3)
     # Ensure no negative values and set minimum values between (0, 50)
     y[y < 50] = np.random.uniform(0, 50)
     return y.astype(int)[:48]  # Return first 48 entries for half-hour intervals
@@ -67,11 +69,12 @@ def triangular_distribution(x=np.arange(0, 24.5, 0.5)):
     Note: A daily_pattern_amplitude of -0.5 means 50% reduction from the high peak. 
     The lower values of the distribution will be reducted by exponential decay (e.g., from 51 to 50 for the -50% from peak).
 """
-def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days):
-    if mock_days_and_weeks:
-        dly_pattern = mock_daily_pattern
+def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days, is_daily_pattern_mocked):
+    if is_daily_pattern_mocked:
+        dly_pattern = mock_daily_pattern()
     else:
         dly_pattern = triangular_distribution() if np.random.choice([False, True]) else bimodal_distribution()
+
     daily_pattern_ampl = adjust_amplitude(dly_pattern, daily_pattern_amplitude)
 
     if model == "all":
@@ -206,8 +209,8 @@ def flow_generation(model, idx, daily_pattern_ampl, num_days):
                 begin_time = (day_index * len(daily_pattern_ampl) * 1800) + (i * 1800)
 
                 # Get vehsPerHour for current interval
-                vehs_per_hour_1 = daily_pattern_ampl[i] * day_of_the_week_factor[day_index]
-                vehs_per_hour_2 = daily_pattern_ampl[i+1] * day_of_the_week_factor[day_index]
+                vehs_per_hour_1 = daily_pattern_ampl[i]
+                vehs_per_hour_2 = daily_pattern_ampl[i+1]
                 
                 # Calculate the flow index based on the current iteration
                 flow_index = i // 2
@@ -219,35 +222,36 @@ def flow_generation(model, idx, daily_pattern_ampl, num_days):
                     
                     if vehs_1 > 0:
                         if "disobedient" in vehicle_type and addDisobedientVehicles:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                         f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                         elif "electric" in vehicle_type and addElectricVehicles:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                         f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
                         else:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" end="{begin_time + 1800}" '
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                        f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_0" type="{vehicle_type}" begin="{begin_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                         f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type}"/>\n'))
                     
                     if vehs_2 > 0:
                         if "disobedient" in vehicle_type and addDisobedientVehicles:
-                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
-                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                            begin_time += 30 * len(daily_pattern_ampl)
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                         elif "electric" in vehicle_type and addElectricVehicles:
-                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
-                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_1}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
                         else:
-                            flows.append((day_index, begin_time + (30 * len(daily_pattern_ampl)),
-                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time + 1800}" end="{begin_time + 3600}" '
+                            flows.append((day_index, begin_time + np.random.randint(0, 60),
+                                    f'    <flow id="{vehicle_type}_flow_{flow_index}_day_{day_index}_halfhr_1" type="{vehicle_type}" begin="{begin_time}" '
                                     f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                     f'route="{route_id}" vehsPerHour="{vehs_2}" guiShape="{vehicle_type}"/>\n'))
 
