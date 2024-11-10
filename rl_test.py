@@ -151,13 +151,13 @@ def plot_metrics(test_with_electric, test_with_disobedient, selected_models=None
         plt.subplot(5, 2, i * 2 + 1)
         for agent_name in selected_models:
             _, results[agent_name]["rewards"] = reward_filter_flat_lines(results[agent_name]["rewards"])
-            if metric == 'emissions':
+            if metric == metrics_to_plot[1]:
                 results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
-            elif metric == 'mean speed':
+            elif metric == metrics_to_plot[2]:
                 results[agent_name][metric] = moving_average(results[agent_name][metric], 10)
-            elif metric == 'flow':
+            elif metric == metrics_to_plot[3]:
                 results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
-            elif metric == 'vehicles in merging zone':
+            elif metric == metrics_to_plot[4]:
                 results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
 
             plt.plot(results[agent_name][metric],
