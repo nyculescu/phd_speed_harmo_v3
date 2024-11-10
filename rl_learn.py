@@ -68,7 +68,7 @@ def get_traffic_env(port, model, model_idx, is_learning):
 def train_model(model_name, model):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    episode_length = car_generation_rates * 60
+    episode_length = full_week_car_generation_rates * 60
     timesteps = episode_length * num_envs_per_model
 
     try:

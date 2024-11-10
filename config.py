@@ -54,6 +54,7 @@ metrics_to_plot = ['rewards'
                    , 'emissions'
                    , 'mean speed'
                    , 'flow'
+                   , 'density'
                    ]
 
 """  Configuration for the flow generation """
@@ -85,30 +86,30 @@ mock_daily_pattern_rand = [
 ]
 
 mock_daily_pattern_fixed = [
-    10,    9, # 00:00-00:30-01:00
-    8,     6, # 01:00-01:30-02:00
-    5,     3, # 02:00-02:30-03:00
-    3,     5, # 03:00-03:30-04:00 
-    7,    10, # 04:00-04:30-05:00
-    25,   50, # 05:00-05:30-06:00
-    60,   75, # 06:00-06:30-07:00
-    100, 150, # 07:00-07:30-08:00
-    175, 225, # 08:00-08:30-09:00
-    150, 100, # 09:00-09:30-10:00
-    100, 125, # 10:00-10:30-11:00
-    125, 100, # 11:00-11:30-12:00
-    125, 150, # 12:00-12:30-13:00
-    175, 175, # 13:00-13:30-14:00
-    150, 125, # 14:00-14:30-15:00
-    75,  100, # 15:00-15:30-16:00
-    125, 150, # 16:00-16:30-17:00
-    200, 250, # 17:00-17:30-18:00
-    200, 175, # 18:00-18:30-19:00
-    100,  75, # 19:00-19:30-20:00
-    75,   50, # 20:00-20:30-21:00
-    50,   25, # 21:00-21:30-22:00
-    25,   15, # 22:00-22:30-23:00
-    15,   10  # 23:00-23:30-00:00
+    8,   # 00:00
+    2,   # 01:00
+    4,   # 02:00
+    5,   # 03:00
+    7,   # 04:00
+    18,  # 05:00
+    41,  # 06:00
+    76,  # 07:00
+    100, # 08:00
+    97,  # 09:00
+    79,  # 10:00
+    64,  # 11:00
+    62,  # 12:00
+    68,  # 13:00
+    78,  # 14:00
+    88,  # 15:00
+    96,  # 16:00
+    95,  # 17:00
+    87,  # 18:00
+    72,  # 19:00
+    53,  # 20:00
+    34,  # 21:00
+    19,  # 22:00
+    9    # 23:00
 ]
 
 # Day of the week factor # TODO: add this one in flow generation
@@ -116,20 +117,20 @@ day_of_the_week_factor = [
     1,                             # Monday
     np.random.uniform(0.95, 1.05), # Tuesday
     np.random.uniform(0.95, 1.05), # Wednesday
-    np.random.uniform(0.95, 1.05), # Thursday
-    np.random.uniform(0.95, 1.15), # Friday
-    np.random.uniform(0.80, 1.2),  # Saturday
-    np.random.uniform(0.80, 1.2)   # Sunday
+    np.random.uniform(0.75, 0.85), # Thursday
+    np.random.uniform(0.65, 0.75), # Friday
+    np.random.uniform(0.30, 0.70),  # Saturday
+    np.random.uniform(0.30, 0.70)   # Sunday
 ]
 
 def mock_daily_pattern(isFixed = True):
     retVal = np.array(mock_daily_pattern_fixed, dtype=int) # or mock_daily_pattern_rand
-    if not isFixed:
-        retVal = np.divide(retVal, 3)
+    if isFixed:
+        retVal = np.multiply(retVal, 3)
     return retVal
 
-base_demand = 1200 # max no. of vehicles expected in any interval / hour
-car_generation_rates = len(mock_daily_pattern()) / 2 * len(day_of_the_week_factor)
+full_day_car_generation_base_demand = 300 # max no. of vehicles expected in any interval / hour
+full_week_car_generation_rates = len(mock_daily_pattern()) * len(day_of_the_week_factor)
 addDisobedientVehicles = True
 addElectricVehicles = True
 

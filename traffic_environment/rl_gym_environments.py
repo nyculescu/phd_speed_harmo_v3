@@ -45,11 +45,7 @@ class TrafficEnv(gym.Env):
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
         self.mean_speeds_mps = []
         self.mean_emissions = []
-        self.mean_num_halts = []
-        self.mean_occupancy = []
         self.occupancy_sum = 0
-        self.occupancy_avg = 0
-        self.occupancy_curr = 0
         self.occupancy = 0
         self.flow = 0
         self.flows = []
@@ -71,14 +67,11 @@ class TrafficEnv(gym.Env):
         self.target_friction = None
         self.target_min = None
         self.target_max = None
-
-        if self.is_learning:
-            self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
-        else:
-            self.sim_length = round(len(mock_daily_pattern()) / 2 * 60 * 60 / self.aggregation_time)
-        
+        self.is_first_step_delay_on = False
+        self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
         self.prev_act_spdlim = None
         self.act_spdlim_change_amounts = []
+        self.density = []
 
     def reward_func_wrap(self):
         return quad_occ_reward(self.occupancy)
@@ -118,7 +111,7 @@ class TrafficEnv(gym.Env):
             self.target_min = target_min
             self.target_max = target_max
 
-    # FIXME: not enabled for now, because the training could take longer and the reward function could require adjustements
+    # FIXME: not used for now, because the training could take longer and the reward function could require adjustements
     def update_environment(self):
         # Simulate changing road conditions
         conditions = ["dry", "wet", "icy"]
@@ -149,7 +142,12 @@ class TrafficEnv(gym.Env):
                 port = self.port
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
                 self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] 
-                                                     + ["--remote-port", str(port)] + ["--quit-on-end"], 
+                                                     + ["--default.emergencydecel=7"]
+                                                    #  + ["--emergencydecel.warning-threshold=1"]
+                                                     + ['--random-depart-offset=3600']
+                                                     + ["--remote-port", str(port)] 
+                                                     + ["--quit-on-end"] 
+                                                       ,
                                     stdout=subprocess.PIPE, 
                                     stderr=subprocess.PIPE)
                 logging.debug(f"Attempting to connect to SUMO on port {port}")
@@ -192,15 +190,13 @@ class TrafficEnv(gym.Env):
         # elif self.frictionValue < self.target_min:
         #     self.frictionValue = self.target_min
 
-        self.frictionValue = 1.0
-
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if not is_sumo_running:
             self.start_sumo()
         else:
             for segment in [seg_1_before]:
                 [traci.lane.setMaxSpeed(segId, self.speed_limit / 3.6) for segId in segment] # km/h to m/s
-            [traci.edge.setFriction(edgeId, self.frictionValue) for edgeId in edges]
+            # [traci.edge.setFriction(edgeId, self.frictionValue) for edgeId in edges]
 
         if self.model in cont_act_space_models:
             # Map continuous action to nearest discrete speed limit
@@ -209,11 +205,22 @@ class TrafficEnv(gym.Env):
             # Apply action
             self.speed_limit = self.speed_limits[action]
 
-        mean_speeds_edges_mps = np.zeros(len(edges))
-        emissions_edges = np.zeros(len(edges))
         veh_time_sum = 0
-
+        num_vehicles_in_merging_zone_temp = 0
+        mean_speeds_seg_0_before_mps_temp = 0
+        emissions_seg_0_before_temp = 0
         # Step simulation and collect data
+        while self.is_first_step_delay_on:
+            try:
+                traci.simulationStep()
+                if traci.edge.getLastStepVehicleNumber("seg_0_after") > 0:
+                    self.is_first_step_delay_on = False
+                    break
+            except (FatalTraCIError, TraCIException):
+                logging.debug("Lost connection to SUMO from first step")
+                self.close_sumo("lost comm with SUMO")
+                return self.reset()
+
         for i in range(self.aggregation_time):
             if not self.is_learning and not self.test_with_electric:
                 # Identify vehicles of type "electric_passenger" and change their emission class to match the corresponding petrol vehicle
@@ -240,15 +247,15 @@ class TrafficEnv(gym.Env):
             try:
                 traci.simulationStep()
             except (FatalTraCIError, TraCIException):
-                logging.debug("Lost connection to SUMO. Attempting to reconnect...")
+                logging.debug("Lost connection to SUMO from steps")
                 self.close_sumo("lost comm with SUMO")
-                return self.reset()[0]*4, 0, True, False, {}  # End episode on connection loss
+                return self.reset()  # End episode on connection loss
 
             veh_time_sum += sum([traci.inductionloop.getLastStepVehicleNumber(loop) for loop in loops_after])
 
-            for idx, edge in enumerate(edges):
-                mean_speeds_edges_mps[idx] += traci.edge.getLastStepMeanSpeed(edge)
-                emissions_edges[idx] += traci.edge.getCO2Emission(edge)
+            mean_speeds_seg_0_before_mps_temp += traci.edge.getLastStepMeanSpeed("seg_1_before")
+            emissions_seg_0_before_temp += traci.edge.getCO2Emission("seg_1_before")
+            num_vehicles_in_merging_zone_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
 
             occ_max = 0
             for loops in loops_before:
@@ -256,12 +263,11 @@ class TrafficEnv(gym.Env):
                 if occ_loop > occ_max:
                     occ_max = occ_loop
             
-            self.occupancy_curr = occ_max
             self.occupancy_sum += occ_max
-
+        
         # Calculate average speed and emissions over the aggregation period
-        avg_speed_now = np.mean(mean_speeds_edges_mps) / self.aggregation_time
-        self.total_emissions_now = np.sum(emissions_edges) / self.aggregation_time
+        avg_speed_now = np.mean(mean_speeds_seg_0_before_mps_temp) / self.aggregation_time
+        self.total_emissions_now = np.sum(emissions_seg_0_before_temp) / self.aggregation_time
 
         # Update previous state variables
         self.emissions_over_time.append(self.total_emissions_now)
@@ -272,16 +278,22 @@ class TrafficEnv(gym.Env):
         
         self.rewards.append(self.reward)
 
-        flow = (veh_time_sum / self.aggregation_time) * (car_generation_rates * 60 * 60)
+        flow = (veh_time_sum / self.aggregation_time) * (full_week_car_generation_rates * 60 * 60)
         self.flows.append(flow)
+        self.density.append(num_vehicles_in_merging_zone_temp / traci.lane.getLength("seg_0_before_0") / 3)
 
         self.occupancy = self.occupancy_sum / self.aggregation_time
 
         self.sim_length -= 1  # Reduce simulation length by 1 second
-        done = self.sim_length <= 0
+        done = False
+        if self.sim_length <= 0:
+            if not self.is_learning and traci.edge.getLastStepVehicleNumber("seg_0_before") > 0:
+                pass # wait until no vehicle is present in the merging zone
+            else:
+                done = True
+
         if done:
             self.close_sumo("simulation done")
-            self.rewards = []
 
         # if self.sim_length % 60 == 0:
         #     self.hour += 1
@@ -321,8 +333,6 @@ class TrafficEnv(gym.Env):
         self.isUnstableFlowConditions = False
         self.mean_speeds_mps = []
         self.mean_emissions = []
-        self.mean_num_halts = []
-        self.mean_occupancy = []
         self.flow = 0
         self.flows = []
         self.total_waiting_time = 0
@@ -330,30 +340,27 @@ class TrafficEnv(gym.Env):
         self.sumo_max_retries = 5
         self.occupancy_sum = 0
         self.occupancy = 0
-        self.occupancy_avg = 0
-        self.occupancy_curr = 0
         self.rewards = []
         self.avg_speed_now = 0
         self.total_emissions_now = 0
         self.emissions_over_time = []
         self.mean_speed_over_time = []
         self.frictionValue = 1.0 # Dry road: friction = 1.0; Wet road: friction = 0.7; Icy road: friction = 0.3
+        self.is_first_step_delay_on = True
+        self.density = []
 
         # Reset params
         self.speed_limit = 130
         
         # Reset time
-        if self.is_learning:
-            self.sim_length = round((car_generation_rates * 60 * 60) / self.aggregation_time)
-        else:
-            self.sim_length = round(len(mock_daily_pattern()) / 2 * 60 * 60 / self.aggregation_time)
+        self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
 
-        obs = np.array([0], dtype=np.float64)
+        self.obs = np.array([0], dtype=np.float64)
 
         self.prev_act_spdlim = None
         self.act_spdlim_change_amounts = []
         
-        return obs, {}
+        return self.obs, self.rewards, False, False, {}
     
     def close(self):
         self.close_sumo("close() method called")

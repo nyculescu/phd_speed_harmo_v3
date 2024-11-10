@@ -51,7 +51,7 @@ class TensorboardCallback(BaseCallback):
         
         return True  # Continue running the environment
 
-def reward_filter_flat_lines(rewards, threshold=1e-2, flat_line_threshold=10):
+def reward_filter_flat_lines(rewards, threshold=1e-2, flat_line_threshold=50):
     # Compute differences between consecutive rewards
     diffs = np.abs(np.diff(rewards))
     
@@ -79,350 +79,6 @@ def reward_filter_flat_lines(rewards, threshold=1e-2, flat_line_threshold=10):
     
     return filtered_indices, filtered_rewards
 
-# Suppress matplotlib debug output
-logging.getLogger('matplotlib').setLevel(logging.WARNING)
-logging.getLogger('PIL').setLevel(logging.WARNING)
-
-""" Metric Storage and Analysis """
-def save_metrics(metrics, agent_name):
-    # Open the file using a context manager
-    with open(f'./logs/{agent_name}_metrics.csv', 'w+') as metrics_file:
-        # Iterate over each key and write its corresponding values
-        for key in metrics_to_plot:
-            # Convert list to comma-separated string and write to file
-            metrics_file.write(','.join(map(str, metrics[key])) + '\n')
-    
-    # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
-
-def test_ppo():
-    model_name = "PPO"
-    model = PPO.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        """ Note: deterministic=True: This parameter ensures that the agent selects actions without any exploration noise. 
-                For deterministic policies (like DDPG, TD3), this means no added noise. 
-                For stochastic policies (like PPO, A2C), the most probable action is chosen.
-        """
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-    
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-    
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_a2c():
-    model_name = "A2C"
-    model = A2C.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_dqn():
-    model_name = "DQN"
-    model = DQN.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_td3():
-    model_name = "TD3"
-    model = TD3.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_trpo():
-    model_name = "TRPO"
-    model = TRPO.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_sac():
-    model_name = "SAC"
-    model = SAC.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_ddpg():
-    model_name = "DDPG"
-    model = DDPG.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-def test_prddpg():
-    model_name = "DDPG"
-    model = PRDDPG.load(model_paths[model_name])
-    model.policy.eval()  # Set policy to evaluation mode
-    # test_model(model, model_name)
-    logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
-    
-    # check_env(env)
-    
-    # Set up TensorBoard logger
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    obs, _ = env.reset()
-    done = False
-
-    rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
-
-    while not done:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
-        rewards.append(reward)
-    
-    tf_logger.dump(step=0)  # Ensure logs are written
-
-    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
-
-    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
-    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
-
-    return (model_name, result)
-
-
-def process_callback(result):
-    agent_name, agent_result = result
-    logging.debug(f"Processing result for {agent_name}")
-    results[agent_name] = agent_result
-    save_metrics(agent_result, agent_name)
-
 def calc_anova(selected_models):
     """ Perform ANOVA 
     The script performs statistical analysis on the results using ANOVA (Analysis of Variance) to compare the performance of different agents across various metrics.
@@ -442,6 +98,22 @@ def calc_anova(selected_models):
         for metric in anova_results:
             f_statistic, p_value = anova_results[metric]
             f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
+
+# Moving average function for smoothing
+def moving_average(data, window_size):
+    if window_size < 1:
+        return data
+    return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
+
+def save_metrics(metrics, agent_name):
+    # Open the file using a context manager
+    with open(f'./logs/{agent_name}_metrics.csv', 'w+') as metrics_file:
+        # Iterate over each key and write its corresponding values
+        for key in metrics_to_plot:
+            # Convert list to comma-separated string and write to file
+            metrics_file.write(','.join(map(str, metrics[key])) + '\n')
+    
+    # pd.DataFrame(metrics['cvs_seg_time']).to_csv(f'./metrics/{agent_name}.csv', index=False, header=False)
 
 def plot_metrics(test_with_electric, test_with_disobedient, selected_models=None):
     # Default to all models if none are specified
@@ -479,6 +151,14 @@ def plot_metrics(test_with_electric, test_with_disobedient, selected_models=None
         plt.subplot(5, 2, i * 2 + 1)
         for agent_name in selected_models:
             _, results[agent_name]["rewards"] = reward_filter_flat_lines(results[agent_name]["rewards"])
+            if metric == 'emissions':
+                results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
+            elif metric == 'mean speed':
+                results[agent_name][metric] = moving_average(results[agent_name][metric], 10)
+            elif metric == 'flow':
+                results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
+            elif metric == 'vehicles in merging zone':
+                results[agent_name][metric] = moving_average(results[agent_name][metric], 25)
 
             plt.plot(results[agent_name][metric],
                      label=f"{agent_name} ({performance_percentage[metric][agent_name]:.2f}%)",
@@ -533,15 +213,341 @@ def plot_metrics(test_with_electric, test_with_disobedient, selected_models=None
     # Show plot interactively (optional)
     # plt.show(block=True)
 
+# Suppress matplotlib debug output
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
+
+""" Metric Storage and Analysis """
+
+def process_callback(result):
+    agent_name, agent_result = result
+    logging.debug(f"Processing result for {agent_name}")
+    results[agent_name] = agent_result
+    save_metrics(agent_result, agent_name)
+
+def test_ppo():
+    model_name = "PPO"
+    model = PPO.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        """ Note: deterministic=True: This parameter ensures that the agent selects actions without any exploration noise. 
+                For deterministic policies (like DDPG, TD3), this means no added noise. 
+                For stochastic policies (like PPO, A2C), the most probable action is chosen.
+        """
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+    
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+    
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_a2c():
+    model_name = "A2C"
+    model = A2C.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_dqn():
+    model_name = "DQN"
+    model = DQN.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_td3():
+    model_name = "TD3"
+    model = TD3.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_trpo():
+    model_name = "TRPO"
+    model = TRPO.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_sac():
+    model_name = "SAC"
+    model = SAC.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_ddpg():
+    model_name = "DDPG"
+    model = DDPG.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows, env.density]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
+def test_prddpg():
+    model_name = "DDPG"
+    model = PRDDPG.load(model_paths[model_name])
+    model.policy.eval()  # Set policy to evaluation mode
+    # test_model(model, model_name)
+    logging.debug(f"Starting {model_name} test")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    
+    # check_env(env)
+    
+    # Set up TensorBoard logger
+    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
+    model.set_logger(tf_logger)
+
+    obs, _, done, _, _ = env.reset()
+
+    rewards = []
+    # Initialize custom callback for logging with the environment passed in
+    tensorboard_callback = TensorboardCallback(env, model)
+
+    while not done:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, done, _, _ = env.step(action)
+        
+        # Log reward and other metrics to TensorBoard using the callback
+        tensorboard_callback.locals = {'rewards': reward}
+        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
+        
+        rewards.append(reward)
+    
+    tf_logger.dump(step=0)  # Ensure logs are written
+
+    logging.debug(f"There are {len(env.act_spdlim_change_amounts)} speed limit updates in model {model_name}. List of them: {env.act_spdlim_change_amounts}")
+
+    metrics = [rewards, env.emissions_over_time, env.mean_speed_over_time, env.flows]
+    result = {metric: value for metric, value in zip(metrics_to_plot, metrics)}
+
+    return (model_name, result)
+
 if __name__ == '__main__':
     async_results = []
 
     # override the default values defined in config.py
-    test_with_electric = False 
-    test_with_disobedient = False
+    test_with_electric = True 
+    test_with_disobedient = True
     addDisobedientVehicles = True if test_with_electric else False
     addElectricVehicles = True if test_with_disobedient else False
-    flow_generation_wrapper(daily_pattern_amplitude = -0.05, model = "all", idx = 0, num_days = 1, is_daily_pattern_mocked = True)
+    flow_generation_wrapper(daily_pattern_amplitude = 1, model = "all", idx = 0, num_days = 1, is_daily_pattern_mocked = False)
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
@@ -577,7 +583,7 @@ if __name__ == '__main__':
     logging.debug("Plotting metrics")
     plot_metrics(test_with_electric, test_with_disobedient)
     
-    # test_prddpg()
+    # test_ppo()
 
     try:
         traci_close()
