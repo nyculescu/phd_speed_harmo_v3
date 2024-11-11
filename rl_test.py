@@ -17,7 +17,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
 from traffic_environment.rl_gym_environments import TrafficEnv
 from config import *
-from traffic_environment.flow_gen import flow_generation_wrapper
+from traffic_environment.flow_gen import flow_generation_wrapper, bimodal_distribution_24h, triangular_distribution_24h
 from datetime import datetime
 
 # Configure logging
@@ -547,7 +547,7 @@ if __name__ == '__main__':
     test_with_disobedient = True
     addDisobedientVehicles = True if test_with_electric else False
     addElectricVehicles = True if test_with_disobedient else False
-    flow_generation_wrapper(daily_pattern_amplitude = 1, model = "all", idx = 0, num_days = 1, is_daily_pattern_mocked = False)
+    flow_generation_wrapper(model = "all", idx = 0, num_days = 1, daily_pattern=bimodal_distribution_24h(amplitude=1.0))
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()

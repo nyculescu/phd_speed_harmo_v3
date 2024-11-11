@@ -137,7 +137,9 @@ class TrafficEnv(gym.Env):
             try:
                 days_to_run_the_simu = 7 if self.is_learning else 1
                 if self.is_learning:
-                    flow_generation_wrapper(np.random.triangular(-0.5, 0, 0.5), self.model, self.model_idx, num_days=days_to_run_the_simu, is_daily_pattern_mocked=False)
+                    flow_generation_wrapper(self.model, self.model_idx, 
+                                            num_days=days_to_run_the_simu, 
+                                            is_daily_pattern_mocked=bimodal_distribution_24h(amplitude=np.random.triangular(-0.5, 0, 0.5)))
                 
                 port = self.port
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)

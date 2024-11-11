@@ -149,3 +149,14 @@ def check_sumo_env():
 # -d, --delay FLOAT  Use FLOAT in ms as delay between simulation steps
 sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
+
+""" Route and other common flow attributes """
+route_id = "r_0"
+depart_lane = "free"
+# "base": the vehicle is tried to be inserted at the position which lets its back be at the beginning of the lane (vehicle's front position=vehicle length)
+depart_pos = "base"
+# "avg": The average speed on the departure lane is used (or the minimum of 'speedLimit' and 'desired' if the lane is empty). If that speed is unsafe, departure is delayed.
+depart_speed = "avg"
+lanes = 3
+car_following_model = 'Krauss' # old: 'Krauss' # https://sumo.dlr.de/docs/Definition_of_Vehicles%2C_Vehicle_Types%2C_and_Routes.html#car-following_models
+tau = 2.5 # reaction time: the desired time gap between vehicles in seconds

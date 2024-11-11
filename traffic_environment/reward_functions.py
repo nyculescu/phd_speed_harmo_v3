@@ -2,6 +2,15 @@ import math
 import numpy as np
 import unittest
 from parameterized import parameterized
+import traci
+from traffic_environment.setup import create_sumocfg
+import os
+from config import sumoExecutable, car_following_model
+import subprocess
+from traffic_environment.flow_gen import flow_generation_wrapper
+import logging
+import csv
+from road import seg_1_before
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -222,7 +231,42 @@ def reward_function(flow_merge, density_merge, collision_occurred, overtaking_oc
         return epsilon_r / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_o
     else:
         return epsilon_r / (epsilon_r + w_f * flow_merge + w_d * density_merge)
+
+def reward_function_v2(n_before, n_after, emissions, avg_speed, collision_occurred=2, aggregation_time=60):
+    """
+        Get vehicle numbers before and after merging point; emissions and avg speed before merging point
+        Explanation of Parameters:
+            Q_{\text{out}}: The outflow of vehicles after merging, calculated as traci.edge.getLastStepVehicleNumber("seg_0_after") / aggregation_time.
+            n_{\text{before}}: Vehicle accumulation before merging, calculated as traci.edge.getLastStepVehicleNumber("seg_0_before").
+            n_{\text{opt}}: Optimal vehicle accumulation where traffic flow is maximized. This value needs to be tuned based on experiments or real-world data.
+            penalty\_accumulation : A Gaussian penalty that increases as vehicle accumulation deviates from the optimal value (n_{\text{opt}}).
+            emissions: CO2 emissions from vehicles in the section before merging, calculated using traci.edge.getCO2Emission("seg_0_before").
+            avg\_speed : Average speed of vehicles before merging, calculated using traci.edge.getLastStepMeanSpeed("seg_0_before").
+            target\_speed : Target speed for smooth traffic flow, set to a reasonable value like 25 km/h converted to m/s.
+            Weights (w_e,w_s): These weights control how much emphasis is placed on reducing emissions and maintaining target speeds relative to maximizing flow.
+    """
+    # Outflow calculation (vehicles passing through after merging)
+    Q_out = n_after / aggregation_time
     
+    # Define optimal accumulation and variance for penalty
+    n_opt = 50  # Optimal vehicle accumulation
+    sigma = 10  # Standard deviation for Gaussian penalty
+    
+    r_c = 0 if collision_occurred <= 2 else -1  # Penalty for collision
+
+    # Calculate Gaussian penalty based on deviation from optimal accumulation
+    penalty_accumulation = np.exp(-((n_before - n_opt) ** 2) / (2 * sigma ** 2)) + r_c
+    
+    target_speed = 120 / 3.6  # Target speed in m/s
+
+    w_e = 0.00 # Weight for emissions
+    w_s = 0.05 # Weight for speed
+    
+    # Reward calculation
+    reward = Q_out * penalty_accumulation - w_e * emissions - w_s * max(target_speed - avg_speed, 0) ** 2
+    
+    return reward
+
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
 class TestCalculateReward(unittest.TestCase):
@@ -245,8 +289,7 @@ class TestCalculateReward(unittest.TestCase):
                                   overtaking_occurred)
         self.assertAlmostEqual(result, expected, places=5)
 
-# Run the unit tests using TestLoader instead of makeSuite
-if __name__ == '__main__':
+def test_and_tune_reward_function():
     """ Simulating Different Traffic Conditions to see how the reward function 
     behaves under different circumstances before running full training sessions """
     flow_merge                  = [10, 20, 35] # Average flow in vehicles per time unit
@@ -272,5 +315,117 @@ if __name__ == '__main__':
         action = "Overtaking" if result[3] else "No Overtaking"
         print(f"Flow: {flow_val}, Density: {density_val}, {status}, {action}, Reward: {result[4]}")
 
-    """ Run the unit tests related to the reward function """
+def reward_function_calibration():
+    func_rew_wrapper = reward_function_v2
+    speed_limit = 90 # FIXME: the vehicles don't obey to this speed limit. To be investigated
+    model_name = 'REW_TST'
+    create_sumocfg(model_name, 1)
+    mock_daily_pattern_test = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240]
+    multiply_factor = 15
+    mock_daily_pattern_test = [x * multiply_factor for x in mock_daily_pattern_test]
+    flow_generation_wrapper(model_name, 0, 1, mock_daily_pattern_test)
+    port = 9000
+    sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
+    sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{model_name}_0.sumocfg", '--start'] 
+                                         + ["--default.emergencydecel=7"]
+                                        #  + ["--emergencydecel.warning-threshold=1"]
+                                         + ['--random-depart-offset=3600']
+                                         + ["--remote-port", str(port)] 
+                                         + ["--quit-on-end"] 
+                                           ,
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE)
+    traci.init(port)
+    
+    n_before_all = 0
+    seconds_passed = 0
+    aggregation_interval = 60 # seconds
+    csv_path = os.path.join(os.getcwd(), 'logs/') + 'rew_func_sim.csv'
+    emissions = []
+    avg_speed = []
+    vehicles_on_road = []
+    n_before_avg = []
+    n_after_avg = []
+    n_before_all_avg = []
+    
+    with open(csv_path, mode='w', newline='') as csvfile:
+        fieldnames = ['Minute', 'Reward', 'Vehicles before', 'Vehicles after', 'Emissions', 'Avg Speed', 'Vehicles on road']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        # Write header
+        writer.writeheader()
+        
+        for segment in [seg_1_before]:
+            [traci.lane.setMaxSpeed(segId, speed_limit / 3.6) for segId in segment]
+
+        while seconds_passed < (60 * aggregation_interval * len(mock_daily_pattern_test)) + (60 * aggregation_interval * 3):
+            traci.simulationStep()
+            
+            for i in range(10):
+                n_before_all += traci.edge.getLastStepVehicleNumber(f"seg_{i+1}_before")
+            n_before = traci.edge.getLastStepVehicleNumber("seg_0_before")
+            n_after = traci.edge.getLastStepVehicleNumber("seg_0_after")
+            n_before_avg.append(n_before)
+            n_after_avg.append(n_after)
+            n_before_all_avg.append(n_before_all)
+            collisions = traci.simulation.getCollidingVehiclesIDList()
+
+            if (n_after >= 1 or n_before >= 1) and n_before_all >= 1:
+                avg_speed.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
+                emissions.append(traci.edge.getCO2Emission("seg_0_before"))
+                vehicles_on_road.append(len(traci.vehicle.getLoadedIDList()))
+
+            # Adjust vehicle generation rate based on traffic volume
+            if seconds_passed % aggregation_interval == 0: # each minute
+                avg_speed_temp = np.average(avg_speed) if len(avg_speed) > 0 else 0
+                emissions_temp = np.average(emissions) if len(emissions) > 0 else 0
+                vehicles_on_road_temp = np.average(vehicles_on_road) if len(vehicles_on_road) > 0 else 0
+                n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
+                n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
+                n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
+
+                if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
+                    reward = func_rew_wrapper(n_before_temp, n_after_temp, emissions_temp, avg_speed_temp, len(collisions))
+                    logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
+                        f"Reward: {reward}; "
+                        f"Vehicles before: {n_before_temp:.2f}; "
+                        f"Vehicles after: {n_after_temp:.2f}; "
+                        f"Emissions: {emissions_temp:.2f}; "
+                        f"Avg Speed: {avg_speed_temp:.2f}; "
+                        f"Vehicles on road: {vehicles_on_road_temp:.2f}"
+                        )
+                    writer.writerow({
+                        'Minute': seconds_passed / aggregation_interval,
+                        'Reward': reward,
+                        'Vehicles before': n_before_temp,
+                        'Vehicles after': n_after_temp,
+                        'Emissions': emissions_temp,
+                        'Avg Speed': avg_speed_temp,
+                        'Vehicles on road': vehicles_on_road_temp
+                    })
+                    avg_speed.clear()
+                    emissions.clear()
+                    vehicles_on_road.clear()
+                    n_before_avg.clear()
+                    n_after_avg.clear()
+                    n_before_all_avg.clear()
+
+                    for segment in [seg_1_before]:
+                        [traci.lane.setMaxSpeed(segId, speed_limit / 3.6) for segId in segment]
+                elif n_after_temp == 0 and n_before_all_temp == 0:
+                    logging.warning("No vehicles detected in the simulation.")
+                elif n_after_temp == 0 and n_before == 0 and n_before_all_temp > 0:
+                    pass
+                else:
+                    pass
+                
+            seconds_passed += 1
+
+    traci.close()    
+
+# Run the unit tests using TestLoader instead of makeSuite
+if __name__ == '__main__':
+    # test_and_tune_reward_function()
     # unittest.main()
+
+    reward_function_calibration()

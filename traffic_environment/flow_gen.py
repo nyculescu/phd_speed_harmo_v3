@@ -4,6 +4,7 @@ import logging
 from config import *
 from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
+from numpy.testing import assert_allclose
 
 # Adjust the amplitude of the daily pattern
 def adjust_amplitude(dly_pattern, amplitude_factor):
@@ -22,18 +23,7 @@ def plot_vehicle_distributions():
     plt.grid(True)
     plt.show()
 
-# Define route and other common flow attributes
-route_id = "r_0"
-depart_lane = "free"
-# "base": the vehicle is tried to be inserted at the position which lets its back be at the beginning of the lane (vehicle's front position=vehicle length)
-depart_pos = "base"
-# "avg": The average speed on the departure lane is used (or the minimum of 'speedLimit' and 'desired' if the lane is empty). If that speed is unsafe, departure is delayed.
-depart_speed = "avg"
-lanes = 3
-car_following_model = 'EIDM' # old: 'Krauss' # https://sumo.dlr.de/docs/Definition_of_Vehicles%2C_Vehicle_Types%2C_and_Routes.html#car-following_models
-tau = 2.5 # reaction time: the desired time gap between vehicles in seconds
-
-def bimodal_distribution_24h():
+def bimodal_distribution_24h(amplitude):
     x = np.arange(0, 24, 1)  # 1-hour resolution
     # Nighttime pattern (curvature between 0:00 and 5:00)
     mu1 = 3.0 + np.random.uniform(-0.5, 0.5) # Nighttime peak around 3 AM
@@ -64,10 +54,11 @@ def bimodal_distribution_24h():
     # Normalize to [0, base_demand]
     y = y / np.max(y)
     y = y * full_day_car_generation_base_demand
-    return y.astype(int)
+
+    return adjust_amplitude(y.astype(int), amplitude)
 
 # FIXME: this function doesn't work quite well. To be fixed
-def triangular_distribution_24h(x=np.arange(0, 24, 1)):
+def triangular_distribution_24h(amplitude, x=np.arange(0, 24, 1)):
     # Define the peak time for traffic
     peak_time = 13.0 + np.random.uniform(-1.0, 1.0)  # Slight randomness in peak time
     morning_start = 6.0 + np.random.uniform(-0.5, 0.5)  # Start of morning traffic
@@ -87,7 +78,7 @@ def triangular_distribution_24h(x=np.arange(0, 24, 1)):
     y = y / np.max(y) * (full_day_car_generation_base_demand)
     # Ensure no negative values and set minimum values between (0, 50)
     y[y < 50] = np.random.uniform(0, 50)
-    return y.astype(int)[:24]  # Return first 48 entries for half-hour intervals
+    return adjust_amplitude(y.astype(int)[:24], amplitude)
 
 """
     Wrapper function to generate flows for all models or a specific model.
@@ -95,18 +86,10 @@ def triangular_distribution_24h(x=np.arange(0, 24, 1)):
     Note: A daily_pattern_amplitude of -0.5 means 50% reduction from the high peak. 
     The lower values of the distribution will be reducted by exponential decay (e.g., from 51 to 50 for the -50% from peak).
 """
-def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days, is_daily_pattern_mocked):
-    if is_daily_pattern_mocked:
-        dly_pattern = mock_daily_pattern()
-    else:
-        # dly_pattern = triangular_distribution_24h() if np.random.choice([False, True]) else bimodal_distribution_24h()
-        dly_pattern = bimodal_distribution_24h()
-
-    daily_pattern_ampl = adjust_amplitude(dly_pattern, daily_pattern_amplitude)
-
-    if model == "all":
+def flow_generation_wrapper(model, idx, num_days, daily_pattern):
+    if model == "all": 
         # Generate content for DQN model
-        flow_generation(all_models[0], 0, daily_pattern_ampl, num_days)
+        flow_generation(all_models[0], 0, daily_pattern, num_days)
         
         # Read the content from the DQN file
         with open(f"./traffic_environment/sumo/generated_flows_{all_models[0]}_{0}.rou.xml", 'r') as f:
@@ -117,12 +100,12 @@ def flow_generation_wrapper(daily_pattern_amplitude, model, idx, num_days, is_da
             file_path = f"./traffic_environment/sumo/generated_flows_{m}_{0}.rou.xml"
             with open(file_path, 'w') as f:
                 f.write(firstmodel_file_path_content)
-    elif model in all_models:
-        flow_generation(model, idx, daily_pattern_ampl, num_days)
+    elif model in all_models or model == 'REW_TST':
+        flow_generation(model, idx, daily_pattern, num_days)
     else:
         logging.error(f"Model {model} is not supported. Supported models are: {all_models}")
 
-def flow_generation(model, idx, daily_pattern_ampl, num_days):
+def flow_generation(model, idx, daily_pattern, num_days):
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
@@ -130,7 +113,7 @@ def flow_generation(model, idx, daily_pattern_ampl, num_days):
 
         # Iterate over each pair of rates
         for day_index in range(num_days):
-            for i in range(len(daily_pattern_ampl)):
+            for i in range(len(daily_pattern)):
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
                 cars = np.random.uniform(70, 85) * 1.15
@@ -169,6 +152,8 @@ def flow_generation(model, idx, daily_pattern_ampl, num_days):
 
                 # Calculate proportions
                 total_distribution = normal_car + fast_car + van + bus + motorcycle + trucks
+                assert_tolerance = 0.5
+                assert_allclose(total_distribution, 100, atol=assert_tolerance, err_msg=f"Total distribution is under {100-assert_tolerance}%")
 
                 if addDisobedientVehicles:
                     disobedient_normal_car_proportion = np.random.uniform(0.01, 0.1) * normal_car
@@ -234,12 +219,12 @@ def flow_generation(model, idx, daily_pattern_ampl, num_days):
 
                 # Calculate start and end times for each flow
                 # begin_time = (day_index * len(daily_pattern_ampl) * 1800) + (i * 1800)
-                begin_time = day_index * len(daily_pattern_ampl) * 3600 + i * 3600
+                begin_time = day_index * len(daily_pattern) * 3600 + i * 3600
                 end_time = begin_time + 3600
                                 
                 # Create flows for each vehicle type based on their proportions
                 for vehicle_type in proportions:
-                    vehs_gen = round(daily_pattern_ampl[i] * proportions[vehicle_type] / 100)
+                    vehs_gen = round(daily_pattern[i] * proportions[vehicle_type] / 100)
                     
                     if vehs_gen > 0:
                         if "disobedient" in vehicle_type and addDisobedientVehicles:
