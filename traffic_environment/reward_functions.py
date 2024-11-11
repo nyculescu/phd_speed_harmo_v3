@@ -211,18 +211,17 @@ def reward_co2_avgspeed(prev_emissions, total_emissions_now, prev_mean_speed, av
 def reward_function(flow_merge, density_merge, collision_occurred, overtaking_occurred):
     # Constants
     epsilon_r = 0.01
-    epsilon = 0.001
     w_f = 1      # Weight for flow
     w_d = 0.5    # Weight for density
-    r_c = -100   # Penalty for collision
+    r_c = -100   # Penalty for collision (strongly discourage unsafe driving behavior)
     r_o = 10     # Reward for safe overtaking
     
     if collision_occurred:
-        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_c
+        return epsilon_r / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_c
     elif overtaking_occurred:
-        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_o
+        return epsilon_r / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_o
     else:
-        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge)
+        return epsilon_r / (epsilon_r + w_f * flow_merge + w_d * density_merge)
     
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
