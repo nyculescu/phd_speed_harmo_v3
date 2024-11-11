@@ -1,5 +1,7 @@
 import math
 import numpy as np
+import unittest
+from parameterized import parameterized
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -205,3 +207,71 @@ def reward_co2_avgspeed(prev_emissions, total_emissions_now, prev_mean_speed, av
     reward = max(min(reward, 100), -100)
     
     return reward
+
+def reward_function(flow_merge, density_merge, collision_occurred, overtaking_occurred):
+    # Constants
+    epsilon_r = 0.01
+    epsilon = 0.001
+    w_f = 1      # Weight for flow
+    w_d = 0.5    # Weight for density
+    r_c = -100   # Penalty for collision
+    r_o = 10     # Reward for safe overtaking
+    
+    if collision_occurred:
+        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_c
+    elif overtaking_occurred:
+        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge) + r_o
+    else:
+        return epsilon / (epsilon_r + w_f * flow_merge + w_d * density_merge)
+    
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""" Unit Testing with Predefined Values """
+class TestCalculateReward(unittest.TestCase):
+    @parameterized.expand([
+        ("no_collision_no_overtaking", 20, 30, False, False, 2.8563267637817762e-05),
+        ("collision_occurred", 15, 25, True, False, 100.00003635041803),
+        ("overtaking_occurred", 25, 20, False, True, 10.000028563267637),
+        ("high_density", 5, 100, False, False, 1.8178512997636793e-05),
+        ("zero_flow", 0, 50, False, False, 3.9984006397441024e-05)
+    ])
+    def test_calculate_reward(self, name: str,
+                              flow_merge: int,
+                              density_merge: int,
+                              collision_occurred: bool,
+                              overtaking_occurred: bool,
+                              expected: float):
+        result = reward_function(flow_merge,
+                                  density_merge,
+                                  collision_occurred,
+                                  overtaking_occurred)
+        self.assertAlmostEqual(result, expected, places=5)
+
+# Run the unit tests using TestLoader instead of makeSuite
+if __name__ == '__main__':
+    """ Simulating Different Traffic Conditions to see how the reward function 
+    behaves under different circumstances before running full training sessions """
+    flow_merge                  = [10, 20, 35] # Average flow in vehicles per time unit
+    density_merge               = [20, 50, 100]   # Average density in vehicles per kilometer
+    collision_occurred_cases    = [False, True]
+    overtaking_occurred_cases   = [False, True]
+
+    results = []
+
+    # Iterate over scenarios and calculate rewards
+    for flow in flow_merge:
+        for density in density_merge:
+            for collision_occurred in collision_occurred_cases:
+                for overtaking_occurred in overtaking_occurred_cases:
+                    reward = reward_function(flow, density, collision_occurred, overtaking_occurred)
+                    results.append((flow, density, collision_occurred, overtaking_occurred, reward))
+
+    # Display results
+    for result in results:
+        flow_val = result[0]
+        density_val = result[1]
+        status = "Collision" if result[2] else "No Collision"
+        action = "Overtaking" if result[3] else "No Overtaking"
+        print(f"Flow: {flow_val}, Density: {density_val}, {status}, {action}, Reward: {result[4]}")
+
+    """ Run the unit tests related to the reward function """
+    # unittest.main()
