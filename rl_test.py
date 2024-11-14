@@ -99,7 +99,7 @@ def calc_anova(selected_models):
             f_statistic, p_value = anova_results[metric]
             f.write(f"ANOVA result for {metric}: F-statistic={f_statistic:.3f}, p-value={p_value:.3f}\n")
 
-# Moving average function for smoothing
+# Moving average function for smoothing: it will make the graphics more interpretable
 def moving_average(data, window_size):
     if window_size < 1:
         return data
