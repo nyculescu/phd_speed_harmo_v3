@@ -116,8 +116,7 @@ def train_model(model_name, model):
         logging.info(f"Training {model_name} model...")
         model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb], progress_bar=True)
     except ValueError as e:
-        print(f"Warning: Model '{model_name}' not found in the models list. Skipping...")
-        print(f"Error: {e}")
+        logging.error(f"Error: {e}")
 
 def train_ppo():
     model_name = 'PPO'
@@ -356,7 +355,7 @@ if __name__ == '__main__':
     ########################################################
     # Debug section
     # train_fpwddqn()
-
+    # train_td3()
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py
 
