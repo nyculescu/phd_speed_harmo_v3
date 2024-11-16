@@ -1,16 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-
-<!-- generated on 2024-11-14 15:10:00 by Eclipse SUMO netedit Version 1.20.0
--->
-
-<additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
-    <variableSpeedSign id="VSS_0" lanes="seg_1_before_0">
-        <step time="0" speed="-1"/>
-    </variableSpeedSign>
-    <variableSpeedSign id="VSS_1" lanes="seg_1_before_1">
-        <step time="0" speed="-1"/>
-    </variableSpeedSign>
-    <variableSpeedSign id="VSS_2" lanes="seg_1_before_2">
-        <step time="0" speed="-1"/>
-    </variableSpeedSign>
-</additional>
+    <additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
+        <variableSpeedSign id="VSS_0" lanes="seg_1_before_0">
+            <step time="0" speed="-1"/>
+        </variableSpeedSign>
+        <variableSpeedSign id="VSS_1" lanes="seg_1_before_1">
+            <step time="0" speed="-1"/>
+        </variableSpeedSign>
+        <variableSpeedSign id="VSS_2" lanes="seg_1_before_2">
+            <step time="0" speed="-1"/>
+        </variableSpeedSign>
+    </additional>
