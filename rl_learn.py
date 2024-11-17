@@ -27,6 +27,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from datetime import datetime 
 from config import *
 # from time import sleep
+import time
 import gc
 # from memory_profiler import profile
 
@@ -113,8 +114,11 @@ def train_model(model_name, model):
         
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
-        logging.info(f"Training {model_name} model...")
-        model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb], progress_bar=True)
+        try:
+            logging.info(f"Starting model.learn() with timesteps={timesteps}")
+            model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb], progress_bar=True)
+        except Exception as e:
+            logging.error(f"Error during training: {e}")
     except ValueError as e:
         logging.error(f"Error: {e}")
 
@@ -304,10 +308,14 @@ def train_prddpg():
 def train_process_callback(result):
     logging.debug(f"Process finished with result: {result}")
 
+def delayed_start(func, delay):
+    time.sleep(delay)
+    return func()
+
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    episodes = 5
+    episodes = 10
 
     if not check_sumo_env():
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
@@ -336,26 +344,30 @@ if __name__ == '__main__':
     
     ########################################################
     # # Training process 2 [Cover the constraint of AssertionError: You must use only one env when doing episodic training]
-    # for i in range(episodes * num_envs_per_model):
-    #     # Create a pool of processes
-    #     pool = multiprocessing.Pool(processes=len(cont_act_space_models))
+    full_day_car_generation_base_demand_base = 400
+    for i in range(episodes * num_envs_per_model):
+        full_day_car_generation_base_demand_base -= 25
+        set_full_day_car_generation_base_demand(full_day_car_generation_base_demand_base)
 
-    #     # Collect async results
-    #     async_results = [
-    #         pool.apply_async(train_td3, callback=train_process_callback),
-    #         pool.apply_async(train_sac, callback=train_process_callback),
-    #         pool.apply_async(train_ddpg, callback=train_process_callback)
-    #     ]
+        # Create a pool of processes
+        pool = multiprocessing.Pool(processes=3)
 
-    #     # Close the pool and wait for all processes to finish
-    #     logging.debug("Closing pool")
-    #     pool.close()
-    #     pool.join()
+        # Collect async results
+        async_results = [
+            pool.apply_async(delayed_start, args=(train_td3, 0), callback=train_process_callback),   # No delay for TD3
+            pool.apply_async(delayed_start, args=(train_sac, 2), callback=train_process_callback), # Delay SAC by 0.5 seconds
+            pool.apply_async(delayed_start, args=(train_ddpg, 4), callback=train_process_callback)   # Delay DDPG by 1 second
+        ]
+
+        # Close the pool and wait for all processes to finish
+        logging.debug("Closing pool")
+        pool.close()
+        pool.join()
 
     ########################################################
     # Debug section
     # train_fpwddqn()
-    # train_td3()
+        # train_td3()
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py
 

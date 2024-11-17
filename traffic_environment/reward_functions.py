@@ -431,12 +431,7 @@ def reward_function_v5(model, n_before, n_after, avg_speed, collisions,
 def reward_function_v6(model, n_before, n_after, avg_speed, collisions,
                        n_lanes=3, seg0_before_merge_length=575,
                        seg0_after_merge_length=500, collision_occurred=5,
-                       aggr_time=60):
-    """
-    Updated reward function incorporating insights from fundamental diagram of traffic flow
-    and correlation analysis.
-    """
-    
+                       aggr_time=60):    
     # Constants
     epsilon_r = 0.01  # Small constant to avoid division by zero
     max_speed = 130  # Maximum allowed speed in km/h
@@ -708,12 +703,12 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     model = "DQN"
     new_speed_limit = 50
     old_speed_limit = new_speed_limit
-    peed_limit_run = 4 # hours
+    speed_limit_run = 4 # hours
     speed_limits = 10
     model_name = 'REW_TST'
     create_sumocfg(model_name, 1)
     # mock_daily_pattern_test = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240]
-    mock_daily_pattern_test = [veh_gen_per_hour] * peed_limit_run * speed_limits
+    mock_daily_pattern_test = [veh_gen_per_hour] * speed_limit_run * speed_limits
     # multiply_factor = 15
     # mock_daily_pattern_test = [x * multiply_factor for x in mock_daily_pattern_test]
 
@@ -793,8 +788,9 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
                 n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
                 n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
                 n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
-                reward = reward_function_v6(model=None, n_before=n_before, n_after=n_after,
-                            avg_speed=avg_speed, collisions=collisions)
+                
+                reward = reward_function_v6(model=None, n_before=n_before_temp, n_after=n_after_temp,
+                            avg_speed=avg_speed_temp, collisions=collisions)
                 
                 if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
                     # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
@@ -827,7 +823,7 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
                     n_after_avg.clear()
                     n_before_all_avg.clear()
 
-                    if (seconds_passed % (3600 * peed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * peed_limit_run):
+                    if (seconds_passed % (3600 * speed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * speed_limit_run):
                         new_speed_limit += 10
                         seconds_passed_ = 0
                     if new_speed_limit != old_speed_limit:
@@ -940,7 +936,7 @@ if __name__ == '__main__':
                            (3000, 9011)]
     
     # csv_folder = f"{datetime.now().strftime('%Y.%m.%d_%H.%M.%S')}"
-    csv_folder = "2024-11-16_15"
+    csv_folder = "2024-11-16_16"
 
     with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
         pool.starmap(parallel_simulation, [(rate, port, csv_folder) for rate, port in veh_gen_rates_ports])

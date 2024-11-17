@@ -129,7 +129,12 @@ def mock_daily_pattern(isFixed = True):
         retVal = np.multiply(retVal, 3)
     return retVal
 
-full_day_car_generation_base_demand = 300 # max no. of vehicles expected in any interval / hour
+full_day_car_generation_base_demand = 250 # max no. of vehicles expected in any interval / hour
+
+def set_full_day_car_generation_base_demand(x):
+    global full_day_car_generation_base_demand
+    full_day_car_generation_base_demand = x
+
 full_week_car_generation_rates = len(mock_daily_pattern()) * len(day_of_the_week_factor)
 addDisobedientVehicles = True
 addElectricVehicles = True
