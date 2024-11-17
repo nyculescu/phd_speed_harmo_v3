@@ -158,5 +158,5 @@ depart_pos = "base"
 # "avg": The average speed on the departure lane is used (or the minimum of 'speedLimit' and 'desired' if the lane is empty). If that speed is unsafe, departure is delayed.
 depart_speed = "avg"
 lanes = 3
-car_following_model = 'Krauss' # old: 'Krauss' # https://sumo.dlr.de/docs/Definition_of_Vehicles%2C_Vehicle_Types%2C_and_Routes.html#car-following_models
+car_following_model = 'IDM' # old: 'EIDM', 'Krauss' # https://sumo.dlr.de/docs/Definition_of_Vehicles%2C_Vehicle_Types%2C_and_Routes.html#car-following_models
 tau = 2.5 # reaction time: the desired time gap between vehicles in seconds

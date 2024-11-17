@@ -14,8 +14,11 @@ from traffic_environment.road import seg_0_before, seg_1_before
 import xml.etree.ElementTree as ET
 from traci.exceptions import FatalTraCIError, TraCIException
 from datetime import datetime
-from glob import glob
+import glob
 import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import multiprocessing as mp
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -297,7 +300,7 @@ def reward_function_v3(model, n_before, n_after, n_lanes = 3, seg0_before_merge_
     return reward
 
 def reward_function_v4(model, n_before, n_after, avg_speed, collisions, 
-                       n_lanes=3, seg01_before_merge_length=275 + 300, seg0_after_merge_length=500,
+                       n_lanes=3, seg0_before_merge_length=275 + 300, seg0_after_merge_length=500,
                        collision_occurred=2, aggr_time=60):
     """
     Reward function for traffic management in a SUMO simulation using deep reinforcement learning.
@@ -316,10 +319,11 @@ def reward_function_v4(model, n_before, n_after, avg_speed, collisions,
     Returns:
     - reward: Calculated reward based on traffic flow, density, speed, and safety considerations.
     """
-    
     # Constants
     epsilon_r = 0.01  # Small constant to avoid division by zero
-    optimal_speed = 60  # Optimal speed in km/h
+    optimal_speed_min = 90  # Minimum optimal speed in km/h
+    optimal_speed_max = 130  # Maximum optimal speed in km/h
+    # max_speed = 130  # Maximum allowed speed
 
     # Flow rate calculation
     c_f_before = n_before / aggr_time  # Flow rate before merging
@@ -327,20 +331,23 @@ def reward_function_v4(model, n_before, n_after, avg_speed, collisions,
     w_f = 0.4  # Weight for flow
 
     # Density calculation
-    c_d_before = n_before / (n_lanes * seg01_before_merge_length)  # Density before merging
+    c_d_before = n_before / (n_lanes * seg0_before_merge_length)  # Density before merging
     c_d_after = n_after / (n_lanes * seg0_after_merge_length)  # Density after merging
     w_d = 0.3  # Weight for density
 
     # Collision penalty
     r_c = -100 if collisions >= collision_occurred else 0  # Heavier penalty for more than threshold collisions
 
-    # Speed control reward/penalty
+    # Speed control reward/penalty (penalize large deviations from optimal speed)
+    
     avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed  # Calculate average if it's a list
-
-    if avg_speed_value < optimal_speed:
-        r_s = -(optimal_speed - avg_speed_value) / optimal_speed  # Penalize if below optimal speed
+    
+    if avg_speed_value < optimal_speed_min:
+        r_s = -(optimal_speed_min - avg_speed_value) / optimal_speed_min  # Penalize if below minimum optimal speed
+    elif avg_speed_value > optimal_speed_max:
+        r_s = -(avg_speed_value - optimal_speed_max) / optimal_speed_max  # Penalize if above maximum allowed speed
     else:
-        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)  # Cap at max reward if above optimal speed
+        r_s = min((avg_speed_value - optimal_speed_min) / (optimal_speed_max - optimal_speed_min), 1)  # Reward within range
     
     w_s = 0.2  # Weight for speed
 
@@ -350,7 +357,7 @@ def reward_function_v4(model, n_before, n_after, avg_speed, collisions,
     w_convergence = 0.1  # Weight for convergence factor
     r_convergence = -(convergence_factor)  # Penalize large differences between before and after merging
     
-    # Final reward calculation
+    # Final reward calculation: Add stronger penalties for density and flow imbalances
     reward = (
         epsilon_r / (epsilon_r + w_f * (c_f_before + c_f_after) + w_d * (c_d_before + c_d_after)) +
         w_s * r_s + 
@@ -360,6 +367,257 @@ def reward_function_v4(model, n_before, n_after, avg_speed, collisions,
     
     return reward
 
+def reward_function_v5(model, n_before, n_after, avg_speed, collisions,
+                       n_lanes=3, seg0_before_merge_length=575,
+                       seg0_after_merge_length=500, collision_occurred=4,
+                       aggr_time=60):
+    
+    # Constants
+    epsilon_r = 0.01  # Small constant to avoid division by zero
+    max_speed = 130  # Maximum allowed speed in km/h
+
+    # Flow rate calculation
+    c_f_before = n_before / aggr_time  # Flow rate before merging
+    c_f_after = n_after / aggr_time  # Flow rate after merging
+    w_f = 0.6  # Weight for flow
+
+    # Density calculation
+    c_d_before = n_before / (n_lanes * seg0_before_merge_length)  # Density before merging
+    c_d_after = n_after / (n_lanes * seg0_after_merge_length)  # Density after merging
+    w_d = 0.4  # Weight for density
+
+    # Collision penalty
+    r_c = -100 if collisions >= collision_occurred else 0  # Heavier penalty for more than threshold collisions
+
+    # Dynamic Optimal Speed Calculation (based on density and flow)
+    avg_density = (c_d_before + c_d_after) / 2
+    avg_flow = (c_f_before + c_f_after) / 2
+    
+    # Adjust optimal speed based on density and flow
+    if avg_density > 0.05:  # High density -> Lower optimal speed
+        optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    else:  # Low density -> Higher optimal speed
+        optimal_speed = min(130, max(90, max_speed - avg_density * 50))
+    
+    # Speed control reward/penalty (penalize large deviations from dynamic optimal speed)
+    
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value) / optimal_speed  # Penalize if below optimal speed
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed) / max_speed  # Penalize if above maximum allowed speed
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)  # Cap at max reward if within range
+    
+    w_s = 0.3  # Weight for speed
+
+    # Convergence term (to encourage stability)
+    convergence_factor = abs(c_f_before - c_f_after) + abs(c_d_before - c_d_after)
+    
+    w_convergence = 0.15  # Weight for convergence factor
+    r_convergence = -(convergence_factor)  # Penalize large differences between before and after merging
+    
+    # Final reward calculation: Add stronger penalties for density and flow imbalances
+    reward = (
+        epsilon_r / (epsilon_r + w_f * (c_f_before + c_f_after) + w_d * (c_d_before + c_d_after)) +
+        w_s * r_s + 
+        r_c + 
+        w_convergence * r_convergence
+    )
+    
+    return reward
+
+def reward_function_v6(model, n_before, n_after, avg_speed, collisions,
+                       n_lanes=3, seg0_before_merge_length=575,
+                       seg0_after_merge_length=500, collision_occurred=5,
+                       aggr_time=60):
+    """
+    Updated reward function incorporating insights from fundamental diagram of traffic flow
+    and correlation analysis.
+    """
+    
+    # Constants
+    epsilon_r = 0.01  # Small constant to avoid division by zero
+    max_speed = 130  # Maximum allowed speed in km/h
+    optimal_density = 0.05  # Optimal density (vehicles per meter)
+    max_density = 0.1  # Maximum acceptable density before heavy penalties
+
+    # Flow rate calculation
+    c_f_before = n_before / aggr_time  # Flow rate before merging (vehicles per second)
+    c_f_after = n_after / aggr_time  # Flow rate after merging (vehicles per second)
+    w_f = 0.7  # Weight for flow
+
+    # Density calculation
+    c_d_before = n_before / (n_lanes * seg0_before_merge_length)  # Density before merging (vehicles per meter)
+    c_d_after = n_after / (n_lanes * seg0_after_merge_length)  # Density after merging (vehicles per meter)
+    avg_density = (c_d_before + c_d_after) / 2
+    
+    w_d = 0.4  # Weight for density
+
+    # Collision penalty
+    r_c = -100 if collisions >= collision_occurred else 0  # Heavier penalty for more than threshold collisions
+
+    # Dynamic Optimal Speed Calculation based on density
+    if avg_density > optimal_density:  
+        optimal_speed = max(60, min(90, max_speed - avg_density * 100))  
+        # Penalize if density exceeds maximum acceptable level
+        if avg_density > max_density:
+            r_dens_penalty = -(avg_density - max_density) * 100
+        else:
+            r_dens_penalty = 0
+    else:  
+        optimal_speed = min(130, max(90, max_speed - avg_density * 50))
+        r_dens_penalty = 0
+    
+    # Speed control reward/penalty based on deviation from dynamic optimal speed
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value) / optimal_speed  
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed) / max_speed  
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    w_s = 0.15  # Weight for speed control
+
+    # Convergence term to encourage stability between flow/density before and after merging points
+    convergence_factor = abs(c_f_before - c_f_after) + abs(c_d_before - c_d_after)
+    
+    w_convergence = 0.2  
+    r_convergence = -(convergence_factor)
+
+    # Final reward calculation: Add stronger penalties for emissions and density imbalances
+    reward = (
+        epsilon_r / (epsilon_r + w_f * (c_f_before + c_f_after) + w_d * (c_d_before + c_d_after)) +
+        w_s * r_s + 
+        r_c + 
+        w_convergence * r_convergence +
+        r_dens_penalty
+    )
+    
+    return reward
+
+def reward_function_v7(model, n_before, n_after, avg_speed, emissions, collisions,
+                       n_lanes=3, seg0_before_merge_length=575,
+                       seg0_after_merge_length=500, collision_occurred=10,
+                       aggr_time=60):
+    """
+    Updated reward function incorporating stronger penalties for congestion after merging
+    and emissions.
+    """
+    
+    # Constants
+    epsilon_r = 0.01  # Small constant to avoid division by zero
+    max_speed = 130  # Maximum allowed speed in km/h
+    optimal_density = 0.05  # Optimal density (vehicles per meter)
+    max_density = 0.1  # Maximum acceptable density before heavy penalties
+    emission_penalty_factor = 0.002  # Increased penalty factor for emissions
+
+    # Flow rate calculation
+    c_f_before = n_before / aggr_time  # Flow rate before merging (vehicles per second)
+    c_f_after = n_after / aggr_time  # Flow rate after merging (vehicles per second)
+    w_f = 0.5  # Weight for flow
+
+    # Density calculation
+    c_d_before = n_before / (n_lanes * seg0_before_merge_length)  # Density before merging (vehicles per meter)
+    c_d_after = n_after / (n_lanes * seg0_after_merge_length)  # Density after merging (vehicles per meter)
+    avg_density = (c_d_before + c_d_after) / 2
+    
+    w_d_before = 0.5  
+    w_d_after = 0.6  # Increased weight for density after merging
+
+    # Collision penalty
+    r_c = -100 if collisions >= collision_occurred else 0  
+
+    # Dynamic Optimal Speed Calculation based on density
+    if avg_density > optimal_density:  
+        optimal_speed = max(60, min(90, max_speed - avg_density * 100))  
+        if avg_density > max_density:
+            r_dens_penalty = -(avg_density - max_density) * 100
+        else:
+            r_dens_penalty = 0
+    else:  
+        optimal_speed = min(130, max(90, max_speed - avg_density * 50))
+        r_dens_penalty = 0
+    
+    # Speed control reward/penalty based on deviation from dynamic optimal speed
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value) / optimal_speed  
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed) / max_speed  
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    w_s = 0.25  
+
+    # Emission penalty
+    r_emissions_penalty = -emission_penalty_factor * emissions  
+
+    # Convergence term to encourage stability between flow/density before and after merging points
+    convergence_factor = abs(c_f_before - c_f_after) + abs(c_d_before - c_d_after)
+    
+    w_convergence = 0.15  
+    r_convergence = -(convergence_factor)
+
+    # Final reward calculation: Add stronger penalties for emissions and density imbalances
+    reward = (
+        epsilon_r / (epsilon_r + w_f * (c_f_before + c_f_after) + w_d_before * c_d_before + w_d_after * c_d_after) +
+        w_s * r_s + 
+        r_c + 
+        r_emissions_penalty + 
+        w_convergence * r_convergence +
+        r_dens_penalty
+    )
+    
+    return reward
+
+
+def correlation_heatmap(folder_to_store, csv_file_pattern):
+    """
+    Generate a heatmap (by using Seaborn) of the correlation matrix for the reward function evaluation metrics.
+    This function loads multiple CSV files, concatenates them, and generates a heatmap based on the combined data.
+    
+    Ref.: Waskom, M. L. (2021). Seaborn: statistical data visualization. Journal of Open Source Software, 6(60), 3021.
+    """
+    
+    # Define the directory where CSV files are stored
+    csv_dir = os.path.join(os.getcwd(), f'eval/rew_func/{folder_to_store}')
+    
+    # Use glob to find all files that match the pattern
+    csv_paths = glob.glob(os.path.join(csv_dir, f"{csv_file_pattern}*.csv"))
+    
+    if not csv_paths:
+        print("No files found matching the pattern.")
+        return
+    
+    # Load all matching CSV files into a list of DataFrames
+    dfs = [pd.read_csv(csv_path) for csv_path in csv_paths]
+    
+    # Concatenate all data into one DataFrame
+    combined_df = pd.concat(dfs, ignore_index=True)
+    
+    # Calculate the correlation matrix
+    correlation_matrix = combined_df.corr()
+
+    # Set up the matplotlib figure
+    plt.figure(figsize=(10, 6))
+
+    # Generate a heatmap using seaborn
+    sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', center=0, vmin=-1, vmax=1)
+
+    # Add title and labels
+    plt.title('Correlation of Reward with Other Metrics', fontsize=16)
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+
+    # Show the plot
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig(csv_dir + f"/correlation_heatmap_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
@@ -446,7 +704,7 @@ def append_additionalfile_VSS(vss_id, time, speed):
     # Write the updated XML back to file
     tree.write(xml_file)
 
-def reward_function_calibration(veh_gen_per_hour, folder_to_store):
+def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     model = "DQN"
     new_speed_limit = 50
     old_speed_limit = new_speed_limit
@@ -463,7 +721,6 @@ def reward_function_calibration(veh_gen_per_hour, folder_to_store):
 
     flow_generation_wrapper(model_name, 0, 1, mock_daily_pattern_test)
 
-    sumo_port = 9000
     sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
     sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{model_name}_0.sumocfg", '--start'] 
                                          + ["--default.emergencydecel=7"]
@@ -536,19 +793,19 @@ def reward_function_calibration(veh_gen_per_hour, folder_to_store):
                 n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
                 n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
                 n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
-                reward = reward_function_v4(model=None, n_before=n_before, n_after=n_after,
+                reward = reward_function_v6(model=None, n_before=n_before, n_after=n_after,
                             avg_speed=avg_speed, collisions=collisions)
                 
                 if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
-                    logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
-                        f"Reward: {reward}; "
-                        f"Vehicles before: {n_before_temp:.2f}; "
-                        f"Vehicles after: {n_after_temp:.2f}; "
-                        f"Emissions: {emissions_temp:.2f}; "
-                        f"Avg Speed: {avg_speed_temp:.2f}; "
-                        f"Vehicles on road: {vehicles_on_road_temp:.2f}; ",
-                        # f"VSS: {new_speed_limit:.2f}"
-                        )
+                    # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
+                    #     f"Reward: {reward}; "
+                    #     f"Vehicles before: {n_before_temp:.2f}; "
+                    #     f"Vehicles after: {n_after_temp:.2f}; "
+                    #     f"Emissions: {emissions_temp:.2f}; "
+                    #     f"Avg Speed: {avg_speed_temp:.2f}; "
+                    #     f"Vehicles on road: {vehicles_on_road_temp:.2f}; ",
+                    #     # f"VSS: {new_speed_limit:.2f}"
+                    #     )
                     writer.writerow({
                         'Minute': seconds_passed / aggregation_interval,
                         'Reward': reward,
@@ -608,7 +865,7 @@ def merge_dataset(sub_folder):
     dir_path = os.path.join(os.getcwd(), f'eval\\rew_func\\{sub_folder}')
 
     # Collect all CSV files matching the pattern
-    csv_files = glob(os.path.join(dir_path, 'RewFuncCalib_VehpHr_*.csv'))
+    csv_files = glob.glob(os.path.join(dir_path, 'RewFuncCalib_VehpHr_*.csv'))
 
     # Ensure there are CSV files to process
     if not csv_files:
@@ -664,20 +921,32 @@ def merge_dataset(sub_folder):
         except ValueError as e:
             print(e)
 
-def create_synthetic_data():
-    veh_gen_per_hour = 4000
-    csv_folder = '2024-11-16_2'
+def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
+    reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
 
-    # while veh_gen_per_hour <= 3500:
-    #     reward_function_calibration(veh_gen_per_hour, csv_folder)
-    #     veh_gen_per_hour += 50
-
-    reward_function_calibration(veh_gen_per_hour, csv_folder)
-
-    merge_dataset(csv_folder)
-
-# Run the unit tests using TestLoader instead of makeSuite
 if __name__ == '__main__':
-    # test_and_tune_reward_function()
-    # unittest.main()
-    create_synthetic_data()
+    # Define the list of vehicle generation rates and SUMO ports for parallel runs
+    veh_gen_rates_ports = [(1900, 9000),
+                           (2000, 9001),
+                           (2100, 9002),
+                           (2200, 9003),
+                           (2300, 9004),
+                           (2400, 9005),
+                           (2500, 9006),
+                           (2600, 9007),
+                           (2700, 9008),
+                           (2800, 9009),
+                           (2900, 9010),
+                           (3000, 9011)]
+    
+    # csv_folder = f"{datetime.now().strftime('%Y.%m.%d_%H.%M.%S')}"
+    csv_folder = "2024-11-16_15"
+
+    with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
+        pool.starmap(parallel_simulation, [(rate, port, csv_folder) for rate, port in veh_gen_rates_ports])
+    
+        pool.close()
+        pool.join()
+    
+    merge_dataset(csv_folder)
+    correlation_heatmap(csv_folder, "RewFuncCalib_VehpHr_MERGED")
