@@ -238,7 +238,8 @@ def test_ppo():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -280,7 +281,8 @@ def test_a2c():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -319,7 +321,8 @@ def test_dqn():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -358,7 +361,8 @@ def test_td3():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -397,7 +401,8 @@ def test_trpo():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -436,7 +441,8 @@ def test_sac():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -475,7 +481,8 @@ def test_ddpg():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -514,7 +521,8 @@ def test_prddpg():
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
 
-    obs, _, done, _, _ = env.reset()
+    obs, _ = env.reset()
+    done = False
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in

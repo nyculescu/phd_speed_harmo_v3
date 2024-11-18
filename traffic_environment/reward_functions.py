@@ -19,6 +19,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import multiprocessing as mp
+import time
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -917,7 +918,8 @@ def merge_dataset(sub_folder):
         except ValueError as e:
             print(e)
 
-def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
+def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder, delay):
+    time.sleep(delay)
     reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
 
 if __name__ == '__main__':
@@ -935,12 +937,12 @@ if __name__ == '__main__':
                            (2900, 9010),
                            (3000, 9011)]
     
-    # csv_folder = f"{datetime.now().strftime('%Y.%m.%d_%H.%M.%S')}"
-    csv_folder = "2024-11-16_16"
+    # csv_folder = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}" # NOTE: doesn't work
+    csv_folder = "2024-11-16_17"
 
     with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
-        pool.starmap(parallel_simulation, [(rate, port, csv_folder) for rate, port in veh_gen_rates_ports])
-    
+        pool.starmap(parallel_simulation, [(rate, port, csv_folder, 1) for rate, port in veh_gen_rates_ports])
+        
         pool.close()
         pool.join()
     

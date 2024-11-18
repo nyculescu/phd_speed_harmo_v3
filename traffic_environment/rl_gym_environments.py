@@ -50,7 +50,7 @@ class TrafficEnv(gym.Env):
         self.flow = 0
         self.flows = []
         self.sumo_process = None
-        self.sumo_max_retries = 5
+        self.sumo_max_retries = 3
         self.reward = 0
         self.total_emissions_now = 0
         self.avg_speed_now = 0
@@ -129,12 +129,30 @@ class TrafficEnv(gym.Env):
         self.calc_friction(desired_transition_steps)
         print(f"Road condition: {self.road_condition}, Target friction: {self.target_friction}")
 
+    def get_collisions_on_segment(self, segment_id):
+        # Get the list of vehicles involved in collisions during this simulation step
+        colliding_vehicles = traci.simulation.getCollidingVehiclesIDList()
+        
+        # Initialize a counter for collisions on the specific segment
+        collision_count = 0
+        
+        # Iterate over each colliding vehicle
+        for vehicle_id in colliding_vehicles:
+            # Get the current road (edge) ID where the vehicle is located
+            road_id = traci.vehicle.getRoadID(vehicle_id)
+            
+            # Check if the road ID matches the target segment (e.g., "seg_0_before")
+            if road_id == segment_id:
+                collision_count += 1
+        
+        return collision_count
+
     def start_sumo(self):
         # If SUMO is running, then perform a restart
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if is_sumo_running:
-            logging.warning("SUMO process is still running. Terminating...")
-            self.close_sumo("SUMO closed so that it can be restarted")
+            logging.error("SUMO process is still running. Terminating...")
+            self.close_sumo(reason="SUMO closed because start_sumo() was called")
             sleep(2)
         
         for attempt in range(self.sumo_max_retries):
@@ -156,17 +174,18 @@ class TrafficEnv(gym.Env):
                                                        ,
                                     stdout=subprocess.PIPE, 
                                     stderr=subprocess.PIPE)
-                logging.debug(f"Attempting to connect to SUMO on port {port}")
+                logging.info(f"Attempting to connect to SUMO on port {port}")
                 traci.init(port=port)
                 logging.info(f"Successfully connected to SUMO on port {port}")
                 break
             except (FatalTraCIError, TraCIException) as e:
                 logging.error(f"Attempt {attempt + 1} failed: {e}")
-                
+                self.close_sumo(reason="failed at starting SUMO. Restarting...")
+
                 if attempt <= self.sumo_max_retries:
                     sleep(2)  # Wait before retrying
                 else:
-                    self.close_sumo("failed at starting SUMO")
+                    self.close_sumo(reason="failed at starting SUMO")
                     raise e  # Re-raise the exception if all retries fail
 
     def close_sumo(self, reason):
@@ -185,7 +204,7 @@ class TrafficEnv(gym.Env):
                         # self.sumo_process.kill()
                 finally:
                     self.sumo_process = None               
-
+    
     def step(self, action):
         # # Update frictionValue incrementally
         # self.frictionValue += self.adjustment_rate
@@ -273,7 +292,9 @@ class TrafficEnv(gym.Env):
             
             self.occupancy_sum += occ_max
 
-            self.collisions += len(traci.simulation.getCollidingVehiclesIDList())
+            # self.collisions += len(traci.simulation.getCollidingVehiclesIDList())
+            self.collisions += self.get_collisions_on_segment("seg_0_before")
+            
             n_before_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_before"))
             n_after_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after"))
         

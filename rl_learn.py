@@ -315,7 +315,7 @@ def delayed_start(func, delay):
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    episodes = 10
+    episodes = 12
 
     if not check_sumo_env():
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
@@ -354,13 +354,13 @@ if __name__ == '__main__':
 
         # Collect async results
         async_results = [
-            pool.apply_async(delayed_start, args=(train_td3, 0), callback=train_process_callback),   # No delay for TD3
-            pool.apply_async(delayed_start, args=(train_sac, 2), callback=train_process_callback), # Delay SAC by 0.5 seconds
-            pool.apply_async(delayed_start, args=(train_ddpg, 4), callback=train_process_callback)   # Delay DDPG by 1 second
+            pool.apply_async(delayed_start, args=(train_td3, 0), callback=train_process_callback),
+            pool.apply_async(delayed_start, args=(train_sac, 2), callback=train_process_callback),
+            pool.apply_async(delayed_start, args=(train_ddpg, 4), callback=train_process_callback)
         ]
 
         # Close the pool and wait for all processes to finish
-        logging.debug("Closing pool")
+        logging.debug("Closing pool from RL_learn")
         pool.close()
         pool.join()
 
