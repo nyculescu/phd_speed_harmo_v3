@@ -572,6 +572,8 @@ def reward_function_v7(model, n_before, n_after, avg_speed, emissions, collision
     return reward
 
 
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+""" Unit Testing with Predefined Values """
 def correlation_heatmap(folder_to_store, csv_file_pattern):
     """
     Generate a heatmap (by using Seaborn) of the correlation matrix for the reward function evaluation metrics.
@@ -581,7 +583,7 @@ def correlation_heatmap(folder_to_store, csv_file_pattern):
     """
     
     # Define the directory where CSV files are stored
-    csv_dir = os.path.join(os.getcwd(), f'eval/rew_func/{folder_to_store}')
+    csv_dir = os.path.join(os.getcwd(), f'eval\\rew_func\\{folder_to_store}')
     
     # Use glob to find all files that match the pattern
     csv_paths = glob.glob(os.path.join(csv_dir, f"{csv_file_pattern}*.csv"))
@@ -615,8 +617,6 @@ def correlation_heatmap(folder_to_store, csv_file_pattern):
     # plt.show()
     plt.savefig(csv_dir + f"/correlation_heatmap_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
 
-""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
-""" Unit Testing with Predefined Values """
 class TestCalculateReward(unittest.TestCase):
     @parameterized.expand([
         ("no_collision_no_overtaking", 20, 30, False, False, 2.8563267637817762e-05),
@@ -700,6 +700,35 @@ def append_additionalfile_VSS(vss_id, time, speed):
     # Write the updated XML back to file
     tree.write(xml_file)
 
+def plot_rewards(rewards_by_veh_gen, output_dir):
+    """
+    Plots rewards over time for each vehicle generation rate.
+
+    Args:
+        rewards_by_veh_gen (dict): A dictionary where keys are veh_gen_per_hour and values are lists of rewards.
+        output_dir (str): Directory to save the reward plots.
+    """
+    # Ensure the output directory exists
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    # Iterate through each vehicle generation rate and its corresponding rewards
+    for veh_gen_rate, rewards in rewards_by_veh_gen.items():
+        plt.figure(figsize=(10, 6))
+        plt.plot(rewards, label=f"Veh Gen Rate: {veh_gen_rate}")
+        plt.xlabel("Time Steps")
+        plt.ylabel("Reward")
+        plt.title(f"Reward Over Time for Veh Gen Rate {veh_gen_rate}")
+        plt.legend()
+        plt.grid(True)
+
+        # Save the plot as a PNG file
+        plot_path = os.path.join(output_dir, f"reward_plot_{veh_gen_rate}.png")
+        plt.savefig(plot_path)
+        plt.close()
+
+    print(f"Reward plots saved to {output_dir}")
+
 def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     model = "DQN"
     new_speed_limit = 50
@@ -708,17 +737,18 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     speed_limits = 10
     model_name = 'REW_TST'
     create_sumocfg(model_name, 1)
+    rewards = []
     # mock_daily_pattern_test = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240]
     mock_daily_pattern_test = [veh_gen_per_hour] * speed_limit_run * speed_limits
     # multiply_factor = 15
     # mock_daily_pattern_test = [x * multiply_factor for x in mock_daily_pattern_test]
-
     # reset_additionalfile_for_VSS(-1) # NOTE: no need to
 
     flow_generation_wrapper(model_name, 0, 1, mock_daily_pattern_test)
 
-    sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
-    sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{model_name}_0.sumocfg", '--start'] 
+    try:
+        sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
+        sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{model_name}_0.sumocfg", '--start'] 
                                          + ["--default.emergencydecel=7"]
                                         #  + ["--emergencydecel.warning-threshold=1"]
                                          + ['--random-depart-offset=3600']
@@ -727,135 +757,142 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
                                            ,
                         stdout=subprocess.PIPE, 
                         stderr=subprocess.PIPE)
-    traci.init(sumo_port)
+        traci.init(sumo_port)
 
-    # Init the allowed Max Speed 
-    # [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_1_before]]
-    # [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before]]
-    [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
-    
-    n_before_all = 0
-    seconds_passed = 0
-    seconds_passed_ = 0
-    aggregation_interval = 60 # seconds
-    csv_dir = os.path.join(os.getcwd(), f'eval/rew_func/{folder_to_store}')
-    if not os.path.exists(csv_dir):
-        os.makedirs(csv_dir)
-    csv_path = os.path.join(csv_dir, f"RewFuncCalib_VehpHr_{veh_gen_per_hour}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    emissions = []
-    avg_speed = []
-    vehicles_on_road = []
-    n_before_avg = []
-    n_after_avg = []
-    n_before_all_avg = []
-    collisions = 0
-    
-    with open(csv_path, mode='w', newline='') as csvfile:
-        fieldnames = ['Minute', 'Reward', 'Vehicles before', 'Vehicles after', 'Emissions', 'Avg Speed', 
-                      'Vehicles on road', 'VSS', "Vehicles generated each hour", "Collisions"]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        # Init the allowed Max Speed 
+        # [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_1_before]]
+        # [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before]]
+        [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
+        
+        n_before_all = 0
+        seconds_passed = 0
+        seconds_passed_ = 0
+        aggregation_interval = 60 # seconds
+        csv_dir = os.path.join(os.getcwd(), f'eval\\rew_func\\{folder_to_store}')
+        if not os.path.exists(csv_dir):
+            os.makedirs(csv_dir)
+        csv_path = os.path.join(csv_dir, f"RewFuncCalib_VehpHr_{veh_gen_per_hour}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+        emissions = []
+        avg_speed = []
+        vehicles_on_road = []
+        n_before_avg = []
+        n_after_avg = []
+        n_before_all_avg = []
+        collisions = 0
+        
+        with open(csv_path, mode='w', newline='') as csvfile:
+            fieldnames = ['Minute', 'Reward', 'Vehicles before', 'Vehicles after', 'Emissions', 'Avg Speed', 
+                        'Vehicles on road', 'VSS', "Vehicles generated each hour", "Collisions"]
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        # Write header
-        writer.writeheader()
+            # Write header
+            writer.writeheader()
 
-        while seconds_passed < 60 * aggregation_interval * len(mock_daily_pattern_test):
-            try:
-                traci.simulationStep()
-            except (FatalTraCIError, TraCIException):
-                logging.debug("SUMO failed from reward_function_calibration")
-            
-            # for vehId in traci.vehicle.getIDList(): # NOTE: no need to
-            #     traci.vehicle.setSpeedMode(vehId, 31)  # Enforce strict adherence to VSS
-
-            for i in range(10):
-                n_before_all += traci.edge.getLastStepVehicleNumber(f"seg_{i+1}_before")
-            n_before = traci.edge.getLastStepVehicleNumber("seg_0_before")
-            n_after = traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after")
-            n_before_avg.append(n_before)
-            n_after_avg.append(n_after)
-            n_before_all_avg.append(n_before_all)
-            collisions += len(traci.simulation.getCollidingVehiclesIDList())
-
-            if (n_after >= 1 or n_before >= 1) and n_before_all >= 1:
-                avg_speed.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
-                emissions.append(traci.edge.getCO2Emission("seg_0_before"))
-                vehicles_on_road.append(len(traci.vehicle.getLoadedIDList()))
-
-            # Adjust vehicle generation rate based on traffic volume
-            if seconds_passed % aggregation_interval == 0: # each minute
-                avg_speed_temp = np.average(avg_speed) if len(avg_speed) > 0 else 0
-                emissions_temp = np.average(emissions) if len(emissions) > 0 else 0
-                vehicles_on_road_temp = np.average(vehicles_on_road) if len(vehicles_on_road) > 0 else 0
-                n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
-                n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
-                n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
+            while seconds_passed < 60 * aggregation_interval * len(mock_daily_pattern_test):
+                try:
+                    traci.simulationStep()
+                except (FatalTraCIError, TraCIException):
+                    logging.debug("SUMO failed from reward_function_calibration")
                 
-                reward = reward_function_v6(model=None, n_before=n_before_temp, n_after=n_after_temp,
-                            avg_speed=avg_speed_temp, collisions=collisions)
-                
-                if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
-                    # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
-                    #     f"Reward: {reward}; "
-                    #     f"Vehicles before: {n_before_temp:.2f}; "
-                    #     f"Vehicles after: {n_after_temp:.2f}; "
-                    #     f"Emissions: {emissions_temp:.2f}; "
-                    #     f"Avg Speed: {avg_speed_temp:.2f}; "
-                    #     f"Vehicles on road: {vehicles_on_road_temp:.2f}; ",
-                    #     # f"VSS: {new_speed_limit:.2f}"
-                    #     )
-                    writer.writerow({
-                        'Minute': seconds_passed / aggregation_interval,
-                        'Reward': reward,
-                        'Vehicles before': n_before_temp,
-                        'Vehicles after': n_after_temp,
-                        'Emissions': emissions_temp,
-                        'Avg Speed': avg_speed_temp,
-                        'Vehicles on road': vehicles_on_road_temp,
-                        'VSS': new_speed_limit,
-                        'Vehicles generated each hour': veh_gen_per_hour,
-                        'Collisions': collisions
-                    })
-                    # TODO: update also fieldnames in case of adding/removing a field from the csv
+                # for vehId in traci.vehicle.getIDList(): # NOTE: no need to
+                #     traci.vehicle.setSpeedMode(vehId, 31)  # Enforce strict adherence to VSS
 
-                    avg_speed.clear()
-                    emissions.clear()
-                    vehicles_on_road.clear()
-                    n_before_avg.clear()
-                    n_after_avg.clear()
-                    n_before_all_avg.clear()
+                for i in range(10):
+                    n_before_all += traci.edge.getLastStepVehicleNumber(f"seg_{i+1}_before")
+                n_before = traci.edge.getLastStepVehicleNumber("seg_0_before")
+                n_after = traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after")
+                n_before_avg.append(n_before)
+                n_after_avg.append(n_after)
+                n_before_all_avg.append(n_before_all)
+                collisions += len(traci.simulation.getCollidingVehiclesIDList())
 
-                    if (seconds_passed % (3600 * speed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * speed_limit_run):
-                        new_speed_limit += 10
-                        seconds_passed_ = 0
-                    if new_speed_limit != old_speed_limit:
-                        old_speed_limit = new_speed_limit
-                        # Variant 1 NOTE: doesn't work. Maybe because it reads the add.xml file at the beginning of the simulation
-                        # [append_additionalfile_VSS(f'VSS_{i}', seconds_passed + 60, new_speed_limit / 3.6) for i in range(3)]
+                if (n_after >= 1 or n_before >= 1) and n_before_all >= 1:
+                    avg_speed.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
+                    emissions.append(traci.edge.getCO2Emission("seg_0_before"))
+                    vehicles_on_road.append(len(traci.vehicle.getLoadedIDList()))
 
-                        # Variant 3 NOTE: Works
-                        [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
+                # Adjust vehicle generation rate based on traffic volume
+                if seconds_passed % aggregation_interval == 0: # each minute
+                    avg_speed_temp = np.average(avg_speed) if len(avg_speed) > 0 else 0
+                    emissions_temp = np.average(emissions) if len(emissions) > 0 else 0
+                    vehicles_on_road_temp = np.average(vehicles_on_road) if len(vehicles_on_road) > 0 else 0
+                    n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
+                    n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
+                    n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
+                    
+                    reward = reward_function_v6(model=None, n_before=n_before_temp, n_after=n_after_temp,
+                                avg_speed=avg_speed_temp, collisions=collisions)
+                    rewards.append(reward)
+                    
+                    if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
+                        # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
+                        #     f"Reward: {reward}; "
+                        #     f"Vehicles before: {n_before_temp:.2f}; "
+                        #     f"Vehicles after: {n_after_temp:.2f}; "
+                        #     f"Emissions: {emissions_temp:.2f}; "
+                        #     f"Avg Speed: {avg_speed_temp:.2f}; "
+                        #     f"Vehicles on road: {vehicles_on_road_temp:.2f}; ",
+                        #     # f"VSS: {new_speed_limit:.2f}"
+                        #     )
+                        writer.writerow({
+                            'Minute': seconds_passed / aggregation_interval,
+                            'Reward': reward,
+                            'Vehicles before': n_before_temp,
+                            'Vehicles after': n_after_temp,
+                            'Emissions': emissions_temp,
+                            'Avg Speed': avg_speed_temp,
+                            'Vehicles on road': vehicles_on_road_temp,
+                            'VSS': new_speed_limit,
+                            'Vehicles generated each hour': veh_gen_per_hour,
+                            'Collisions': collisions
+                        })
+                        # TODO: update also fieldnames in case of adding/removing a field from the csv
 
-                        # Variant 4 NOTE: Doesn't work
-                        # [traci.variablespeedsign.setParameter(f"VSS_{i}", "speed", new_speed_limit / 3.6) for i in range(3)] # FIXME: no effect on VSS in SUMO
+                        avg_speed.clear()
+                        emissions.clear()
+                        vehicles_on_road.clear()
+                        n_before_avg.clear()
+                        n_after_avg.clear()
+                        n_before_all_avg.clear()
 
-                    # Variant 2 NOTE: it doesn't work as expected
-                    # for vehId in [traci.lane.getLastStepVehicleIDs(laneId) for laneId in [f"seg_1_before_{i}" for i in range(3)]]:
-                    #     if vehId and vehId[0]:
-                    #         traci.vehicle.setSpeedMode(vehId[0], 31)
-                    #         traci.vehicle.slowDown(vehId[0], new_speed_limit / 3.6, 3600)
+                        if (seconds_passed % (3600 * speed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * speed_limit_run):
+                            new_speed_limit += 10
+                            seconds_passed_ = 0
+                        if new_speed_limit != old_speed_limit:
+                            old_speed_limit = new_speed_limit
+                            # Variant 1 NOTE: doesn't work. Maybe because it reads the add.xml file at the beginning of the simulation
+                            # [append_additionalfile_VSS(f'VSS_{i}', seconds_passed + 60, new_speed_limit / 3.6) for i in range(3)]
 
-                elif n_after_temp == 0 and n_before_all_temp == 0:
-                    logging.warning("No vehicles detected in the simulation.")
-                elif n_after_temp == 0 and n_before == 0 and n_before_all_temp > 0:
-                    seconds_passed -= 1
-                    seconds_passed_ -= 1
-                else:
-                    pass
-                
-            seconds_passed += 1
-            seconds_passed_ += 1
+                            # Variant 3 NOTE: Works
+                            [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
 
-    traci.close()    
+                            # Variant 4 NOTE: Doesn't work
+                            # [traci.variablespeedsign.setParameter(f"VSS_{i}", "speed", new_speed_limit / 3.6) for i in range(3)] # FIXME: no effect on VSS in SUMO
+
+                        # Variant 2 NOTE: it doesn't work as expected
+                        # for vehId in [traci.lane.getLastStepVehicleIDs(laneId) for laneId in [f"seg_1_before_{i}" for i in range(3)]]:
+                        #     if vehId and vehId[0]:
+                        #         traci.vehicle.setSpeedMode(vehId[0], 31)
+                        #         traci.vehicle.slowDown(vehId[0], new_speed_limit / 3.6, 3600)
+
+                    elif n_after_temp == 0 and n_before_all_temp == 0:
+                        logging.warning("No vehicles detected in the simulation.")
+                    elif n_after_temp == 0 and n_before == 0 and n_before_all_temp > 0:
+                        seconds_passed -= 1
+                        seconds_passed_ -= 1
+                    else:
+                        pass
+                    
+                seconds_passed += 1
+                seconds_passed_ += 1
+        try:
+            traci.close()
+        except Exception as e:
+            logging.warning(f"Error while closing TraCI: {e}")
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during calibration: {e}")
+
+    return rewards
 
 def merge_dataset(sub_folder):
     # Set the directory path where your CSV files are located
@@ -906,7 +943,6 @@ def merge_dataset(sub_folder):
                 merged_df = pd.concat([pd.read_csv(f) for f in filtered_files])
 
                 # Create the output filename with merged pattern
-                veh_gen_per_hour = start_num  # Use the starting vehicle generation rate for naming
                 output_filename = f"RewFuncCalib_VehpHr_MERGED_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
                 output_path = os.path.join(dir_path, output_filename)
 
@@ -918,11 +954,29 @@ def merge_dataset(sub_folder):
         except ValueError as e:
             print(e)
 
-def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder, delay):
-    time.sleep(delay)
-    reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
+def wait_for_files(csv_folder, expected_files):
+    while True:
+        curr_dir = os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}')
+        if not os.path.exists(curr_dir):
+            os.makedirs(curr_dir)
+        existing_files = os.listdir(curr_dir)
+        if 'reward_func_plot' in existing_files:
+            existing_files.remove('reward_func_plot')
+        stripped_existing_files = ['_'.join(file.split('_')[:3]) + '.csv' for file in existing_files]
+        if all(file in stripped_existing_files for file in expected_files):
+            break
+        time.sleep(1)  # Wait for 1 second before checking again
+
+def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
+    rewards = reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
+    return veh_gen_per_hour, rewards
+
+def on_task_complete(result):
+    # Callback function executed when a process completes
+    print(f"Task completed: {result}")
 
 if __name__ == '__main__':
+    rewards_by_veh_gen = {}
     # Define the list of vehicle generation rates and SUMO ports for parallel runs
     veh_gen_rates_ports = [(1900, 9000),
                            (2000, 9001),
@@ -935,16 +989,29 @@ if __name__ == '__main__':
                            (2700, 9008),
                            (2800, 9009),
                            (2900, 9010),
-                           (3000, 9011)]
+                           (3000, 9011)
+                           ]
     
-    # csv_folder = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}" # NOTE: doesn't work
-    csv_folder = "2024-11-16_17"
+    csv_folder = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    mp.freeze_support()
 
     with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
-        pool.starmap(parallel_simulation, [(rate, port, csv_folder, 1) for rate, port in veh_gen_rates_ports])
-        
-        pool.close()
-        pool.join()
+        results = []
+        for rate, port in veh_gen_rates_ports:
+            result = pool.apply_async(
+                parallel_simulation,
+                args=(rate, port, csv_folder),
+                callback=on_task_complete
+            )
+            results.append(result)
+
+        # Collect results from all tasks
+        rewards_by_veh_gen = {}
+        for result in results:
+            veh_gen_rate, rewards = result.get()  # Get return value from each process
+            rewards_by_veh_gen[veh_gen_rate] = rewards
     
     merge_dataset(csv_folder)
     correlation_heatmap(csv_folder, "RewFuncCalib_VehpHr_MERGED")
+    plot_rewards(rewards_by_veh_gen, os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}\\reward_plots'))
