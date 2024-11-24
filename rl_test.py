@@ -551,10 +551,9 @@ if __name__ == '__main__':
     async_results = []
 
     # override the default values defined in config.py
-    test_with_electric = True 
-    test_with_disobedient = True
-    addDisobedientVehicles = True if test_with_electric else False
-    addElectricVehicles = True if test_with_disobedient else False
+    set_disobedient_vehicles(True)
+    set_electric_vehicles(True)
+
     flow_generation_wrapper(model = "all", idx = 0, num_days = 1, daily_pattern=bimodal_distribution_24h(amplitude=1.0))
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
@@ -589,7 +588,7 @@ if __name__ == '__main__':
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
-    plot_metrics(test_with_electric, test_with_disobedient)
+    plot_metrics(get_electric_vehicles(), get_disobedient_vehicles())
     
     # test_ppo()
 

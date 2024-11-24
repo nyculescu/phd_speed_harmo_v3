@@ -129,15 +129,34 @@ def mock_daily_pattern(isFixed = True):
         retVal = np.multiply(retVal, 3)
     return retVal
 
-full_day_car_generation_base_demand = 250 # max no. of vehicles expected in any interval / hour
-
 def set_full_day_car_generation_base_demand(x):
     global full_day_car_generation_base_demand
     full_day_car_generation_base_demand = x
+def get_full_day_car_generation_base_demand():
+    return full_day_car_generation_base_demand
 
-full_week_car_generation_rates = len(mock_daily_pattern()) * len(day_of_the_week_factor)
-addDisobedientVehicles = True
-addElectricVehicles = True
+def set_full_week_car_generation_rates(x):
+    global full_week_car_generation_rates
+    full_week_car_generation_rates = x
+def get_full_week_car_generation_rates():
+    return full_week_car_generation_rates
+
+def set_disobedient_vehicles(x):
+    global add_disobedient_vehicles
+    add_disobedient_vehicles = x
+def get_disobedient_vehicles():
+    return add_disobedient_vehicles
+
+def set_electric_vehicles(x):
+    global add_electric_vehicles
+    add_electric_vehicles = x
+def get_electric_vehicles():
+    return add_electric_vehicles
+
+set_full_day_car_generation_base_demand(250) # max no. of vehicles expected in any interval / hour
+set_full_week_car_generation_rates(len(mock_daily_pattern()) * len(day_of_the_week_factor))
+set_disobedient_vehicles(True)
+set_electric_vehicles(True)
 
 """ Configuration for the environment """
 # from https://sumo.dlr.de/docs/TraCI/Interfacing_TraCI_from_Python.html

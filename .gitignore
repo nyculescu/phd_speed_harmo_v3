@@ -16,3 +16,5 @@ tensorboard_logs/*_test/events.out.tfevents.*
 eval/test_results/*.png
 eval/rew_func/*/correlation_heatmap*.png
 eval/rew_func/*/reward_func_plot/*.png
+eval/rew_func/*/reward_plots/*.png
+eval/rew_func/*/reward_speed_plots/*.png

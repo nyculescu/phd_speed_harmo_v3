@@ -69,7 +69,7 @@ def get_traffic_env(port, model, model_idx, is_learning):
 def train_model(model_name, model):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    episode_length = full_week_car_generation_rates * 60
+    episode_length = get_full_week_car_generation_rates() * 60
     timesteps = episode_length * num_envs_per_model
 
     try:
@@ -316,58 +316,59 @@ def delayed_start(func, delay):
 if __name__ == '__main__':
     multiprocessing.freeze_support()
     episodes = 12
+    full_day_car_generation_base_demand_base = 400
 
     if not check_sumo_env():
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
 
     ########################################################
     # The training is splin into 2 processes that shall run independently
-    # # Training process 1
-    # for m in discrete_act_space_models:
-    #     for i in range(episodes):
-    #         logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
-    #         # Train the model based on its name
-    #         if m == 'TRPO':
-    #             train_trpo()
-    #             # logging.info(f"Skipping {m} training.")
-    #         elif m == 'A2C':
-    #             # train_a2c()
-    #             logging.info(f"Skipping {m} training.")
-    #         elif m == 'DQN':
-    #             # train_dqn()
-    #             logging.info(f"Skipping {m} training.")
-    #         elif m == 'PPO':
-    #             # train_ppo()
-    #             logging.info(f"Skipping {m} training.")
-    #         # sleep(2)
-    #         gc.collect()
+    # Training process 1
+    for m in discrete_act_space_models:
+        for i in range(episodes):
+            logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
+            # Train the model based on its name
+            if m == 'TRPO':
+                # train_trpo() # NOTE: trained
+                pass
+                logging.info(f"Skipping {m} training.")
+            elif m == 'A2C':
+                train_a2c()
+                # logging.info(f"Skipping {m} training.")
+            elif m == 'DQN':
+                train_dqn()
+                # logging.info(f"Skipping {m} training.")
+            elif m == 'PPO':
+                train_ppo()
+                # logging.info(f"Skipping {m} training.")
+            # sleep(2)
+            gc.collect()
     
     ########################################################
     # # Training process 2 [Cover the constraint of AssertionError: You must use only one env when doing episodic training]
-    full_day_car_generation_base_demand_base = 400
-    for i in range(episodes * num_envs_per_model):
-        full_day_car_generation_base_demand_base -= 25
-        set_full_day_car_generation_base_demand(full_day_car_generation_base_demand_base)
+    # for i in range(episodes * num_envs_per_model):
+    #     full_day_car_generation_base_demand_base -= 25
+    #     set_full_day_car_generation_base_demand(full_day_car_generation_base_demand_base)
 
-        # Create a pool of processes
-        pool = multiprocessing.Pool(processes=3)
+    #     # Create a pool of processes
+    #     pool = multiprocessing.Pool(processes=3)
 
-        # Collect async results
-        async_results = [
-            pool.apply_async(delayed_start, args=(train_td3, 0), callback=train_process_callback),
-            pool.apply_async(delayed_start, args=(train_sac, 2), callback=train_process_callback),
-            pool.apply_async(delayed_start, args=(train_ddpg, 4), callback=train_process_callback)
-        ]
+    #     # Collect async results
+    #     async_results = [
+    #         pool.apply_async(delayed_start, args=(train_td3, 0), callback=train_process_callback),
+    #         pool.apply_async(delayed_start, args=(train_sac, 2), callback=train_process_callback),
+    #         pool.apply_async(delayed_start, args=(train_ddpg, 4), callback=train_process_callback)
+    #     ]
 
-        # Close the pool and wait for all processes to finish
-        logging.debug("Closing pool from RL_learn")
-        pool.close()
-        pool.join()
+    #     # Close the pool and wait for all processes to finish
+    #     logging.debug("Closing pool from RL_learn")
+    #     pool.close()
+    #     pool.join()
 
     ########################################################
     # Debug section
     # train_fpwddqn()
-        # train_td3()
+    # train_sac()
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py
 

@@ -72,13 +72,15 @@ class TrafficEnv(gym.Env):
         self.prev_act_spdlim = None
         self.act_spdlim_change_amounts = []
         self.density = []
-        self.n_before = 0
+        self.n_before0 = 0
+        self.n_before1 = 0
         self.n_after = 0
         self.collisions = 0
 
     def reward_func_wrap(self):
         # return quad_occ_reward(self.occupancy)
-        return reward_function_v6(self.model, self.n_before, self.n_after, self.avg_speed_now, self.collisions)
+        # return reward_function_v6(self.model, self.n_before, self.n_after, self.avg_speed_now, self.collisions)
+        return reward_function_v10(self.model, self.n_before0, self.n_before1, self.n_after, self.avg_speed_now, self.collisions, self.occupancy)
         # reward_co2_avgspeed(self.prev_emissions, self.total_emissions_now, self.prev_mean_speed, self.avg_speed_now)
     
     def calc_friction(self, desired_transition_steps):
@@ -246,7 +248,8 @@ class TrafficEnv(gym.Env):
                 self.close_sumo("lost comm with SUMO")
                 return self.reset()
 
-        n_before_avg = []
+        n_before0_avg = []
+        n_before1_avg = []
         n_after_avg = []
         for i in range(self.aggregation_time):
             if not self.is_learning and not self.test_with_electric:
@@ -295,7 +298,8 @@ class TrafficEnv(gym.Env):
             # self.collisions += len(traci.simulation.getCollidingVehiclesIDList())
             self.collisions += self.get_collisions_on_segment("seg_0_before")
             
-            n_before_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_before"))
+            n_before0_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_before"))
+            n_before1_avg.append(traci.edge.getLastStepVehicleNumber("seg_1_before"))
             n_after_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after"))
         
         # Calculate average speed and emissions over the aggregation period
@@ -306,7 +310,8 @@ class TrafficEnv(gym.Env):
         self.emissions_over_time.append(self.total_emissions_now)
         self.mean_speed_over_time.append(avg_speed_now * 3.6)  # m/s to km/h
 
-        self.n_before = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
+        self.n_before0 = np.average(n_before0_avg) if len(n_before0_avg) > 0 else 0
+        self.n_before1 = np.average(n_before1_avg) if len(n_before1_avg) > 0 else 0
         self.n_after = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
         
         # Calculate reward
@@ -314,7 +319,7 @@ class TrafficEnv(gym.Env):
         
         self.rewards.append(self.reward)
 
-        flow = (veh_time_sum / self.aggregation_time) * (full_week_car_generation_rates * 60 * 60)
+        flow = (veh_time_sum / self.aggregation_time) * (get_full_week_car_generation_rates() * 60 * 60)
         self.flows.append(flow)
         self.density.append(num_vehicles_in_merging_zone_temp / traci.lane.getLength("seg_0_before_0") / 3)
 
@@ -384,7 +389,8 @@ class TrafficEnv(gym.Env):
         self.frictionValue = 1.0 # Dry road: friction = 1.0; Wet road: friction = 0.7; Icy road: friction = 0.3
         self.is_first_step_delay_on = True
         self.density = []
-        self.n_before = 0
+        self.n_before0 = 0
+        self.n_before1 = 0
         self.n_after = 0
         self.collisions = 0
         # Reset params

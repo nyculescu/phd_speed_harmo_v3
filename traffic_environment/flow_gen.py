@@ -155,7 +155,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
                 assert_tolerance = 0.5
                 assert_allclose(total_distribution, 100, atol=assert_tolerance, err_msg=f"Total distribution is under {100-assert_tolerance}%")
 
-                if addDisobedientVehicles:
+                if get_disobedient_vehicles():
                     disobedient_normal_car_proportion = np.random.uniform(0.01, 0.1) * normal_car
                     disobedient_fast_car_proportion = np.random.uniform(0.5, 0.2) * fast_car
                     disobedient_van_proportion = np.random.uniform(0.01, 0.5) * van
@@ -172,7 +172,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
                     disobedient_truck_proportion = 0
                     disobedient_trailer_proportion = 0
 
-                if addElectricVehicles:
+                if get_electric_vehicles():
                     electric_normal_car_proportion = np.random.uniform(0.05, 0.1) * normal_car
                     electric_fast_car_proportion = np.random.uniform(0.07, 0.1) * fast_car
                     electric_van_proportion = np.random.uniform(0.02, 0.04) * van
@@ -227,12 +227,12 @@ def flow_generation(model, idx, daily_pattern, num_days):
                     vehs_gen = round(daily_pattern[i] * proportions[vehicle_type] / 100)
                     
                     if vehs_gen > 0:
-                        if "disobedient" in vehicle_type and addDisobedientVehicles:
+                        if "disobedient" in vehicle_type and get_disobedient_vehicles():
                             flows.append((day_index, begin_time,
                                         f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                         f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
-                        elif "electric" in vehicle_type and addElectricVehicles:
+                        elif "electric" in vehicle_type and get_electric_vehicles():
                             flows.append((day_index, begin_time,
                                         f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
