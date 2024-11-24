@@ -6,7 +6,7 @@ sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
     <input>
         <net-file value="3_2_merge.net.xml"/>
         <route-files value="generated_flows_{model}_{index}.rou.xml"/>
-        <additional-files value="loops_detectors.xml,variable_speed_limits_signs.add.xml"/>
+        <additional-files value="loops_detectors.xml"/>
         <gui-settings-file value="colored.view.xml"/>
     </input>
 </configuration>
