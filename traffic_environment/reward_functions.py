@@ -20,6 +20,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 import time
+import pandas as pd
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
@@ -498,12 +499,7 @@ def reward_function_v6(model, n_before, n_after, avg_speed, collisions,
 def reward_function_v7(model, n_before, n_after, avg_speed, emissions, collisions,
                        n_lanes=3, seg0_before_merge_length=575,
                        seg0_after_merge_length=500, collision_occurred=10,
-                       aggr_time=60):
-    """
-    Updated reward function incorporating stronger penalties for congestion after merging
-    and emissions.
-    """
-    
+                       aggr_time=60):  
     # Constants
     epsilon_r = 0.01  # Small constant to avoid division by zero
     max_speed = 130  # Maximum allowed speed in km/h
@@ -571,6 +567,639 @@ def reward_function_v7(model, n_before, n_after, avg_speed, emissions, collision
     
     return reward
 
+def reward_function_v8(model, n_seg0, n_seg1, n_after, avg_speed, collisions, gen_rate,
+                       seg0_length=275, seg1_length=300, seg_after_length=500,
+                       collision_occurred=5, aggr_time=60):
+    # Constants and Neutral Zones
+    epsilon_r = 0.01  
+    max_speed = 130  
+    neutral_density_range = (0.045, 0.055)  
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)  
+    
+    # Flow and Density Calculations per Segment
+    c_f_seg0 = n_seg0 / aggr_time  
+    c_f_seg1 = n_seg1 / aggr_time  
+    c_f_after = n_after / aggr_time  
+    avg_flow = (c_f_seg0 + c_f_seg1 + c_f_after) / 3
+    
+    c_d_seg0 = n_seg0 / seg0_length  
+    c_d_seg1 = n_seg1 / seg1_length  
+    c_d_after = n_after / seg_after_length  
+    avg_density = (c_d_seg0 + c_d_seg1 + c_d_after) / 3
+    
+    # Collision Penalty
+    r_c = -100 if collisions >= collision_occurred else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value) / optimal_speed  
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed) / max_speed  
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    # Final Reward Calculation with Normalization
+    reward = (
+        epsilon_r /
+        (epsilon_r + avg_flow + avg_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty
+    )
+    
+    return reward
+
+def reward_function_v9(model, n_seg0, n_seg1, n_after, avg_speed, collisions, gen_rate,
+                       seg0_length=275, seg1_length=300, seg_after_length=500,
+                       collision_occurred=5, aggr_time=60):
+    # Constants and Neutral Zones
+    epsilon_r = 1e-9  
+    max_speed = 130  
+    neutral_density_range = (0.045, 0.055)  
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)  
+    
+    # Flow and Density Calculations per Segment
+    c_f_seg0 = n_seg0 / aggr_time  
+    c_f_seg1 = n_seg1 / aggr_time  
+    c_f_after = n_after / aggr_time  
+    avg_flow = (c_f_seg0 + c_f_seg1 + c_f_after) / 3
+    
+    c_d_seg0 = n_seg0 / seg0_length  
+    c_d_seg1 = n_seg1 / seg1_length  
+    c_d_after = n_after / seg_after_length  
+    avg_density = (c_d_seg0 + c_d_seg1 + c_d_after) / 3
+    
+    # Normalize Flow and Density
+    max_flow = gen_rate / aggr_time  # Maximum possible flow based on generation rate
+    max_density = gen_rate / (seg0_length + seg1_length + seg_after_length)  # Approximate max density
+    
+    normalized_flow = (avg_flow + epsilon_r) / (max_flow + epsilon_r)
+    normalized_density = (avg_density + epsilon_r) / (max_density + epsilon_r)
+
+    # Collision Penalty
+    r_c = -100 if collisions >= collision_occurred else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    # Reward Stabilization with Scaling
+    scaling_factor = gen_rate / 1000  # Scale reward based on vehicle generation rate
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty
+    )
+    
+    reward_stabilized = (reward_raw + epsilon_r) / (scaling_factor + epsilon_r)
+
+    # Final Reward Calculation with Offset for Stabilization Around Zero
+    baseline_offset = 50  # Shift rewards closer to zero for interpretability
+    reward_final = reward_stabilized + baseline_offset
+    
+    return reward_final
+
+def reward_function_v10(model, n_seg0, n_seg1, n_after, avg_speed, collisions, gen_rate,
+                        seg0_length=275, seg1_length=300, seg_after_length=500,
+                        collision_occurred=5, aggr_time=60):
+    # Constants and Neutral Zones
+    epsilon_r = 1e-9  
+    max_speed = 130  
+    neutral_density_range = (0.045, 0.055)  
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)  
+    n_lanes_seg0 = 3  # Number of lanes in pre-merge zone
+    n_lanes_seg1 = 3  # Number of lanes in merge zone
+    n_lanes_after = 2  # Number of lanes in post-merge zone
+    
+    # Corrected Flow Calculations per Segment
+    c_f_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)  # Flow rate per lane for pre-merge zone
+    c_f_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)  # Flow rate per lane for merge zone
+    c_f_after = n_after / (aggr_time * n_lanes_after)  # Flow rate per lane for post-merge zone
+    
+    avg_flow = (c_f_seg0 + c_f_seg1 + c_f_after) / 3
+
+    # Corrected Density Calculations per Segment
+    c_d_seg0 = n_seg0 / (seg0_length * n_lanes_seg0)  # Density per lane for pre-merge zone
+    c_d_seg1 = n_seg1 / (seg1_length * n_lanes_seg1)  # Density per lane for merge zone
+    c_d_after = n_after / (seg_after_length * n_lanes_after)  # Density per lane for post-merge zone
+    
+    avg_density = (c_d_seg0 + c_d_seg1 + c_d_after) / 3
+
+    # Normalize Flow and Density
+    max_flow = gen_rate / aggr_time  # Maximum possible flow based on generation rate
+    max_density = gen_rate / ((seg0_length + seg1_length + seg_after_length) * min(n_lanes_seg0, n_lanes_after))  
+    normalized_flow = (avg_flow + epsilon_r) / (max_flow + epsilon_r)
+    normalized_density = (avg_density + epsilon_r) / (max_density + epsilon_r)
+
+    # Collision Penalty
+    r_c = -100 if collisions >= collision_occurred else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    # Reward Stabilization with Scaling
+    scaling_factor = gen_rate / 1000  # Scale reward based on vehicle generation rate
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty
+    )
+    
+    reward_stabilized = (reward_raw + epsilon_r) / (scaling_factor + epsilon_r)
+
+    # Final Reward Calculation with Offset for Stabilization Around Zero
+    baseline_offset = 0  # Shift rewards closer to zero for interpretability FIXME: 0 for the moment
+    reward_final = reward_stabilized + baseline_offset
+    
+    return reward_final
+
+def reward_function_v11(model, n_seg0, n_seg1, n_after, avg_speed, collisions, gen_rate,
+                        seg0_length=275, seg1_length=300, seg_after_length=500,
+                        max_collis_no_pen=5, # Maximum number of collisions before penalty
+                        aggr_time=60,
+                        min_reward=-835, # Based on empirical experiments 
+                        max_reward=-831 # Based on empirical experiments
+                        ):
+    # Constants and Neutral Zones
+    epsilon_r = 1e-9  
+    max_speed = 130  
+    neutral_density_range = (0.045, 0.055)  
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)  
+    n_lanes_seg0 = 3  # Number of lanes in pre-merge zone
+    n_lanes_seg1 = 3  # Number of lanes in merge zone
+    n_lanes_after = 2  # Number of lanes in post-merge zone
+    
+    # Corrected Flow Calculations per Segment
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)  
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)  
+    q_after = n_after / (aggr_time * n_lanes_after)  
+    avg_flow = (q_seg0 + q_seg1 + q_after) / 3
+
+    # Corrected Density Calculations per Segment
+    k_seg0 = n_seg0 / (seg0_length * n_lanes_seg0)  
+    k_seg1 = n_seg1 / (seg1_length * n_lanes_seg1)  
+    k_after = n_after / (seg_after_length * n_lanes_after)  
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+
+    # Normalize Flow and Density
+    max_flow = gen_rate / aggr_time  
+    max_density = gen_rate / ((seg0_length + seg1_length + seg_after_length) * min(n_lanes_seg0, n_lanes_after))  
+    normalized_flow = (avg_flow + epsilon_r) / (max_flow + epsilon_r)
+    normalized_density = (avg_density + epsilon_r) / (max_density + epsilon_r)
+
+    # Collision Penalty
+    r_c = -100 if collisions > max_collis_no_pen else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    avg_speed_value = np.mean(avg_speed) if isinstance(avg_speed, list) else avg_speed
+    
+    if avg_speed_value < optimal_speed:
+        r_s = -(optimal_speed - avg_speed_value + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed_value > max_speed:
+        r_s = -(avg_speed_value - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed_value - optimal_speed) / optimal_speed, 1)
+
+    # Raw Reward Calculation
+    scaling_factor = gen_rate / 1000  
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty
+    )
+    
+    reward_stabilized = (reward_raw + epsilon_r) / (scaling_factor + epsilon_r)
+
+    # Normalize Reward Between [-1, 1]
+    reward_normalized = 2 * ((reward_stabilized - min_reward) / (max_reward - min_reward)) - 1
+
+    return reward_normalized
+
+def reward_function_v12(model, n_seg0, n_seg1, n_after, avg_speed, collisions, gen_rate, vsl,
+                               seg0_length=275, seg1_length=300, seg_after_length=500,
+                               collision_occurred=5, aggr_time=60,
+                               min_reward=-835, max_reward=-831,
+                               compliance_weight=10, extreme_speed_weight=5,
+                               acceptable_deviation=10):
+    # Constants and Neutral Zones
+    epsilon_r = 1e-9
+    max_speed = 130
+    neutral_density_range = (0.045, 0.055)
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)
+    n_lanes_seg0 = 3
+    n_lanes_seg1 = 3
+    n_lanes_after = 2
+
+    # Corrected Flow Calculations per Segment
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
+    q_after = n_after / (aggr_time * n_lanes_after)
+    avg_flow = (q_seg0 + q_seg1 + q_after) / 3
+
+    # Corrected Density Calculations per Segment
+    k_seg0 = n_seg0 / (seg0_length * n_lanes_seg0)
+    k_seg1 = n_seg1 / (seg1_length * n_lanes_seg1)
+    k_after = n_after / (seg_after_length * n_lanes_after)
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+
+    # Normalize Flow and Density
+    max_flow = gen_rate / aggr_time
+    max_density = gen_rate / ((seg0_length + seg1_length + seg_after_length) * min(n_lanes_seg0, n_lanes_after))
+    normalized_flow = (avg_flow + epsilon_r) / (max_flow + epsilon_r)
+    normalized_density = (avg_density + epsilon_r) / (max_density + epsilon_r)
+
+    # Collision Penalty
+    r_c = -100 if collisions >= collision_occurred else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Compliance Penalty
+    compliance_penalty = -compliance_weight * abs(avg_speed - vsl)
+
+    # Extreme Speed Penalty
+    extreme_speed_penalty = (
+        -extreme_speed_weight * abs(avg_speed - vsl)
+        if abs(avg_speed - vsl) > acceptable_deviation else 
+        0
+    )
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    if avg_speed < optimal_speed:
+        r_s = -(optimal_speed - avg_speed + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed > max_speed:
+        r_s = -(avg_speed - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed - optimal_speed) / optimal_speed, 1)
+
+    # Raw Reward Calculation
+    scaling_factor = gen_rate / 1000
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty +
+        compliance_penalty +
+        extreme_speed_penalty
+    )
+
+    # Normalize Reward Between [-1, 1]
+    reward_stabilized = (reward_raw + epsilon_r) / (scaling_factor + epsilon_r)
+
+    return reward_stabilized
+
+def reward_function_v13(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisions, gen_rate, vsl,
+                        seg0b_length=275, seg1b_length=300, sega_length=500,
+                        collision_occurred=5, aggr_time=60,
+                        compliance_weight=10, extreme_speed_weight=5,
+                        acceptable_deviation=10,
+                        min_reward=-834.86, max_reward=-0.44):
+    # Constants
+    epsilon_r = 1e-9
+    max_speed = 130
+    neutral_density_range = (0.045, 0.055)
+    neutral_flow_range = (0.9 * gen_rate / aggr_time, 1.1 * gen_rate / aggr_time)
+    n_lanes_seg0 = 3
+    n_lanes_seg1 = 3
+    n_lanes_after = 2
+
+    # Normalize Inputs
+    def normalize(x, x_min, x_max):
+        return 2 * ((x - x_min) / (x_max - x_min)) - 1
+
+    # Flow and Density Normalization
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
+    q_after = n_after / (aggr_time * n_lanes_after)
+    avg_flow = (q_seg0 + q_seg1 + q_after) / 3
+
+    k_seg0 = n_seg0 / (seg0b_length * n_lanes_seg0)
+    k_seg1 = n_seg1 / (seg1b_length * n_lanes_seg1)
+    k_after = n_after / (sega_length * n_lanes_after)
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+
+    max_flow = gen_rate / aggr_time
+    max_density = gen_rate / ((seg0b_length + seg1b_length + sega_length) * min(n_lanes_seg0, n_lanes_after))
+
+    normalized_flow = normalize(avg_flow, 0, max_flow)
+    normalized_density = normalize(avg_density, 0, max_density)
+
+    # Collision Penalty
+    r_c = -100 if seg0_collisions >= collision_occurred else 0
+
+    # Neutral Zone Logic for Density and Flow Penalties
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Compliance Penalty
+    compliance_penalty = -compliance_weight * abs(avg_speed - vsl)
+
+    # Extreme Speed Penalty
+    extreme_speed_penalty = (
+        -extreme_speed_weight * abs(avg_speed - vsl)
+        if abs(avg_speed - vsl) > acceptable_deviation else 
+        0
+    )
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+    
+    if avg_speed < optimal_speed:
+        r_s = -(optimal_speed - avg_speed + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed > max_speed:
+        r_s = -(avg_speed - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed - optimal_speed) / optimal_speed, 1)
+
+    # Raw Reward Calculation with Normalized Components
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_c +
+        r_dens_penalty +
+        r_flow_penalty +
+        compliance_penalty +
+        extreme_speed_penalty
+    )
+
+    # Normalize Final Reward Between [-1, 1]
+    reward_normalized = normalize(reward_raw, min_reward, max_reward)
+
+    return reward_normalized
+
+def reward_function_v14(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisions, gen_rate, vsl,
+                        seg0b_length=275, seg1b_length=300, sega_length=500,
+                        collision_occurred=5, aggr_time=60,
+                        compliance_weight=10, extreme_speed_weight=5,
+                        min_reward=-835, max_reward=-831,
+                        disobey_weight=10, disobey_deviation=0.05):
+    
+    # Constants
+    epsilon_r = 1e-9
+    max_speed = 130
+    n_lanes_seg0 = 3
+    n_lanes_seg1 = 3
+    n_lanes_after = 2
+
+    # Normalize Inputs
+    def normalize(x, x_min, x_max):
+        return (x - x_min) / (x_max - x_min)
+
+    # Flow and Density Calculations per Segment
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
+    q_after = n_after / (aggr_time * n_lanes_after)
+    avg_flow = (q_seg0 + q_seg1 + q_after) / 3
+
+    k_seg0 = n_seg0 / (seg0b_length * n_lanes_seg0)
+    k_seg1 = n_seg1 / (seg1b_length * n_lanes_seg1)
+    k_after = n_after / (sega_length * n_lanes_after)
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+
+    # Normalize Flow and Density
+    max_flow = gen_rate / aggr_time
+    max_density = gen_rate / ((seg0b_length + seg1b_length + sega_length) * min(n_lanes_seg0, n_lanes_after))
+    normalized_flow = normalize(avg_flow, 0, max_flow)
+    normalized_density = normalize(avg_density, 0, max_density)
+
+    # Collision Penalty
+    r_c = -1 if seg0_collisions >= collision_occurred else 0
+
+    # Dynamic Neutral Zone Logic for Density and Flow Penalties
+    neutral_density_range = (0.045 * avg_density / max_density, 0.055 * avg_density / max_density)
+    neutral_flow_range = (0.9 * avg_flow / max_flow, 1.1 * avg_flow / max_flow)
+
+    if neutral_density_range[0] <= avg_density <= neutral_density_range[1]:
+        r_dens_penalty = 0
+    else:
+        r_dens_penalty = -(abs(avg_density - sum(neutral_density_range) / 2) * 50)
+
+    if neutral_flow_range[0] <= avg_flow <= neutral_flow_range[1]:
+        r_flow_penalty = 0
+    else:
+        r_flow_penalty = -(abs(avg_flow - sum(neutral_flow_range) / 2) * 50)
+
+    # Disobey Factor Penalty
+    deviation_threshold = disobey_deviation * vsl
+    disobey_factor = (
+        -disobey_weight * ((abs(avg_speed - vsl) / vsl) ** 2)
+        if abs(avg_speed - vsl) > deviation_threshold else 
+        0
+    )
+
+    # Speed Control Reward/Penalty Based on Optimal Speed
+    optimal_speed = max(60, min(90, max_speed - avg_density * 100))
+
+    if avg_speed < optimal_speed:
+        r_s = -(optimal_speed - avg_speed + epsilon_r) / (optimal_speed + epsilon_r)
+    elif avg_speed > max_speed:
+        r_s = -(avg_speed - max_speed + epsilon_r) / (max_speed + epsilon_r)
+    else:
+        r_s = min((avg_speed - optimal_speed) / optimal_speed, 1)
+
+    # Raw Reward Calculation with Normalized Components
+    reward_raw = (
+        epsilon_r /
+        (epsilon_r + normalized_flow + normalized_density) +
+        r_s +
+        r_dens_penalty +
+        r_flow_penalty +
+        disobey_factor
+    ) if r_c == 0 else r_c
+
+    # Normalize Final Reward Between [-1, 1]
+    # reward_normalized = normalize(reward_raw, min_reward, max_reward)
+
+    return reward_raw
+
+def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisions, gen_rate, vsl,
+                        seg0b_length=275, seg1b_length=300, sega_length=500,
+                        collision_occurred=5, aggr_time=60,
+                        compliance_weight=10, emissions_weight=0.01,
+                        critical_density=30, min_flow_threshold=900):
+    
+    # Constants
+    epsilon_r = 0.1
+    n_lanes_seg0 = 3
+    n_lanes_seg1 = 3
+    n_lanes_after = 2
+
+    # Quad Occupancy Reward Function
+    def quad_occ_reward(occupancy):
+        if 0 < occupancy <= 12:
+            return ((0.5 * occupancy) + 6) / 12
+        elif 12 < occupancy < 80:
+            return (-(occupancy - 80)**2) / (68**2) + 1
+        else:
+            return 0
+
+    # Flow Calculations per Segment
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
+    q_after = n_after / (aggr_time * n_lanes_after)
+
+    # Reward for Flow Based on Quad Occupancy
+    flow_reward_seg0 = quad_occ_reward(q_seg0 * 100)
+    flow_reward_seg1 = quad_occ_reward(q_seg1 * 100)
+    flow_reward_after = quad_occ_reward(q_after * 100)
+    
+    avg_flow_reward = epsilon_r / ((flow_reward_seg0 + flow_reward_seg1 + flow_reward_after) / 3 + epsilon_r)
+
+    w_build_up = 0.5
+    w_merging_zone = 1.0
+    w_post_merge = 0.7
+    # Density Calculations per Segment
+    k_seg0 = n_seg0 / (seg0b_length * n_lanes_seg0)
+    k_seg1 = n_seg1 / (seg1b_length * n_lanes_seg1)
+    k_after = n_after / (sega_length * n_lanes_after)
+    
+    # Neutral Zone Logic for Density
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+    density_neutral_min = max(0.04, avg_density * 0.9)
+    density_neutral_max = min(0.06, avg_density * 1.1)
+    density_penalty_seg0 = -(abs(k_seg0 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_seg0 <= density_neutral_max) else 0
+    density_penalty_seg1 = -(abs(k_seg1 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_seg1 <= density_neutral_max) else 0
+    density_penalty_after = -(abs(k_after - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_after <= density_neutral_max) else 0
+    total_density_penalty = (
+        w_build_up * density_penalty_seg0 +
+        w_merging_zone * density_penalty_seg1 +
+        w_post_merge * density_penalty_after
+    )
+
+    # Collision Penalty
+    r_c = -seg0_collisions if seg0_collisions >= collision_occurred else 0
+
+    # avg_speed_smoothed = pd.Series(avg_speed_seg0before_all).rolling(window=3).mean().fillna(method='bfill')
+    
+    # Context-Aware Compliance Penalty (Speed Limit Disobedience)
+    acceptable_deviation = 0.05
+    disobey_weight = 10
+    if avg_speed < vsl * (1 - acceptable_deviation) or avg_speed > vsl * (1 + acceptable_deviation):
+        if avg_flow_reward < min_flow_threshold or avg_density > critical_density:
+            # Smoothed penalty using sigmoid function
+            deviation_ratio = abs(avg_speed - vsl) / vsl
+            r_d = -disobey_weight / (1 + np.exp(-10 * (deviation_ratio - acceptable_deviation)))
+        else:
+            r_d = 0
+    else:
+        r_d = 0
+
+    # # Intermediate rewards for progress toward goals (e.g., maintaining high flow or reducing density)
+    # w_p = 0.01
+    # r_p = w_p * max(0, (q_seg0 + q_seg1 + q_after)/3 - min_flow_threshold)
+
+    # Raw Reward Calculation with Normalized Components
+    reward_raw = (
+        0.5 * avg_flow_reward
+        + 0.3 * total_density_penalty
+        + 0.1 * r_c 
+        + 0.2 * r_d
+        #   + 0.41 * emissions_penalty
+    )
+    
+    # clipped_reward = max(-1, min(1, reward_raw))
+    
+    return reward_raw, avg_flow_reward, total_density_penalty, r_c, r_d
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
@@ -700,13 +1329,14 @@ def append_additionalfile_VSS(vss_id, time, speed):
     # Write the updated XML back to file
     tree.write(xml_file)
 
-def plot_rewards(rewards_by_veh_gen, output_dir):
+def plot_rewards(rewards_by_veh_gen, output_dir, window_size=50):
     """
-    Plots rewards over time for each vehicle generation rate.
+    Plots rewards over time for each vehicle generation rate with a smoothed overlay.
 
     Args:
         rewards_by_veh_gen (dict): A dictionary where keys are veh_gen_per_hour and values are lists of rewards.
         output_dir (str): Directory to save the reward plots.
+        window_size (int): Window size for the moving average.
     """
     # Ensure the output directory exists
     if not os.path.exists(output_dir):
@@ -714,8 +1344,18 @@ def plot_rewards(rewards_by_veh_gen, output_dir):
 
     # Iterate through each vehicle generation rate and its corresponding rewards
     for veh_gen_rate, rewards in rewards_by_veh_gen.items():
+        # Calculate moving average for smoothing
+        rewards = np.array(rewards)
+        moving_avg = np.convolve(rewards, np.ones(window_size) / window_size, mode='valid')
+
+        # Plot raw rewards
         plt.figure(figsize=(10, 6))
-        plt.plot(rewards, label=f"Veh Gen Rate: {veh_gen_rate}")
+        plt.plot(rewards, label=f"Veh Gen Rate: {veh_gen_rate}", color="blue", alpha=0.6)
+        
+        # Overlay moving average
+        plt.plot(range(window_size - 1, len(rewards)), moving_avg, label="Smoothed (Moving Avg)", color="red", linewidth=2)
+
+        # Add labels, title, legend, and grid
         plt.xlabel("Time Steps")
         plt.ylabel("Reward")
         plt.title(f"Reward Over Time for Veh Gen Rate {veh_gen_rate}")
@@ -729,15 +1369,20 @@ def plot_rewards(rewards_by_veh_gen, output_dir):
 
     print(f"Reward plots saved to {output_dir}")
 
+def calculate_moving_average(data, column, window_size=50):
+    return data[column].rolling(window=window_size).mean()
+
 def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     model = "DQN"
     new_speed_limit = 50
     old_speed_limit = new_speed_limit
     speed_limit_run = 4 # hours
     speed_limits = 10
+    mean_speeds_by_veh_before0 = []
     model_name = 'REW_TST'
     create_sumocfg(model_name, 1)
     rewards = []
+    global avg_speed_seg0before_all
     # mock_daily_pattern_test = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 210, 220, 230, 240]
     mock_daily_pattern_test = [veh_gen_per_hour] * speed_limit_run * speed_limits
     # multiply_factor = 15
@@ -765,6 +1410,7 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
         [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
         
         n_before_all = 0
+        n_before_all_avg = []
         seconds_passed = 0
         seconds_passed_ = 0
         aggregation_interval = 60 # seconds
@@ -772,17 +1418,24 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
         csv_path = os.path.join(csv_dir, f"RewFuncCalib_VehpHr_{veh_gen_per_hour}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        emissions = []
-        avg_speed = []
+        emissions_before0 = []
         vehicles_on_road = []
-        n_before_avg = []
+        n_before0_avg = []
+        n_before1_avg = []
         n_after_avg = []
-        n_before_all_avg = []
-        collisions = 0
+        avg_speed_seg0before_all = []
+        collisions_before0 = 0
         
         with open(csv_path, mode='w', newline='') as csvfile:
-            fieldnames = ['Minute', 'Reward', 'Vehicles before', 'Vehicles after', 'Emissions', 'Avg Speed', 
-                        'Vehicles on road', 'VSS', "Vehicles generated each hour", "Collisions"]
+            fieldnames = ['Minute', 'Reward', 'Vehicles before merging zone (seg0)', 
+                          'Vehicles before merging zone (seg1)', 
+                          'Vehicles after merging zone', 
+                          'Emissions in merging zone (seg0)', 
+                          'Avg speed in merging zone (seg0)', 
+                        'Vehicles on road', 'VSS', 
+                        "Vehicles generated each hour", 
+                        "Collisions in merging zone (seg0)",
+                        "Reward: flow", "Penalty: density", "Penalty: compliance", "Penalty: disobey"]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
             # Write header
@@ -799,32 +1452,50 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
 
                 for i in range(10):
                     n_before_all += traci.edge.getLastStepVehicleNumber(f"seg_{i+1}_before")
-                n_before = traci.edge.getLastStepVehicleNumber("seg_0_before")
-                n_after = traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after")
-                n_before_avg.append(n_before)
+                n_before0 = traci.edge.getLastStepVehicleNumber("seg_0_before")
+                n_before1 = traci.edge.getLastStepVehicleNumber("seg_1_before")
+                n_after = traci.edge.getLastStepVehicleNumber("seg_0_after")
+                n_before0_avg.append(n_before0)
+                n_before1_avg.append(n_before1)
                 n_after_avg.append(n_after)
                 n_before_all_avg.append(n_before_all)
-                collisions += len(traci.simulation.getCollidingVehiclesIDList())
+                # collisions += len(traci.simulation.getCollidingVehiclesIDList())
+                for vehId in traci.simulation.getCollidingVehiclesIDList():
+                    if traci.vehicle.getRoadID(vehId) == "seg_0_before":
+                        collisions_before0 += 1
 
-                if (n_after >= 1 or n_before >= 1) and n_before_all >= 1:
-                    avg_speed.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
-                    emissions.append(traci.edge.getCO2Emission("seg_0_before"))
+                if (n_after >= 1 or n_before0 >= 1) and n_before_all >= 1:
+                    """ The use of average speed getLastStepMeanSpeed() is susceptible to outliers caused 
+                    by non-compliant vehicles (e.g., vehicles traveling significantly slower or faster than the VSL). 
+                    These outliers can distort the average and lead to incorrect inferences by the DRL agent. """
+                    # mean_speeds.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
+                    for veh_id in traci.edge.getLastStepVehicleIDs("seg_0_before"):
+                        mean_speeds_by_veh_before0.append(traci.vehicle.getSpeed(veh_id) * 3.6)
+
+                    emissions_before0.append(traci.edge.getCO2Emission("seg_0_before"))
                     vehicles_on_road.append(len(traci.vehicle.getLoadedIDList()))
 
                 # Adjust vehicle generation rate based on traffic volume
                 if seconds_passed % aggregation_interval == 0: # each minute
-                    avg_speed_temp = np.average(avg_speed) if len(avg_speed) > 0 else 0
-                    emissions_temp = np.average(emissions) if len(emissions) > 0 else 0
+                    """ Robust metrics, such as the median speed or the interquartile range (IQR), are less sensitive to 
+                    extreme values and provide a more accurate representation of typical traffic behavior."""
+                    avg_speed_seg0before = np.median(mean_speeds_by_veh_before0) if len(mean_speeds_by_veh_before0) > 0 else 0
+                    avg_speed_seg0before_all.append(avg_speed_seg0before) if avg_speed_seg0before > 0 else None
+                    # q75, q25 = np.percentile(mean_speeds_by_veh_before0, [75, 25])
+                    # avg_speed_in_seg0before = q75 - q25
+
+                    emissions_temp = np.average(emissions_before0) if len(emissions_before0) > 0 else 0
                     vehicles_on_road_temp = np.average(vehicles_on_road) if len(vehicles_on_road) > 0 else 0
-                    n_before_temp = np.average(n_before_avg) if len(n_before_avg) > 0 else 0
+                    n_before0_temp = np.average(n_before0_avg) if len(n_before0_avg) > 0 else 0
+                    n_before1_temp = np.average(n_before1_avg) if len(n_before1_avg) > 0 else 0
                     n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
                     n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
                     
-                    reward = reward_function_v6(model=None, n_before=n_before_temp, n_after=n_after_temp,
-                                avg_speed=avg_speed_temp, collisions=collisions)
+                    reward, r_f, r_d, r_c, r_d = reward_function_v15(None, n_before0_temp, n_before1_temp, n_after_temp,
+                                avg_speed_seg0before, collisions_before0, veh_gen_per_hour, new_speed_limit)
                     rewards.append(reward)
                     
-                    if (n_after >= 1 or n_before_temp >= 1) and n_before_all_temp >= 1:
+                    if (n_after >= 1 or n_before0_temp >= 1) and n_before_all_temp >= 1:
                         # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
                         #     f"Reward: {reward}; "
                         #     f"Vehicles before: {n_before_temp:.2f}; "
@@ -837,21 +1508,27 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
                         writer.writerow({
                             'Minute': seconds_passed / aggregation_interval,
                             'Reward': reward,
-                            'Vehicles before': n_before_temp,
-                            'Vehicles after': n_after_temp,
-                            'Emissions': emissions_temp,
-                            'Avg Speed': avg_speed_temp,
+                            'Vehicles before merging zone (seg0)': n_before0_temp,
+                            'Vehicles before merging zone (seg1)': n_before1_temp,
+                            'Vehicles after merging zone': n_after_temp,
+                            'Emissions in merging zone (seg0)': emissions_temp,
+                            'Avg speed in merging zone (seg0)': avg_speed_seg0before,
                             'Vehicles on road': vehicles_on_road_temp,
                             'VSS': new_speed_limit,
                             'Vehicles generated each hour': veh_gen_per_hour,
-                            'Collisions': collisions
+                            'Collisions in merging zone (seg0)': collisions_before0,
+                            "Reward: flow": r_f,
+                            "Penalty: density": r_d,
+                            "Penalty: compliance": r_c,
+                            "Penalty: disobey": r_d
                         })
                         # TODO: update also fieldnames in case of adding/removing a field from the csv
 
-                        avg_speed.clear()
-                        emissions.clear()
+                        mean_speeds_by_veh_before0.clear()
+                        emissions_before0.clear()
                         vehicles_on_road.clear()
-                        n_before_avg.clear()
+                        n_before0_avg.clear()
+                        n_before1_avg.clear()
                         n_after_avg.clear()
                         n_before_all_avg.clear()
 
@@ -877,7 +1554,7 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
 
                     elif n_after_temp == 0 and n_before_all_temp == 0:
                         logging.warning("No vehicles detected in the simulation.")
-                    elif n_after_temp == 0 and n_before == 0 and n_before_all_temp > 0:
+                    elif n_after_temp == 0 and n_before0 == 0 and n_before_all_temp > 0:
                         seconds_passed -= 1
                         seconds_passed_ -= 1
                     else:
@@ -892,7 +1569,7 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     except Exception as e:
         logging.error(f"An unexpected error occurred during calibration: {e}")
 
-    return rewards
+    return rewards, mean_speeds_by_veh_before0
 
 def merge_dataset(sub_folder):
     # Set the directory path where your CSV files are located
@@ -968,8 +1645,8 @@ def wait_for_files(csv_folder, expected_files):
         time.sleep(1)  # Wait for 1 second before checking again
 
 def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
-    rewards = reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
-    return veh_gen_per_hour, rewards
+    rewards, avg_speeds = reward_function_calibration(veh_gen_per_hour, sumo_port, csv_folder)
+    return veh_gen_per_hour, rewards, avg_speeds
 
 def on_task_complete(result):
     # Callback function executed when a process completes
@@ -978,19 +1655,21 @@ def on_task_complete(result):
 if __name__ == '__main__':
     rewards_by_veh_gen = {}
     # Define the list of vehicle generation rates and SUMO ports for parallel runs
-    veh_gen_rates_ports = [(1900, 9000),
-                           (2000, 9001),
-                           (2100, 9002),
-                           (2200, 9003),
-                           (2300, 9004),
-                           (2400, 9005),
-                           (2500, 9006),
-                           (2600, 9007),
-                           (2700, 9008),
-                           (2800, 9009),
-                           (2900, 9010),
-                           (3000, 9011)
-                           ]
+    veh_gen_rates_ports = [
+        (2000, 9000),
+        # (2250, 9001),
+        # (2500, 9002),
+        # (2750, 9003),
+        (3000, 9004),
+        # (3250, 9005),
+        # (3500, 9006),
+        # (3750, 9007),
+        (4000, 9008),
+        # (4250, 9009),
+        # (4500, 9010),
+        # (4725, 9011),
+        # (5000, 9012),
+        ]
     
     csv_folder = datetime.now().strftime('%Y%m%d_%H%M%S')
 
@@ -1009,9 +1688,11 @@ if __name__ == '__main__':
         # Collect results from all tasks
         rewards_by_veh_gen = {}
         for result in results:
-            veh_gen_rate, rewards = result.get()  # Get return value from each process
+            veh_gen_rate, rewards, avg_speeds = result.get()  # Get all return values from each process
             rewards_by_veh_gen[veh_gen_rate] = rewards
-    
+
     merge_dataset(csv_folder)
     correlation_heatmap(csv_folder, "RewFuncCalib_VehpHr_MERGED")
     plot_rewards(rewards_by_veh_gen, os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}\\reward_plots'))
+
+    # rewards, avg_speeds = reward_function_calibration(4000, 9011, csv_folder) # NOTE: for testing purposes
