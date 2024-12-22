@@ -1201,6 +1201,102 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
     
     return reward_raw, avg_flow_reward, total_density_penalty, r_c, r_d
 
+""" Reward functions split to be used in CTDE context """
+def calculate_disobey_penalty(avg_speed, vsl, acceptable_deviation, disobey_weight):
+    # Penalize speed deviations beyond acceptable range
+    if avg_speed < vsl * (1 - acceptable_deviation) or avg_speed > vsl * (1 + acceptable_deviation):
+        deviation_ratio = abs(avg_speed - vsl) / vsl
+        disobey_penalty = -disobey_weight / (1 + np.exp(-10 * (deviation_ratio - acceptable_deviation)))
+    else:
+        disobey_penalty = 0
+
+    return disobey_penalty
+
+def calculate_collision_penalty(seg_collisions, collision_threshold):
+    # Apply penalty if collisions exceed the threshold
+    collision_penalty = -seg_collisions if seg_collisions >= collision_threshold else 0
+    return collision_penalty
+
+def calculate_density_penalty(n_seg0, n_seg1, n_after, seg0_length, seg1_length, seg_after_length,
+                              n_lanes_seg0, n_lanes_seg1, n_lanes_after, compliance_weight):
+    # Calculate densities (vehicles per meter per lane)
+    k_seg0 = n_seg0 / (seg0_length * n_lanes_seg0)
+    k_seg1 = n_seg1 / (seg1_length * n_lanes_seg1)
+    k_after = n_after / (seg_after_length * n_lanes_after)
+
+    # Define neutral density range
+    avg_density = (k_seg0 + k_seg1 + k_after) / 3
+    density_neutral_min = max(0.04, avg_density * 0.9)
+    density_neutral_max = min(0.06, avg_density * 1.1)
+
+    # Calculate penalties for exceeding neutral range
+    density_penalty_seg0 = -(abs(k_seg0 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_seg0 <= density_neutral_max) else 0
+    density_penalty_seg1 = -(abs(k_seg1 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_seg1 <= density_neutral_max) else 0
+    density_penalty_after = -(abs(k_after - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        if not (density_neutral_min <= k_after <= density_neutral_max) else 0
+
+    # Weighted sum of penalties across segments
+    total_density_penalty = (
+        0.5 * density_penalty_seg0 +
+        1.0 * density_penalty_seg1 +
+        0.7 * density_penalty_after
+    )
+    
+    return total_density_penalty
+
+def calculate_flow_reward(n_seg0, n_seg1, n_after, aggr_time, n_lanes_seg0, n_lanes_seg1, n_lanes_after):
+    # Calculate flow rates (vehicles per second per lane)
+    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
+    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
+    q_after = n_after / (aggr_time * n_lanes_after)
+
+    # Use a custom reward function for flow based on occupancy
+    def quad_occ_reward(occupancy):
+        if 0 < occupancy <= 12:
+            return ((0.5 * occupancy) + 6) / 12
+        elif 12 < occupancy < 80:
+            return (-(occupancy - 80)**2) / (68**2) + 1
+        else:
+            return 0
+
+    # Convert flow rates to percentages and calculate rewards
+    flow_reward_seg0 = quad_occ_reward(q_seg0 * 100)
+    flow_reward_seg1 = quad_occ_reward(q_seg1 * 100)
+    flow_reward_after = quad_occ_reward(q_after * 100)
+
+    # Average flow reward across all segments
+    avg_flow_reward = (flow_reward_seg0 + flow_reward_seg1 + flow_reward_after) / 3
+    return avg_flow_reward
+
+def parameterized_reward_function(n_seg0, n_seg1, n_after, seg_collisions, avg_speed,
+                                  vsl, aggr_time=60,
+                                  seg_lengths=(275, 300, 500),
+                                  lanes=(3, 3, 2),
+                                  compliance_weight=10,
+                                  collision_threshold=3,
+                                  acceptable_deviation=0.05,
+                                  disobey_weight=10):
+    
+    # Calculate individual components of the reward function
+    flow_reward = calculate_flow_reward(n_seg0, n_seg1, n_after,
+                                        aggr_time,
+                                        lanes[0], lanes[1], lanes[2])
+    
+    density_penalty = calculate_density_penalty(n_seg0, n_seg1, n_after,
+                                                seg_lengths[0], seg_lengths[1], seg_lengths[2],
+                                                lanes[0], lanes[1], lanes[2],
+                                                compliance_weight)
+    
+    collision_penalty = calculate_collision_penalty(seg_collisions, collision_threshold)
+    
+    disobey_penalty = calculate_disobey_penalty(avg_speed, vsl,
+                                                acceptable_deviation,
+                                                disobey_weight)
+
+    return {'flow': flow_reward, 'density': density_penalty, 'collision': collision_penalty, 'disobey': disobey_penalty}
+
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
 def correlation_heatmap(folder_to_store, csv_file_pattern):
@@ -1218,7 +1314,7 @@ def correlation_heatmap(folder_to_store, csv_file_pattern):
     csv_paths = glob.glob(os.path.join(csv_dir, f"{csv_file_pattern}*.csv"))
     
     if not csv_paths:
-        print("No files found matching the pattern.")
+        logging.error("No files found matching the pattern.")
         return
     
     # Load all matching CSV files into a list of DataFrames
@@ -1265,69 +1361,6 @@ class TestCalculateReward(unittest.TestCase):
                                   collision_occurred,
                                   overtaking_occurred)
         self.assertAlmostEqual(result, expected, places=5)
-
-def test_and_tune_reward_function():
-    """ Simulating Different Traffic Conditions to see how the reward function 
-    behaves under different circumstances before running full training sessions """
-    flow_merge                  = [10, 20, 35] # Average flow in vehicles per time unit
-    density_merge               = [20, 50, 100]   # Average density in vehicles per kilometer
-    collision_occurred_cases    = [False, True]
-    overtaking_occurred_cases   = [False, True]
-
-    results = []
-
-    # Iterate over scenarios and calculate rewards
-    for flow in flow_merge:
-        for density in density_merge:
-            for collision_occurred in collision_occurred_cases:
-                for overtaking_occurred in overtaking_occurred_cases:
-                    reward = reward_function(flow, density, collision_occurred, overtaking_occurred)
-                    results.append((flow, density, collision_occurred, overtaking_occurred, reward))
-
-    # Display results
-    for result in results:
-        flow_val = result[0]
-        density_val = result[1]
-        status = "Collision" if result[2] else "No Collision"
-        action = "Overtaking" if result[3] else "No Overtaking"
-        print(f"Flow: {flow_val}, Density: {density_val}, {status}, {action}, Reward: {result[4]}")
-
-def reset_additionalfile_for_VSS(speed, t0 = 0, xml_file="traffic_environment/sumo/variable_speed_limits_signs.add.xml"):
-    # Define the base content of your additional file (the template)
-    base_xml_content = f'''<?xml version="1.0" encoding="UTF-8"?>
-    <additional xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/additional_file.xsd">
-        <variableSpeedSign id="VSS_0" lanes="seg_1_before_0">
-            <step time="{t0}" speed="{speed}"/>
-        </variableSpeedSign>
-        <variableSpeedSign id="VSS_1" lanes="seg_1_before_1">
-            <step time="{t0}" speed="{speed}"/>
-        </variableSpeedSign>
-        <variableSpeedSign id="VSS_2" lanes="seg_1_before_2">
-            <step time="{t0}" speed="{speed}"/>
-        </variableSpeedSign>
-    </additional>'''
-    with open(xml_file, 'w') as f:
-        f.write(base_xml_content)
-
-def append_additionalfile_VSS(vss_id, time, speed):
-    xml_file="traffic_environment/sumo/variable_speed_limits_signs.add.xml"
-    # Parse the XML file
-    tree = ET.parse(xml_file)
-    root = tree.getroot()
-    
-    # Find the variableSpeedSign by ID
-    for vss in root.findall('variableSpeedSign'):
-        if vss.attrib['id'] == vss_id:
-            # Create a new step element
-            new_step = ET.Element('step')
-            new_step.set('time', str(time))
-            new_step.set('speed', str(speed))
-            
-            # Append the new step to the variableSpeedSign
-            vss.append(new_step)
-    
-    # Write the updated XML back to file
-    tree.write(xml_file)
 
 def plot_rewards(rewards_by_veh_gen, output_dir, window_size=50):
     """
@@ -1387,7 +1420,6 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
     mock_daily_pattern_test = [veh_gen_per_hour] * speed_limit_run * speed_limits
     # multiply_factor = 15
     # mock_daily_pattern_test = [x * multiply_factor for x in mock_daily_pattern_test]
-    # reset_additionalfile_for_VSS(-1) # NOTE: no need to
 
     flow_generation_wrapper(model_name, 0, 1, mock_daily_pattern_test)
 
@@ -1399,6 +1431,7 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
                                          + ['--random-depart-offset=3600']
                                          + ["--remote-port", str(sumo_port)] 
                                          + ["--quit-on-end"] 
+                                         + ["--no-warnings"]
                                            ,
                         stdout=subprocess.PIPE, 
                         stderr=subprocess.PIPE)
@@ -1580,7 +1613,7 @@ def merge_dataset(sub_folder):
 
     # Ensure there are CSV files to process
     if not csv_files:
-        print("No CSV files found.")
+        logging.error("No CSV files found.")
     else:
         # Function to extract vehicle generation rate and timestamp from the filename
         def extract_info(filename):
@@ -1614,7 +1647,7 @@ def merge_dataset(sub_folder):
             filtered_files = [f for f in csv_files if extract_info(f)[1].strftime('%Y%m%d') == date_str and extract_info(f)[0] <= 3000]
 
             if not filtered_files:
-                print("No relevant CSV files found.")
+                logging.error("No relevant CSV files found.")
             else:
                 # Merge all filtered CSV files into one DataFrame
                 merged_df = pd.concat([pd.read_csv(f) for f in filtered_files])
@@ -1626,10 +1659,10 @@ def merge_dataset(sub_folder):
                 # Save the merged DataFrame to a new CSV file
                 merged_df.to_csv(output_path, index=False)
                 
-                print(f"Merged CSV saved as: {output_path}")
+                logging.info(f"Merged CSV saved as: {output_path}")
 
         except ValueError as e:
-            print(e)
+            logging.error(e)
 
 def wait_for_files(csv_folder, expected_files):
     while True:
@@ -1650,7 +1683,7 @@ def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
 
 def on_task_complete(result):
     # Callback function executed when a process completes
-    print(f"Task completed: {result}")
+    logging.info(f"Task completed: {result}")
 
 if __name__ == '__main__':
     rewards_by_veh_gen = {}
