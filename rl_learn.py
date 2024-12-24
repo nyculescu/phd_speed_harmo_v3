@@ -5,19 +5,22 @@ import logging
 import logging.handlers
 
 from sb3_contrib import TRPO #, CrossQ, TQC
-from stable_baselines3 import PPO, DQN, A2C, SAC, TD3, DDPG #, DroQ
+from stable_baselines3 import PPO, A2C, SAC, TD3, DDPG #, DroQ, DQN
+from stable_baselines3 import DQN as DQN_sb3
 from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
 from rl_models.custom_models.DQN_FPWDDQN import FPWDDQN
 # from stable_baselines3.common.env_checker import check_env
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback
+from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.vec_env import DummyVecEnv
 # from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
+from stable_baselines import DQN as DQN_sb2
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
+from gymnasium.wrappers import TimeLimit
 # import gymnasium as gym
 import multiprocessing
 import os
@@ -53,13 +56,37 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
+first_evaluation_length = int(episode_length * num_of_hr_intervals * 60 * 0.7)
+
+class UpdateStartLaterCallback(BaseCallback):
+    def __init__(self, eval_callback, verbose=0):
+        super().__init__(verbose)
+        self.eval_callback = eval_callback
+        self.first_eval_done = False
+        self.last_eval_done = False
+
+    def _on_step(self):
+        if self.last_eval_done == True:
+            self.training_env.close()
+            return False
+        if not self.first_eval_done and self.eval_callback.n_calls >= first_evaluation_length:
+            self.eval_callback.eval_freq = int(episode_length * num_of_hr_intervals * 60 * 0.1)
+            self.first_eval_done = True
+        if self.first_eval_done and self.eval_callback.n_calls >= (episode_length * num_of_hr_intervals * 60) :
+            self.last_eval_done = True
+        return True
+
 def get_traffic_env(port, model, model_idx, is_learning):
     def _init():
-        env = Monitor(TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=is_learning))
-        # check_env(env, warn=True)
-
-        # env.update_environment()  # Simulate a change in road conditions
-        
+        if is_learning:
+            env = Monitor(
+                TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=is_learning, base_gen_car_distrib=["uniform", 300])
+                )
+        else:
+            env = Monitor(
+                TimeLimit(
+                    TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=is_learning, base_gen_car_distrib=["uniform", 500]), 
+                    max_episode_steps=episode_length * 60))
         return env
     return _init
 
@@ -69,8 +96,7 @@ def get_traffic_env(port, model, model_idx, is_learning):
 def train_model(model_name, model):
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    episode_length = get_full_week_car_generation_rates() * 60
-    timesteps = episode_length * num_envs_per_model
+    timesteps = episode_length * num_of_hr_intervals * 60 # times aggregation time
 
     try:
         create_sumocfg(model_name, num_envs_per_model)
@@ -84,7 +110,7 @@ def train_model(model_name, model):
         
         os.makedirs(log_dir, exist_ok=True)
         os.makedirs(model_dir, exist_ok=True)
-        
+
         no_improve_cb = StopTrainingOnNoModelImprovement(
             max_no_improvement_evals=2,
             min_evals=2,
@@ -92,7 +118,7 @@ def train_model(model_name, model):
         )
 
         checkpoint_cb = CheckpointCallback(
-            save_freq=episode_length,
+            save_freq=episode_length * 60,
             save_path=model_dir,
             name_prefix=f"rl_model_{model_name}_{datetime.now().strftime('%Y%m%d%H%M%S')}",
             save_replay_buffer=True,
@@ -104,7 +130,7 @@ def train_model(model_name, model):
             env_eval,
             best_model_save_path=model_dir,
             log_path=log_dir,
-            eval_freq=episode_length, # num_envs_per_model * (eval_freq * 7) = num_timesteps: a day could be enough for testing
+            eval_freq=first_evaluation_length, # num_envs_per_model * (eval_freq * 7) = num_timesteps: a day could be enough for testing
             n_eval_episodes=2,
             deterministic=True,
             render=False,
@@ -112,15 +138,17 @@ def train_model(model_name, model):
             verbose=1
         )
         
+        update_start_later_cb = UpdateStartLaterCallback(eval_cb)
+        
         model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
         try:
             logging.info(f"Starting model.learn() with timesteps={timesteps}")
-            model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb], progress_bar=True)
+            model.learn(total_timesteps=timesteps, callback=[eval_cb, checkpoint_cb, update_start_later_cb], progress_bar=True)
         except Exception as e:
-            logging.error(f"Error during training: {e}")
+            logging.error(f"Error during training: {e.args}")
     except ValueError as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error: {e.args}")
 
 def train_ppo():
     model_name = 'PPO'
@@ -166,16 +194,12 @@ def train_dqn():
     #     tensorboard_log=log_dir,
     #     device='cuda'
     # )
-    model = DQN("MlpPolicy", 
-                SubprocVecEnv([get_traffic_env(base_sumo_port + idx, model_name, idx, is_learning=True) 
-                       for idx in range(num_envs_per_model)
-                       ]), 
-                learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
+    model = DQN_sb3("MlpPolicy", 
+                SubprocVecEnv([get_traffic_env(base_sumo_port + idx, model_name, idx, is_learning=True) for idx in range(num_envs_per_model)]), 
+                # learning_rate=1e-3, 
+                buffer_size=50000, 
+                verbose=1, tensorboard_log=log_dir,
                 device='cuda')
-    """
-    Notes:
-    1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
-    """
     train_model(model_name, model)
 
 def train_fpwddqn():
@@ -188,10 +212,6 @@ def train_fpwddqn():
                ]), 
         learning_rate=1e-3, buffer_size=50000, verbose=1, tensorboard_log=log_dir,
         device='cuda')
-    """
-    Notes:
-    1. use Prioritized Replay Buffer (PER) to focus on more informative experiences.
-    """
     train_model(model_name, model)
 
 def train_a2c():
@@ -314,37 +334,39 @@ def delayed_start(func, delay):
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 if __name__ == '__main__':
+    # Init
     multiprocessing.freeze_support()
     episodes = 12
-    full_day_car_generation_base_demand_base = 400
+    set_full_day_car_generation_base_demand(250) # max no. of vehicles expected in any interval / hour
+    set_full_week_car_generation_rates(len(mock_daily_pattern(isFixed = True)) * len(day_of_the_week_factor))
 
     if not check_sumo_env():
         logging.info("SUMO environment is not set up correctly.") # FIXME: this is printed even if SUMO can run
 
-    ########################################################
-    # The training is splin into 2 processes that shall run independently
-    # Training process 1
-    for m in discrete_act_space_models:
-        for i in range(episodes):
-            logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
-            # Train the model based on its name
-            if m == 'TRPO':
-                # train_trpo() # NOTE: trained
-                pass
-                logging.info(f"Skipping {m} training.")
-            elif m == 'A2C':
-                train_a2c()
-                # logging.info(f"Skipping {m} training.")
-            elif m == 'DQN':
-                train_dqn()
-                # logging.info(f"Skipping {m} training.")
-            elif m == 'PPO':
-                train_ppo()
-                # logging.info(f"Skipping {m} training.")
-            # sleep(2)
-            gc.collect()
+    #######################################################################################
+    # The training is split into 2 processes that shall run independently
+    # # Training process 1
+    # for m in discrete_act_space_models:
+    #     for i in range(episodes):
+    #         logging.info(f"Starting training for {m}, Episode {i+1}/{episodes}")
+    #         # Train the model based on its name
+    #         if m == 'TRPO':
+    #             # train_trpo() # NOTE: trained
+    #             pass
+    #             logging.info(f"Skipping {m} training.")
+    #         elif m == 'A2C':
+    #             train_a2c()
+    #             # logging.info(f"Skipping {m} training.")
+    #         elif m == 'DQN':
+    #             train_dqn()
+    #             # logging.info(f"Skipping {m} training.")
+    #         elif m == 'PPO':
+    #             train_ppo()
+    #             # logging.info(f"Skipping {m} training.")
+    #         # sleep(2)
+    #         gc.collect()
     
-    ########################################################
+    #######################################################################################
     # # Training process 2 [Cover the constraint of AssertionError: You must use only one env when doing episodic training]
     # for i in range(episodes * num_envs_per_model):
     #     full_day_car_generation_base_demand_base -= 25
@@ -365,10 +387,9 @@ if __name__ == '__main__':
     #     pool.close()
     #     pool.join()
 
-    ########################################################
-    # Debug section
-    # train_fpwddqn()
-    # train_sac()
+    #######################################################################################
+    # # Training process 3
+    train_dqn()
 '''
 Run from terminal (with .py310_tf_env activated): python -m memory_profiler rl_learn.py
 

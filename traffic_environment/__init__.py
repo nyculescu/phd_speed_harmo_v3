@@ -4,7 +4,7 @@ from gymnasium.envs.registration import register
 
 def make_traffic_env(port, model, model_idx, day_idx):
     def _init():
-        trafficEnv = TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=False)
+        trafficEnv = TrafficEnv(port=port, model=model, model_idx=model_idx, is_learning=False, base_gen_car_distrib="[uniform, 100]")
         trafficEnv.day_index = (day_idx + model_idx) % 7
         return trafficEnv
     return _init

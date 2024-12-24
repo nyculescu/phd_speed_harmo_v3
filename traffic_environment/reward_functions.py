@@ -10,7 +10,7 @@ import subprocess
 from traffic_environment.flow_gen import flow_generation_wrapper
 import logging
 import csv
-from traffic_environment.road import seg_0_before, seg_1_before
+from traffic_environment.road import *
 import xml.etree.ElementTree as ET
 from traci.exceptions import FatalTraCIError, TraCIException
 from datetime import datetime
@@ -21,13 +21,18 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 import time
 import pandas as pd
+import json
+import statsmodels.api as sm
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.tools.tools import add_constant
+from statsmodels.stats.stattools import durbin_watson
+import traci.constants as tc
+
+logging.getLogger("PIL").setLevel(logging.WARNING)
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
 max_emissions = 250000 # empirical data after running the simulation at max capacity
 max_occupancy = 50000 # empirical data after running the simulation at max capacity
-
-# Logistic function parameters
-num_halts_k = 0.1  # steepness of the curve
-num_halts_x_0 = 40  # midpoint of number of halts where reward is 0.5
 
 def normalize(value, min_value, max_value):
     """Normalize a value between min_value and max_value to a range [0, 1]."""
@@ -1109,7 +1114,9 @@ def reward_function_v14(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
 
     return reward_raw
 
-def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisions, gen_rate, vsl,
+def reward_function_v15(model, n_seg0, n_after, avg_speed, 
+                        o_before0_temp, o_after_temp,
+                        seg0_collisions, gen_rate, vsl,
                         seg0b_length=275, seg1b_length=300, sega_length=500,
                         collision_occurred=5, aggr_time=60,
                         compliance_weight=10, emissions_weight=0.01,
@@ -1123,6 +1130,9 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
 
     # Quad Occupancy Reward Function
     def quad_occ_reward(occupancy):
+        """
+        Occupancy: the percentage of time the detector was occupied by a vehicle.
+        """
         if 0 < occupancy <= 12:
             return ((0.5 * occupancy) + 6) / 12
         elif 12 < occupancy < 80:
@@ -1130,39 +1140,29 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
         else:
             return 0
 
-    # Flow Calculations per Segment
-    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
-    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
-    q_after = n_after / (aggr_time * n_lanes_after)
-
-    # Reward for Flow Based on Quad Occupancy
-    flow_reward_seg0 = quad_occ_reward(q_seg0 * 100)
-    flow_reward_seg1 = quad_occ_reward(q_seg1 * 100)
-    flow_reward_after = quad_occ_reward(q_after * 100)
+    r_o = (quad_occ_reward(o_before0_temp) + quad_occ_reward(o_after_temp)) / 2
     
-    avg_flow_reward = epsilon_r / ((flow_reward_seg0 + flow_reward_seg1 + flow_reward_after) / 3 + epsilon_r)
-
     w_build_up = 0.5
     w_merging_zone = 1.0
     w_post_merge = 0.7
     # Density Calculations per Segment
     k_seg0 = n_seg0 / (seg0b_length * n_lanes_seg0)
-    k_seg1 = n_seg1 / (seg1b_length * n_lanes_seg1)
+    # k_seg1 = n_seg1 / (seg1b_length * n_lanes_seg1)
     k_after = n_after / (sega_length * n_lanes_after)
-    
+    avg_density = (k_seg0 + k_after) / 2
+
     # Neutral Zone Logic for Density
-    avg_density = (k_seg0 + k_seg1 + k_after) / 3
     density_neutral_min = max(0.04, avg_density * 0.9)
     density_neutral_max = min(0.06, avg_density * 1.1)
     density_penalty_seg0 = -(abs(k_seg0 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
         if not (density_neutral_min <= k_seg0 <= density_neutral_max) else 0
-    density_penalty_seg1 = -(abs(k_seg1 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
-        if not (density_neutral_min <= k_seg1 <= density_neutral_max) else 0
+    # density_penalty_seg1 = -(abs(k_seg1 - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
+        # if not (density_neutral_min <= k_seg1 <= density_neutral_max) else 0
     density_penalty_after = -(abs(k_after - ((density_neutral_min + density_neutral_max) / 2)) * compliance_weight) \
         if not (density_neutral_min <= k_after <= density_neutral_max) else 0
     total_density_penalty = (
         w_build_up * density_penalty_seg0 +
-        w_merging_zone * density_penalty_seg1 +
+        # w_merging_zone * density_penalty_seg1 +
         w_post_merge * density_penalty_after
     )
 
@@ -1175,7 +1175,7 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
     acceptable_deviation = 0.05
     disobey_weight = 10
     if avg_speed < vsl * (1 - acceptable_deviation) or avg_speed > vsl * (1 + acceptable_deviation):
-        if avg_flow_reward < min_flow_threshold or avg_density > critical_density:
+        if 0 < min_flow_threshold or avg_density > critical_density: # FIXME: Check if this is the correct condition
             # Smoothed penalty using sigmoid function
             deviation_ratio = abs(avg_speed - vsl) / vsl
             r_d = -disobey_weight / (1 + np.exp(-10 * (deviation_ratio - acceptable_deviation)))
@@ -1190,7 +1190,7 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
 
     # Raw Reward Calculation with Normalized Components
     reward_raw = (
-        0.5 * avg_flow_reward
+        1.0 * r_o
         + 0.3 * total_density_penalty
         + 0.1 * r_c 
         + 0.2 * r_d
@@ -1199,8 +1199,9 @@ def reward_function_v15(model, n_seg0, n_seg1, n_after, avg_speed, seg0_collisio
     
     # clipped_reward = max(-1, min(1, reward_raw))
     
-    return reward_raw, avg_flow_reward, total_density_penalty, r_c, r_d
+    return reward_raw, 0, total_density_penalty, r_c, r_d, r_o
 
+'''--------------------------------------------------------------------------------------------------'''
 """ Reward functions split to be used in CTDE context """
 def calculate_disobey_penalty(avg_speed, vsl, acceptable_deviation, disobey_weight):
     # Penalize speed deviations beyond acceptable range
@@ -1217,12 +1218,17 @@ def calculate_collision_penalty(seg_collisions, collision_threshold):
     collision_penalty = -seg_collisions if seg_collisions >= collision_threshold else 0
     return collision_penalty
 
-def calculate_density_penalty(n_seg0, n_seg1, n_after, seg0_length, seg1_length, seg_after_length,
-                              n_lanes_seg0, n_lanes_seg1, n_lanes_after, compliance_weight):
-    # Calculate densities (vehicles per meter per lane)
-    k_seg0 = n_seg0 / (seg0_length * n_lanes_seg0)
-    k_seg1 = n_seg1 / (seg1_length * n_lanes_seg1)
-    k_after = n_after / (seg_after_length * n_lanes_after)
+def calculate_density_penalty(n_seg0, n_seg1, n_after, compliance_weight=10):
+    total_lane_km = sum(data["length"] * data["lanes"] for data in section_data.values())
+    adjusted_weights = {
+        section: (data["length"] * data["lanes"]) / total_lane_km
+        for section, data in section_data.items()
+    }
+
+    # Calculate densities (vehicles per km per lane)
+    k_seg0 = n_seg0 / (section_data['pre_merge']['length'] * section_data['pre_merge']['lanes'])
+    k_seg1 = n_seg1 / (section_data['build_up']['length'] * section_data['build_up']['lanes'])
+    k_after = n_after / (section_data['after_merge']['length'] * section_data['after_merge']['lanes'])
 
     # Define neutral density range
     avg_density = (k_seg0 + k_seg1 + k_after) / 3
@@ -1239,18 +1245,18 @@ def calculate_density_penalty(n_seg0, n_seg1, n_after, seg0_length, seg1_length,
 
     # Weighted sum of penalties across segments
     total_density_penalty = (
-        0.5 * density_penalty_seg0 +
-        1.0 * density_penalty_seg1 +
-        0.7 * density_penalty_after
+        adjusted_weights['pre_merge'] * density_penalty_seg0 +
+        adjusted_weights['build_up']  * density_penalty_seg1 +
+        adjusted_weights['after_merge']  * density_penalty_after
     )
     
     return total_density_penalty
 
-def calculate_flow_reward(n_seg0, n_seg1, n_after, aggr_time, n_lanes_seg0, n_lanes_seg1, n_lanes_after):
+def calculate_flow_reward(n_seg0, n_seg1, n_after, aggr_time):
     # Calculate flow rates (vehicles per second per lane)
-    q_seg0 = n_seg0 / (aggr_time * n_lanes_seg0)
-    q_seg1 = n_seg1 / (aggr_time * n_lanes_seg1)
-    q_after = n_after / (aggr_time * n_lanes_after)
+    q_seg0 = n_seg0 / (aggr_time * section_data['pre_merge']['lanes'])
+    q_seg1 = n_seg1 / (aggr_time * section_data['build_up']['lanes'])
+    q_after = n_after / (aggr_time * section_data['after_merge']['lanes'])
 
     # Use a custom reward function for flow based on occupancy
     def quad_occ_reward(occupancy):
@@ -1270,24 +1276,18 @@ def calculate_flow_reward(n_seg0, n_seg1, n_after, aggr_time, n_lanes_seg0, n_la
     avg_flow_reward = (flow_reward_seg0 + flow_reward_seg1 + flow_reward_after) / 3
     return avg_flow_reward
 
-def parameterized_reward_function(n_seg0, n_seg1, n_after, seg_collisions, avg_speed,
+def parameterized_reward_function(n_seg0, n_seg1, n_after, 
+                                  
+                                  seg_collisions, avg_speed,
                                   vsl, aggr_time=60,
-                                  seg_lengths=(275, 300, 500),
-                                  lanes=(3, 3, 2),
-                                  compliance_weight=10,
                                   collision_threshold=3,
                                   acceptable_deviation=0.05,
                                   disobey_weight=10):
     
     # Calculate individual components of the reward function
-    flow_reward = calculate_flow_reward(n_seg0, n_seg1, n_after,
-                                        aggr_time,
-                                        lanes[0], lanes[1], lanes[2])
+    flow_reward = calculate_flow_reward(n_seg0, n_seg1, n_after, aggr_time)
     
-    density_penalty = calculate_density_penalty(n_seg0, n_seg1, n_after,
-                                                seg_lengths[0], seg_lengths[1], seg_lengths[2],
-                                                lanes[0], lanes[1], lanes[2],
-                                                compliance_weight)
+    density_penalty = calculate_density_penalty(n_seg0, n_seg1, n_after)
     
     collision_penalty = calculate_collision_penalty(seg_collisions, collision_threshold)
     
@@ -1295,7 +1295,129 @@ def parameterized_reward_function(n_seg0, n_seg1, n_after, seg_collisions, avg_s
                                                 acceptable_deviation,
                                                 disobey_weight)
 
-    return {'flow': flow_reward, 'density': density_penalty, 'collision': collision_penalty, 'disobey': disobey_penalty}
+    return flow_reward, density_penalty, collision_penalty, disobey_penalty
+
+def reward_function_v15_dynamic(weights, n_seg0, n_seg1, n_after, 
+                                o_before0, o_before1, o_after,
+                                avg_speed, seg0_collisions, vsl):
+    # Unpack weights
+    c_f, _, c_c, c_d = parameterized_reward_function(n_seg0, n_seg1, n_after, seg0_collisions, avg_speed, vsl)
+    
+    r_o = (quad_occ_reward(o_before0) + quad_occ_reward(o_before1) + quad_occ_reward(o_after)) / 3
+
+    # Final Reward Calculation
+    reward = (
+        weights['w_flow'] * c_f +
+        weights['w_density'] * r_o +
+        weights['w_collision'] * c_c +
+        weights['w_disobey'] * c_d
+    )
+    
+    return reward, c_f, c_d, c_c, c_d
+
+def sensitivity_analysis(csv_file_path):
+    weights = {
+        "w_flow": 0.0,
+        "w_density": 0.0,
+        "w_collision": 0.0,
+        "w_disobey": 0.0
+    }
+    
+    weight_range = np.linspace(0.01, 1.0, 25)  # Define weight ranges and step size
+    try:
+        data = pd.read_csv(csv_file_path)
+        data.columns = data.columns.str.strip().str.lower().str.replace(" ", "_")
+    except Exception as e:
+        return f"Error reading CSV: {e}"
+    
+    # Initialize results list
+    results = []
+    
+    # Iterate over all combinations of weights
+    # for VSL in np.linspace(50, 140, 10):
+    for vss in data["vss"].unique():
+        vss_data = data[data["vss"] == vss]
+
+        # Get needed metrics with error handling
+        try:
+            n_seg0 = vss_data["num_of_vehicles_before_merging_zone_(seg0)"].mean()
+            n_seg1 = vss_data["num_of_vehicles_before_merging_zone_(seg1)"].mean()
+            n_after = vss_data["num_of_vehicles_after_merging_zone"].mean()
+            o_seg0 = vss_data["occupancy_before_merging_zone_(seg0)"].mean()
+            o_seg1 = vss_data["occupancy_before_merging_zone_(seg1)"].mean()
+            o_after = vss_data["occupancy_after_merging_zone"].mean()
+            avg_speed = vss_data["avg_speed_in_merging_zone_(seg0)"].mean()
+            seg0_collisions = vss_data["collisions_in_merging_zone_(seg0)"].mean()
+            vsl = vss_data["vss"].mean()
+
+            for w_flow in weight_range:
+                for w_density in weight_range:
+                    for w_collision in weight_range:
+                        for w_disobey in weight_range:
+                            # Update weights dynamically
+                            weights["w_flow"] = w_flow
+                            weights["w_density"] = w_density
+                            weights["w_collision"] = w_collision
+                            weights["w_disobey"] = w_disobey
+
+                            reward, c_f, c_k, c_c, c_d = reward_function_v15_dynamic(weights, n_seg0, n_seg1, n_after, o_seg0, o_seg1, o_after, avg_speed, seg0_collisions, vsl)
+                                                
+                            # Append results to list
+                            results.append({
+                                "w_flow": w_flow,
+                                "w_density": w_density,
+                                "w_collision": w_collision,
+                                "w_disobey": w_disobey,
+                                "total_reward": reward,
+                                "avg_flow": c_f,
+                                "avg_density": c_k,
+                                "avg_collisions": c_c,
+                                "avg_disobey": c_d,
+                                "avg_speed": avg_speed,
+                                "vss": vss
+                            })
+        except KeyError as ke:
+            return f"KeyError: {ke} - Check for correct CSV column names."
+    return pd.DataFrame(results)
+
+def run_heatmap(df_results):
+    # Generate heatmap using pivot_table
+    heatmap_data = df_results.pivot_table(
+        values="total_reward",  # The column to aggregate
+        index="w_flow",         # Rows of the heatmap
+        columns="w_density",    # Columns of the heatmap
+        aggfunc="mean"          
+    )
+
+    sns.heatmap(heatmap_data, annot=True, cmap="coolwarm", fmt=".2f", cbar_kws={"shrink": 0.8})
+    plt.figure(figsize=(12, 8))
+    plt.title("Sensitivity Analysis Heatmap", fontsize=16)
+    plt.xlabel("Weight: Density", fontsize=14)
+    plt.ylabel("Weight: Flow", fontsize=14)
+    
+    # Rotate x-axis labels for better visibility
+    plt.xticks(rotation=45, fontsize=12)
+    plt.yticks(fontsize=12)
+    
+    plt.tight_layout()  # Automatically adjust layout to prevent clipping
+    plt.show()
+
+def run_sensitivity_analysis_and_adjust_weights(csv_file_path):
+    """
+    Systematically varying weights and analyzing their impact on total rewards and individual components.
+    The sensitivity analysis is done across multiple traffic scenarios (Cross-Validation)
+    """
+    df_results = sensitivity_analysis(csv_file_path)
+
+    # run_heatmap(df_results)
+
+    optimal_weights = df_results.loc[df_results.groupby("vss")["total_reward"].idxmax()]
+    average_weights = optimal_weights[["w_flow", "w_density", "w_collision", "w_disobey"]].mean()
+    logging.debug(f"Optimal weigths:\n{optimal_weights}")
+    logging.debug(f"Average weigths:\n{average_weights}")
+    sns.pairplot(df_results, vars=['w_flow', 'w_density', 'w_collision', 'w_disobey', 'total_reward'], diag_kind='kde')
+    # plt.suptitle('Sensitivity Analysis Result', y=1.02)
+    # plt.show()
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Unit Testing with Predefined Values """
@@ -1400,16 +1522,74 @@ def plot_rewards(rewards_by_veh_gen, output_dir, window_size=50):
         plt.savefig(plot_path)
         plt.close()
 
-    print(f"Reward plots saved to {output_dir}")
+    logging.info(f"Reward plots saved to {output_dir}")
 
 def calculate_moving_average(data, column, window_size=50):
     return data[column].rolling(window=window_size).mean()
 
 def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
+    def is_within_radar_position(position, lane_id):
+        radar_position = -100  # The x-coordinate for radar detection
+        if lane_id in seg_0_before:
+            vehicle_x_position = position[0]
+            tolerance = 20.0
+            if abs(vehicle_x_position - radar_position) <= tolerance:
+                return True
+        return False
+
+    def get_mean_speeds_from_indloops():
+        before_A, before_B, before_C, before_D, after_A = [], [], [], [], []
+        speeds_idx = 0
+        temp = 0
+        for ind_loop_id in loops_beforeA:
+            speed = traci.inductionloop.getLastStepMeanSpeed(ind_loop_id)
+            if speed > 0:
+                temp += speed * 3.6
+                speeds_idx += 1
+            before_A.append(temp / speeds_idx) if speeds_idx > 0 else None
+        
+        speeds_idx = 0
+        temp = 0
+        for ind_loop_id in loops_beforeB:
+            speed = traci.inductionloop.getLastStepMeanSpeed(ind_loop_id)
+            if speed > 0:
+                temp += speed * 3.6
+                speeds_idx += 1
+            before_B.append(temp / speeds_idx) if speeds_idx > 0 else None
+
+        speeds_idx = 0
+        temp = 0
+        for ind_loop_id in loops_beforeC:
+            speed = traci.inductionloop.getLastStepMeanSpeed(ind_loop_id)
+            if speed > 0:
+                temp += speed * 3.6
+                speeds_idx += 1
+            before_C.append(temp / speeds_idx) if speeds_idx > 0 else None
+        
+        speeds_idx = 0
+        temp = 0
+        for ind_loop_id in loops_beforeD:
+            speed = traci.inductionloop.getLastStepMeanSpeed(ind_loop_id)
+            if speed > 0:
+                temp += speed * 3.6
+                speeds_idx += 1
+            before_D.append(temp / speeds_idx) if speeds_idx > 0 else None
+        
+        speeds_idx = 0
+        temp = 0
+        for ind_loop_id in loops_after:
+            speed = traci.inductionloop.getLastStepMeanSpeed(ind_loop_id)
+            if speed > 0:
+                temp += speed * 3.6
+                speeds_idx += 1
+            after_A.append(temp / speeds_idx) if speeds_idx > 0 else None
+
+        return after_A, before_A, before_B, before_C, before_D
+
     model = "DQN"
     new_speed_limit = 50
     old_speed_limit = new_speed_limit
-    speed_limit_run = 4 # hours
+    speed_limit_run = 3 
     speed_limits = 10
     mean_speeds_by_veh_before0 = []
     model_name = 'REW_TST'
@@ -1442,8 +1622,8 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
         # [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before]]
         [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
         
-        n_before_all = 0
-        n_before_all_avg = []
+        # n_before_all = 0
+        # n_before_all_avg = []
         seconds_passed = 0
         seconds_passed_ = 0
         aggregation_interval = 60 # seconds
@@ -1451,150 +1631,266 @@ def reward_function_calibration(veh_gen_per_hour, sumo_port, folder_to_store):
         if not os.path.exists(csv_dir):
             os.makedirs(csv_dir)
         csv_path = os.path.join(csv_dir, f"RewFuncCalib_VehpHr_{veh_gen_per_hour}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-        emissions_before0 = []
+        emiss_before0_avg = 0
         vehicles_on_road = []
-        n_before0_avg = []
-        n_before1_avg = []
-        n_after_avg = []
+        n_before0_avg = 0
+        n_before1_avg = 0
+        n_after_avg = 0
+        n_before0 = []
+        n_before1 = []
+        n_after = []
+        o_before0_avg = 0
+        o_before1_avg = 0
+        o_after_avg = 0
+        o_before0 = []
+        o_before1 = []
+        o_after = []
+        o_after_temp = 0
+        o_before0_temp = 0
+        n_before0_temp = 0
+        # n_before1_temp = 0
+        n_after_temp = 0
+        mean_speeds_by_veh_after_temp = 0
+        mean_speeds_by_veh_before0_temp = []
         avg_speed_seg0before_all = []
-        collisions_before0 = 0
+        mean_speeds_by_veh_after = []
+        mean_speeds_by_veh_before0 = []
+        mean_speeds_by_veh_before_A = []
+        mean_speeds_by_veh_before_B = []
+        mean_speeds_by_veh_before_C = []
+        mean_speeds_by_veh_before_D = []
         
+        avg_speed_seg0before = 0
+        collisions_before0 = 0
+        vehicles_on_road = False
+        
+        # Subscribe to edge data
+        # all_edges_this_simu = ["seg_1_before","seg_0_before","seg_0_after"]
+        for edge in edges:
+            traci.edge.subscribe(edge, [
+                tc.LAST_STEP_VEHICLE_NUMBER, 
+                # tc.LAST_STEP_OCCUPANCY, 
+                tc.LAST_STEP_MEAN_SPEED, 
+                tc.VAR_CO2EMISSION])
+
+        """ Subscribe to occupancy data for induction loops
+        Purpose: Typically used to detect the presence of vehicles at specific points on the road.
+        Data: Provides point-based occupancy data, which indicates whether a vehicle is present at a specific location.
+        Use Case: Suitable for scenarios where you need to know vehicle presence at particular points, such as at intersections or specific road segments.
+        """
+        # for loop_group in loops_before:
+        #     for loop_id in loop_group:
+        #         traci.inductionloop.subscribe(loop_id, [tc.LAST_STEP_OCCUPANCY])
+        # for loop_id in loops_after:
+        #     traci.inductionloop.subscribe(loop_id, [tc.LAST_STEP_OCCUPANCY])
+
+        """ Subscribe to data for lane area detectors
+        Purpose: monitor a section of the road, providing aggregated data over an area.
+        Data: Offers occupancy data over a length of the road, giving a broader picture of traffic density.
+        Use Case: Ideal for monitoring traffic flow over longer stretches, such as highway segments or merging areas.
+        """
+        for detector_id in detectors_before + detectors_after:
+            traci.lanearea.subscribe(detector_id, [
+                tc.LAST_STEP_OCCUPANCY, 
+                tc.LAST_STEP_VEHICLE_NUMBER, 
+                tc.LAST_STEP_MEAN_SPEED,
+                tc.LAST_STEP_VEHICLE_HALTING_NUMBER
+                ])
+        
+        """
+        Purpose: point-based detection
+        """
+        for ind_loop_id in loops_beforeA + loops_beforeB + loops_beforeC + loops_beforeD:
+            traci.inductionloop.subscribe(ind_loop_id, [tc.LAST_STEP_OCCUPANCY,
+                                                        # tc.LAST_STEP_VEHICLE_NUMBER, 
+                                                        # tc.LAST_STEP_MEAN_SPEED
+                                                        ])
+        
+
+        # ego_vehicle = "ego_vehicle"
+        # traci.vehicle.subscribeContext(ego_vehicle, tc.CMD_GET_VEHICLE_VARIABLE, 100.0, [tc.VAR_SPEED])
+
         with open(csv_path, mode='w', newline='') as csvfile:
-            fieldnames = ['Minute', 'Reward', 'Vehicles before merging zone (seg0)', 
-                          'Vehicles before merging zone (seg1)', 
-                          'Vehicles after merging zone', 
-                          'Emissions in merging zone (seg0)', 
-                          'Avg speed in merging zone (seg0)', 
-                        'Vehicles on road', 'VSS', 
-                        "Vehicles generated each hour", 
-                        "Collisions in merging zone (seg0)",
-                        "Reward: flow", "Penalty: density", "Penalty: compliance", "Penalty: disobey"]
+            fieldnames = ['Minute', 'Reward', 
+                          'Num of vehicles before merging zone (seg0)',
+                        #   'Num of vehicles before merging zone (seg1)',
+                          'Num of vehicles after merging zone',
+                          'Occupancy before merging zone (seg0)',
+                        #   'Occupancy before merging zone (seg1)',
+                          'Occupancy after merging zone',
+                          'Emissions in merging zone (seg0)',
+                          'Avg speed in merging zone (seg0)',
+                          'VSS',
+                          'Vehicles generated each hour',
+                          'Collisions in merging zone (seg0)',
+                          'Reward: occupancy',
+                          'Reward: flow',
+                          'Penalty: density',
+                          'Penalty: compliance',
+                          'Penalty: disobey']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
             # Write header
             writer.writeheader()
 
-            while seconds_passed < 60 * aggregation_interval * len(mock_daily_pattern_test):
+            # while seconds_passed < 60 * aggregation_interval * len(mock_daily_pattern_test):
+            while traci.simulation.getMinExpectedNumber() > 0:
                 try:
                     traci.simulationStep()
                 except (FatalTraCIError, TraCIException):
                     logging.debug("SUMO failed from reward_function_calibration")
                 
-                # for vehId in traci.vehicle.getIDList(): # NOTE: no need to
-                #     traci.vehicle.setSpeedMode(vehId, 31)  # Enforce strict adherence to VSS
+                edge_data = {edge: traci.edge.getSubscriptionResults(edge) for edge in edges}
 
-                for i in range(10):
-                    n_before_all += traci.edge.getLastStepVehicleNumber(f"seg_{i+1}_before")
-                n_before0 = traci.edge.getLastStepVehicleNumber("seg_0_before")
-                n_before1 = traci.edge.getLastStepVehicleNumber("seg_1_before")
-                n_after = traci.edge.getLastStepVehicleNumber("seg_0_after")
-                n_before0_avg.append(n_before0)
-                n_before1_avg.append(n_before1)
-                n_after_avg.append(n_after)
-                n_before_all_avg.append(n_before_all)
-                # collisions += len(traci.simulation.getCollidingVehiclesIDList())
-                for vehId in traci.simulation.getCollidingVehiclesIDList():
-                    if traci.vehicle.getRoadID(vehId) == "seg_0_before":
-                        collisions_before0 += 1
-
-                if (n_after >= 1 or n_before0 >= 1) and n_before_all >= 1:
-                    """ The use of average speed getLastStepMeanSpeed() is susceptible to outliers caused 
-                    by non-compliant vehicles (e.g., vehicles traveling significantly slower or faster than the VSL). 
-                    These outliers can distort the average and lead to incorrect inferences by the DRL agent. """
-                    # mean_speeds.append(traci.edge.getLastStepMeanSpeed("seg_0_before") * 3.6)
-                    for veh_id in traci.edge.getLastStepVehicleIDs("seg_0_before"):
-                        mean_speeds_by_veh_before0.append(traci.vehicle.getSpeed(veh_id) * 3.6)
-
-                    emissions_before0.append(traci.edge.getCO2Emission("seg_0_before"))
-                    vehicles_on_road.append(len(traci.vehicle.getLoadedIDList()))
-
-                # Adjust vehicle generation rate based on traffic volume
-                if seconds_passed % aggregation_interval == 0: # each minute
-                    """ Robust metrics, such as the median speed or the interquartile range (IQR), are less sensitive to 
-                    extreme values and provide a more accurate representation of typical traffic behavior."""
-                    avg_speed_seg0before = np.median(mean_speeds_by_veh_before0) if len(mean_speeds_by_veh_before0) > 0 else 0
-                    avg_speed_seg0before_all.append(avg_speed_seg0before) if avg_speed_seg0before > 0 else None
-                    # q75, q25 = np.percentile(mean_speeds_by_veh_before0, [75, 25])
-                    # avg_speed_in_seg0before = q75 - q25
-
-                    emissions_temp = np.average(emissions_before0) if len(emissions_before0) > 0 else 0
-                    vehicles_on_road_temp = np.average(vehicles_on_road) if len(vehicles_on_road) > 0 else 0
-                    n_before0_temp = np.average(n_before0_avg) if len(n_before0_avg) > 0 else 0
-                    n_before1_temp = np.average(n_before1_avg) if len(n_before1_avg) > 0 else 0
-                    n_after_temp = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
-                    n_before_all_temp = np.average(n_before_all_avg) if len(n_before_all_avg) > 0 else 0
+                if vehicles_on_road == False:
+                    n_before_all_temp = 0
+                    for i in range(len(edges)-2):
+                        n_before_all_temp += edge_data[f'seg_{i}_before'][tc.LAST_STEP_VEHICLE_NUMBER]
+                    n_before_all_temp += edge_data['seg_0_after'][tc.LAST_STEP_VEHICLE_NUMBER]
+                    if n_before_all_temp > 0:
+                        vehicles_on_road = True
+                
+                if vehicles_on_road:
+                    # Retrieve occupancy data from lane area detectors
+                    mean_speeds_by_veh_before0_temp_ = 0
+                    speeds_idx = 0
+                    for detector_id in detectors_before:
+                        o_before0_temp += traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_OCCUPANCY]
+                        n_before0_temp += traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_VEHICLE_NUMBER]
+                    n_before0_temp = n_before0_temp / len(detectors_before)
                     
-                    reward, r_f, r_d, r_c, r_d = reward_function_v15(None, n_before0_temp, n_before1_temp, n_after_temp,
-                                avg_speed_seg0before, collisions_before0, veh_gen_per_hour, new_speed_limit)
-                    rewards.append(reward)
-                    
-                    if (n_after >= 1 or n_before0_temp >= 1) and n_before_all_temp >= 1:
-                        # logging.debug(f"Minute {seconds_passed / aggregation_interval}; "
-                        #     f"Reward: {reward}; "
-                        #     f"Vehicles before: {n_before_temp:.2f}; "
-                        #     f"Vehicles after: {n_after_temp:.2f}; "
-                        #     f"Emissions: {emissions_temp:.2f}; "
-                        #     f"Avg Speed: {avg_speed_temp:.2f}; "
-                        #     f"Vehicles on road: {vehicles_on_road_temp:.2f}; ",
-                        #     # f"VSS: {new_speed_limit:.2f}"
-                        #     )
-                        writer.writerow({
-                            'Minute': seconds_passed / aggregation_interval,
-                            'Reward': reward,
-                            'Vehicles before merging zone (seg0)': n_before0_temp,
-                            'Vehicles before merging zone (seg1)': n_before1_temp,
-                            'Vehicles after merging zone': n_after_temp,
-                            'Emissions in merging zone (seg0)': emissions_temp,
-                            'Avg speed in merging zone (seg0)': avg_speed_seg0before,
-                            'Vehicles on road': vehicles_on_road_temp,
-                            'VSS': new_speed_limit,
-                            'Vehicles generated each hour': veh_gen_per_hour,
-                            'Collisions in merging zone (seg0)': collisions_before0,
-                            "Reward: flow": r_f,
-                            "Penalty: density": r_d,
-                            "Penalty: compliance": r_c,
-                            "Penalty: disobey": r_d
-                        })
-                        # TODO: update also fieldnames in case of adding/removing a field from the csv
+                    mean_speeds_after_A, mean_speeds_before_A, mean_speeds_before_B, mean_speeds_before_C, mean_speeds_before_D = ()
+                    get_mean_speeds_from_indloops
+                    speeds_idx = 0
+                    for detector_id in detectors_after:
+                        o_after_temp += traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_OCCUPANCY]
+                        n_after_temp += traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_VEHICLE_NUMBER]
+                        mean_speeds_by_veh_after_temp_ = traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_MEAN_SPEED] * 3.6
+                        if traci.lanearea.getSubscriptionResults(detector_id)[tc.LAST_STEP_VEHICLE_NUMBER] < 1 and mean_speeds_by_veh_after_temp_ > 0:
+                            mean_speeds_by_veh_after_temp += mean_speeds_by_veh_after_temp_
+                            speeds_idx += 1
+                    o_after_temp = o_after_temp / len(detectors_after)
+                    n_after_temp = n_after_temp / len(detectors_after)
+                    mean_speeds_by_veh_after_temp = mean_speeds_by_veh_after_temp / speeds_idx if speeds_idx > 0 else mean_speeds_by_veh_after_temp
 
-                        mean_speeds_by_veh_before0.clear()
-                        emissions_before0.clear()
-                        vehicles_on_road.clear()
-                        n_before0_avg.clear()
-                        n_before1_avg.clear()
-                        n_after_avg.clear()
-                        n_before_all_avg.clear()
+                    # n_before0_temp = edge_data['seg_0_before'][tc.LAST_STEP_VEHICLE_NUMBER]
+                    # n_before1_temp = edge_data['seg_1_before'][tc.LAST_STEP_VEHICLE_NUMBER]
+                    # n_after_temp = edge_data['seg_0_after'][tc.LAST_STEP_VEHICLE_NUMBER]
+                    n_before0.append(n_before0_temp) if n_before0_temp > 0 else None
+                    # n_before1.append(n_before1_temp) if n_before1_temp > 0 else None
+                    n_after.append(n_after_temp) if n_after_temp > 0 else None
 
-                        if (seconds_passed % (3600 * speed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * speed_limit_run):
-                            new_speed_limit += 10
-                            seconds_passed_ = 0
-                        if new_speed_limit != old_speed_limit:
-                            old_speed_limit = new_speed_limit
-                            # Variant 1 NOTE: doesn't work. Maybe because it reads the add.xml file at the beginning of the simulation
-                            # [append_additionalfile_VSS(f'VSS_{i}', seconds_passed + 60, new_speed_limit / 3.6) for i in range(3)]
+                    o_before0.append(o_before0_temp) if o_before0_temp > 0 else None
+                    # o_before1.append(o_before1_temp) if o_before1_temp > 0 else None
+                    o_after.append(o_after_temp) if o_after_temp > 0 else None
 
-                            # Variant 3 NOTE: Works
-                            [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
+                    # mean_speeds_by_veh_before0.append(mean_speeds_by_veh_before0_temp) if mean_speeds_by_veh_before0_temp > 0 else None
+                    # mean_speeds_by_veh_after.append(mean_speeds_by_veh_after_temp) if mean_speeds_by_veh_after_temp > 0 else None
 
-                            # Variant 4 NOTE: Doesn't work
-                            # [traci.variablespeedsign.setParameter(f"VSS_{i}", "speed", new_speed_limit / 3.6) for i in range(3)] # FIXME: no effect on VSS in SUMO
+                    for vehId in traci.simulation.getCollidingVehiclesIDList():
+                        if traci.vehicle.getRoadID(vehId) == "seg_0_before":
+                            collisions_before0 += 1
+                       
+                    # Adjust vehicle generation rate based on traffic volume
+                    if seconds_passed % aggregation_interval == 0 and seconds_passed > 0: # each minute                       
+                        if (len(n_after) > 0 or len(n_before0) > 0) and vehicles_on_road:
+                            """ The use of average speed getLastStepMeanSpeed() is susceptible to outliers caused 
+                            by non-compliant vehicles (e.g., vehicles traveling significantly slower or faster than the VSL). 
+                            These outliers can distort the average and lead to incorrect inferences by the DRL agent. """
+                            # mean_speeds_by_veh_after.append(edge_data['seg_0_after'][tc.LAST_STEP_MEAN_SPEED] * 3.6)
+                            # mean_speeds_by_veh_before0.append(edge_data['seg_0_before'][tc.LAST_STEP_MEAN_SPEED] * 3.6)
+                            # mean_speeds_by_veh_before1.append(edge_data['seg_1_before'][tc.LAST_STEP_MEAN_SPEED] * 3.6)
 
-                        # Variant 2 NOTE: it doesn't work as expected
-                        # for vehId in [traci.lane.getLastStepVehicleIDs(laneId) for laneId in [f"seg_1_before_{i}" for i in range(3)]]:
-                        #     if vehId and vehId[0]:
-                        #         traci.vehicle.setSpeedMode(vehId[0], 31)
-                        #         traci.vehicle.slowDown(vehId[0], new_speed_limit / 3.6, 3600)
+                            """ Robust metrics, such as the median speed or the interquartile range (IQR), are less sensitive to 
+                            extreme values and provide a more accurate representation of typical traffic behavior."""
+                            if len(mean_speeds_before_C) > 0:
+                                avg_speed_seg0before = np.median(mean_speeds_before_C)
+                                avg_speed_seg0before_all.append(avg_speed_seg0before) if avg_speed_seg0before > 0 else None
+                                mean_speeds_before_C.clear()
+                            # q75, q25 = np.percentile(mean_speeds_by_veh_before0, [75, 25])
+                            # avg_speed_in_seg0before = q75 - q25
 
-                    elif n_after_temp == 0 and n_before_all_temp == 0:
-                        logging.warning("No vehicles detected in the simulation.")
-                    elif n_after_temp == 0 and n_before0 == 0 and n_before_all_temp > 0:
-                        seconds_passed -= 1
-                        seconds_passed_ -= 1
-                    else:
-                        pass
-                    
-                seconds_passed += 1
-                seconds_passed_ += 1
+                            # emissions_before0.append(traci.edge.getCO2Emission("seg_0_before"))
+                            emissions_temp = edge_data['seg_0_before'][tc.VAR_CO2EMISSION]
+                            if emissions_temp > 0:
+                                emiss_before0_avg = np.average(emissions_temp)
+                            if len(n_before0) > 0:
+                                n_before0_avg = np.average(n_before0)
+                            # if len(n_before1) > 0:
+                            #     n_before1_avg = np.average(n_before1)
+                            if len(n_after) > 0:
+                                n_after_avg = np.average(n_after)
+                            if len(o_before0) > 0:
+                                o_before0_avg = np.average(o_before0)
+                            if len(o_after) > 0:
+                                o_after_avg = np.average(o_after)
+
+                            reward, r_f, _, r_c, r_d, r_o = reward_function_v15(None, n_before0_avg, n_after_avg, 
+                                                                                o_before0_avg, o_after_avg, 
+                                                                                avg_speed_seg0before, collisions_before0, veh_gen_per_hour, new_speed_limit)
+                            rewards.append(reward)
+
+                            writer.writerow({
+                                'Minute': seconds_passed / aggregation_interval,
+                                'Reward': reward,
+                                'Num of vehicles before merging zone (seg0)': n_before0_avg,
+                                # 'Num of vehicles before merging zone (seg1)': n_before1_avg,
+                                'Num of vehicles after merging zone': n_after_avg,
+                                'Occupancy before merging zone (seg0)': o_before0_avg,
+                                # 'Occupancy before merging zone (seg1)': o_before1_avg,
+                                'Occupancy after merging zone': o_after_avg,
+                                'Emissions in merging zone (seg0)': emiss_before0_avg,
+                                'Avg speed in merging zone (seg0)': avg_speed_seg0before,
+                                'VSS': new_speed_limit,
+                                'Vehicles generated each hour': veh_gen_per_hour,
+                                'Collisions in merging zone (seg0)': collisions_before0,
+                                "Reward: occupancy": r_o,
+                                "Reward: flow": r_f,
+                                # "Penalty: density": r_k,
+                                "Penalty: compliance": r_c,
+                                "Penalty: disobey": r_d
+                            })
+                            # TODO: update also fieldnames in case of adding/removing a field from the csv
+
+                            if (seconds_passed % (3600 * speed_limit_run) <= (seconds_passed_ / 3)) and seconds_passed_ > (3600 * speed_limit_run):
+                                new_speed_limit += 10
+                                seconds_passed_ = 0
+                            if new_speed_limit != old_speed_limit:
+                                old_speed_limit = new_speed_limit
+                                # Variant 1 NOTE: doesn't work. Maybe because it reads the add.xml file at the beginning of the simulation
+                                # [append_additionalfile_VSS(f'VSS_{i}', seconds_passed + 60, new_speed_limit / 3.6) for i in range(3)]
+
+                                # Variant 3 NOTE: Works
+                                [[traci.lane.setMaxSpeed(segId, new_speed_limit / 3.6) for segId in edgeId] for edgeId in [seg_0_before, seg_1_before]]
+
+                                # Variant 4 NOTE: Doesn't work
+                                # [traci.variablespeedsign.setParameter(f"VSS_{i}", "speed", new_speed_limit / 3.6) for i in range(3)] # FIXME: no effect on VSS in SUMO
+
+                            # Variant 2 NOTE: it doesn't work as expected
+                            # for vehId in [traci.lane.getLastStepVehicleIDs(laneId) for laneId in [f"seg_1_before_{i}" for i in range(3)]]:
+                            #     if vehId and vehId[0]:
+                            #         traci.vehicle.setSpeedMode(vehId[0], 31)
+                            #         traci.vehicle.slowDown(vehId[0], new_speed_limit / 3.6, 3600)
+
+                        elif (len(n_after) == 0 or len(n_before0) == 0) and not vehicles_on_road:
+                            logging.warning("No vehicles detected in the simulation.")
+                        elif (len(n_after) == 0 or len(n_before0) == 0) and vehicles_on_road:
+                            seconds_passed -= 1
+                            seconds_passed_ -= 1
+
+                        # mean_speeds_by_veh_before0.clear()
+                        mean_speeds_by_veh_after.clear()
+
+                    n_before0_temp = 0
+                    n_after_temp = 0
+                    o_before0_temp = 0
+                    o_after_temp = 0
+                    emissions_temp = 0
+                    mean_speeds_by_veh_before0_temp = []
+                    mean_speeds_by_veh_after_temp = 0
+                        
+                    seconds_passed += 1
+                    seconds_passed_ += 1
         try:
             traci.close()
         except Exception as e:
@@ -1644,7 +1940,7 @@ def merge_dataset(sub_folder):
             date_str = first_file_info[1].strftime('%Y%m%d')  # Date part (e.g., 20241115)
 
             # Filter files that match the same date and have veh_gen_per_hour <= 3000
-            filtered_files = [f for f in csv_files if extract_info(f)[1].strftime('%Y%m%d') == date_str and extract_info(f)[0] <= 3000]
+            filtered_files = [f for f in csv_files if extract_info(f)[1].strftime('%Y%m%d') == date_str]
 
             if not filtered_files:
                 logging.error("No relevant CSV files found.")
@@ -1683,49 +1979,155 @@ def parallel_simulation(veh_gen_per_hour, sumo_port, csv_folder):
 
 def on_task_complete(result):
     # Callback function executed when a process completes
-    logging.info(f"Task completed: {result}")
+    logging.info(f"Task completed")
 
-if __name__ == '__main__':
+def reward_function_simulation(csv_folder):
     rewards_by_veh_gen = {}
-    # Define the list of vehicle generation rates and SUMO ports for parallel runs
-    veh_gen_rates_ports = [
-        (2000, 9000),
-        # (2250, 9001),
-        # (2500, 9002),
-        # (2750, 9003),
-        (3000, 9004),
-        # (3250, 9005),
-        # (3500, 9006),
-        # (3750, 9007),
-        (4000, 9008),
-        # (4250, 9009),
-        # (4500, 9010),
-        # (4725, 9011),
-        # (5000, 9012),
-        ]
-    
-    csv_folder = datetime.now().strftime('%Y%m%d_%H%M%S')
-
     mp.freeze_support()
 
-    with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
-        results = []
-        for rate, port in veh_gen_rates_ports:
-            result = pool.apply_async(
-                parallel_simulation,
-                args=(rate, port, csv_folder),
-                callback=on_task_complete
-            )
-            results.append(result)
+    i = 0
+    while i <= 3:
+        if i == 0:
+            veh_gen_rates_ports = [(2000, 9000),(2250, 9001),(2500, 9002),(2750, 9003)]
+        elif i == 1:
+            veh_gen_rates_ports = [(3000, 9000),(3250, 9001),(3500, 9002)]
+        elif i == 2:
+            veh_gen_rates_ports = [(3750, 9000),(4000, 9001)]
+        elif i == 3:
+            veh_gen_rates_ports = [(4250, 9000)]
 
-        # Collect results from all tasks
-        rewards_by_veh_gen = {}
-        for result in results:
-            veh_gen_rate, rewards, avg_speeds = result.get()  # Get all return values from each process
-            rewards_by_veh_gen[veh_gen_rate] = rewards
+        with mp.Pool(processes=len(veh_gen_rates_ports)) as pool:
+            results = []
+            for rate, port in veh_gen_rates_ports:
+                result = pool.apply_async(
+                    parallel_simulation,
+                    args=(rate, port, csv_folder),
+                    callback=on_task_complete
+                )
+                results.append(result)
+
+            # Collect results from all tasks
+            rewards_by_veh_gen = {}
+            for result in results:
+                veh_gen_rate, rewards, avg_speeds = result.get()  # Get all return values from each process
+                rewards_by_veh_gen[veh_gen_rate] = rewards
+        i += 1
 
     merge_dataset(csv_folder)
-    correlation_heatmap(csv_folder, "RewFuncCalib_VehpHr_MERGED")
-    plot_rewards(rewards_by_veh_gen, os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}\\reward_plots'))
+    # correlation_heatmap(csv_folder, "RewFuncCalib_VehpHr_MERGED")
+    # plot_rewards(rewards_by_veh_gen, os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}\\reward_plots'))
 
-    # rewards, avg_speeds = reward_function_calibration(4000, 9011, csv_folder) # NOTE: for testing purposes
+# NOTE: this function is not working as expected. FIXME: to be investigated further
+def run_analysis_and_adjust_weights(csv_file_path):
+    def adjust_weights_based_on_vif(X, vif_threshold=10):
+        """
+        Adjust weights dynamically based on VIF values.
+        Features with high VIF are penalized but not completely excluded.
+        """
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+        # Calculate VIF for each feature
+        vif_data = pd.DataFrame()
+        vif_data["Feature"] = X.columns
+        vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+        # Initialize weights dictionary
+        weights = {}
+        for feature, vif in zip(vif_data["Feature"], vif_data["VIF"]):
+            if vif < vif_threshold:
+                # Assign higher weights for lower VIFs
+                weights[feature] = max(1 / vif, 0.05)
+            else:
+                # Assign a small but non-zero weight for high VIFs
+                weights[feature] = max(0.1 / vif, 0.01)
+
+        return weights
+
+    """
+    Perform sensitivity analysis, check Durbin-Watson statistic,
+    and adjust weights dynamically based on VIF with fixes.
+    """
+    # Load data
+    df = pd.read_csv(csv_file_path)
+
+    # Add lagged variables or first differences
+    df['lagged_flow'] = df['Reward: flow'].shift(1)
+    df['lagged_density'] = df['Penalty: density'].shift(1)
+    df['lagged_flow_2'] = df['Reward: flow'].shift(2)
+    df['lagged_density_2'] = df['Penalty: density'].shift(2)
+
+    # Drop rows with NaN values introduced by lagging
+    df.dropna(inplace=True)
+
+    # Select relevant features
+    X = df[['Reward: flow', 'Penalty: density', 'lagged_flow', 'lagged_density', 'lagged_flow_2', 'lagged_density_2']]
+    y = df['Reward']
+
+    # Fit OLS model
+    X_with_const = sm.add_constant(X)
+    model = sm.OLS(y, X_with_const).fit()
+
+    # Check Durbin-Watson statistic: check residuals for patterns or autocorrelation using diagnostics like Durbin-Watson
+    dw_stat = durbin_watson(model.resid)
+    logging.debug(f"Durbin-Watson Statistic: {dw_stat}")
+
+    if dw_stat < 1.5 or dw_stat > 2.5:
+        logging.debug("Autocorrelation detected! Consider adding more lagged variables or transformations.")
+
+    # Adjust weights dynamically based on VIF
+    def adjust_weights_based_on_vif(X, vif_threshold=10):
+        vif_data = pd.DataFrame()
+        vif_data["Feature"] = X.columns
+        vif_data["VIF"] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+        weights = {}
+        for feature, vif in zip(vif_data["Feature"], vif_data["VIF"]):
+            if vif < vif_threshold:
+                weights[feature] = max(1 / vif, 0.05)
+            else:
+                weights[feature] = max(0.1 / vif, 0.01)
+
+        return weights
+
+    weights = adjust_weights_based_on_vif(X)
+    
+    logging.debug(f"Adjusted Weights Based on VIF:\n{weights}")
+
+def linear_regression_multicollinearity(csv_file):
+    df = pd.read_csv(csv_file)
+    
+    if "Penalty: compliance" in df.columns:
+        df = df.drop(columns=["Penalty: compliance"])
+
+    # Select relevant features
+    X = df[['Reward: flow', 'Penalty: density', 'Penalty: disobey']]
+    y = df['Reward']
+
+    # Check correlation matrix for highly correlated variables
+    corr_matrix = X.corr()
+    logging.debug("Correlation Matrix:\n", corr_matrix)
+
+    # Drop one of the highly correlated variables if necessary (e.g., Penalty: disobey)
+    if abs(corr_matrix.loc['Penalty: density', 'Penalty: disobey']) > 0.8:
+        X = X.drop(columns=['Penalty: disobey'])
+
+    # Add constant for intercept
+    X = sm.add_constant(X)
+
+    # Fit OLS regression model
+    model = sm.OLS(y, X).fit()
+    logging.debug(model.summary())
+
+if __name__ == '__main__':
+    csv_folder = datetime.now().strftime('%Y%m%d_%H%M%S')
+    # reward_function_simulation(csv_folder)
+
+    static_csv = os.path.join(os.getcwd(), f"eval\\rew_func\\20241126_233513\\RewFuncCalib_VehpHr_MERGED_20241127_000334.csv")
+    # merge_dataset('20241130_221015')
+    # dynamic_csv = os.path.join(os.getcwd(), f'eval\\rew_func\\{csv_folder}\\RewFuncCalib_VehpHr_MERGED_*.csv') # FIXME: add wildcard choosing 
+    # run_sensitivity_analysis_and_adjust_weights(static_csv)
+
+    # linear_regression_multicollinearity(static_csv)
+    # run_analysis_and_adjust_weights(static_csv)
+
+    rewards, avg_speeds = reward_function_calibration(3000, 9011, csv_folder) # NOTE: for testing purposes

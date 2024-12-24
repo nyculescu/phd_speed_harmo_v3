@@ -28,11 +28,11 @@ vehicle_counts = {
 }
 
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model, model_idx, is_learning):
+    def __init__(self, port, model, model_idx, is_learning, base_gen_car_distrib):
         super(TrafficEnv, self).__init__()
         self.port = port
         self.model = model
-        self.model_idx = model_idx
+        self.model_idx = model_idx if is_learning else model_idx + num_envs_per_model + 1
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = np.array([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
         if model in cont_act_space_models:
@@ -76,6 +76,7 @@ class TrafficEnv(gym.Env):
         self.n_before1 = 0
         self.n_after = 0
         self.collisions = 0
+        self.gen_car_distrib = base_gen_car_distrib
 
     def reward_func_wrap(self):
         # return quad_occ_reward(self.occupancy)
@@ -159,13 +160,9 @@ class TrafficEnv(gym.Env):
         
         for attempt in range(self.sumo_max_retries):
             try:
-                days_to_run_the_simu = 7 if self.is_learning else 1
-                if self.is_learning:
-                    flow_generation_wrapper(self.model, self.model_idx, 
-                                            days_to_run_the_simu, 
-                                            bimodal_distribution_24h(amplitude=np.random.triangular(-0.1, 0, 0.1)))
-                
                 port = self.port
+                flow_generation_fix_num_veh(self.model, self.model_idx, self.gen_car_distrib[1], episode_length, self.is_learning)
+                # self.gen_car_distrib[1] += 50
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
                 self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] 
                                                      + ["--default.emergencydecel=7"]

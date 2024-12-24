@@ -231,7 +231,7 @@ def test_ppo():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -274,7 +274,7 @@ def test_a2c():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -313,7 +313,7 @@ def test_dqn():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     
@@ -353,7 +353,7 @@ def test_td3():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     
@@ -393,7 +393,7 @@ def test_trpo():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     
@@ -433,7 +433,7 @@ def test_sac():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     
@@ -473,7 +473,7 @@ def test_ddpg():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     
@@ -513,7 +513,7 @@ def test_prddpg():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False)
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
     
     # check_env(env)
     

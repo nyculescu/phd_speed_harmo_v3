@@ -10,7 +10,9 @@ discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] #+ cust_discrete_act_s
 all_models = cont_act_space_models + discrete_act_space_models
 
 base_sumo_port = 8800
-num_envs_per_model = 10 # it will replace the episodes, because through this, the episodes could be parallelized
+num_of_episodes = 5
+num_of_hr_intervals = 8
+num_envs_per_model = 1
 test_with_electric = True # default value
 test_with_disobedient = True # default value
 
@@ -123,18 +125,22 @@ day_of_the_week_factor = [
     np.random.uniform(0.30, 0.70)   # Sunday
 ]
 
+episode_length = 2 # hours
+
 def mock_daily_pattern(isFixed = True):
     retVal = np.array(mock_daily_pattern_fixed, dtype=int) # or mock_daily_pattern_rand
     if isFixed:
         retVal = np.multiply(retVal, 3)
     return retVal
 
+full_day_car_generation_base_demand = 250
 def set_full_day_car_generation_base_demand(x):
     global full_day_car_generation_base_demand
     full_day_car_generation_base_demand = x
 def get_full_day_car_generation_base_demand():
     return full_day_car_generation_base_demand
 
+full_week_car_generation_rates = len(mock_daily_pattern()) * len(day_of_the_week_factor)
 def set_full_week_car_generation_rates(x):
     global full_week_car_generation_rates
     full_week_car_generation_rates = x
@@ -153,8 +159,8 @@ def set_electric_vehicles(x):
 def get_electric_vehicles():
     return add_electric_vehicles
 
-set_full_day_car_generation_base_demand(250) # max no. of vehicles expected in any interval / hour
-set_full_week_car_generation_rates(len(mock_daily_pattern()) * len(day_of_the_week_factor))
+# set_full_day_car_generation_base_demand(250) # max no. of vehicles expected in any interval / hour
+# set_full_week_car_generation_rates()
 set_disobedient_vehicles(True)
 set_electric_vehicles(True)
 

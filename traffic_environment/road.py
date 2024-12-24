@@ -41,3 +41,9 @@ loops_after = ["loop_seg_0_after_1", "loop_seg_0_after_0"]
 detectors_after = ["detector_seg_0_after_1", "detector_seg_0_after_0"]
 
 detector_length = 50 #meters
+
+section_data = {
+    "build_up": {"length": 0.3, "lanes": 3},
+    "pre_merge": {"length": 0.275, "lanes": 3},
+    "after_merge": {"length": 0.5, "lanes": 2}
+}
