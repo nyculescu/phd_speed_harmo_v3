@@ -20,8 +20,7 @@ from stable_baselines import DQN as DQN_sb2
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
-from gymnasium.wrappers import TimeLimit
-# import gymnasium as gym
+from gym.wrappers import TimeLimit
 import multiprocessing
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
