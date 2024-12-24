@@ -1,6 +1,6 @@
 # inspired by https://github.com/nicknochnack/OpenAI-Reinforcement-Learning-with-Custom-Environment
 
-import gymnasium as gym
+import gym
 import numpy as np
 import traci
 from traci.exceptions import FatalTraCIError, TraCIException
