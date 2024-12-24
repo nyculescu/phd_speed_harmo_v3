@@ -1,0 +1,76 @@
+# Use the NVIDIA TensorFlow image as the base
+FROM nvcr.io/nvidia/tensorflow:23.06-tf2-py3
+
+# Set BASH as the default shell for all RUN commands in this Dockerfile
+# SHELL ["/bin/bash", "-c"]
+
+LABEL maintainer="Catalin NICULESCU (catalin-niculescu@ensity.eu)"
+LABEL Description="Dockerised Simulation of Urban MObility(SUMO)"
+
+# Install Python 3.10
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    git \
+    curl
+RUN add-apt-repository ppa:deadsnakes/ppa
+RUN apt-get update && apt-get install -y python3.10 python3.10-dev python3.10-distutils
+
+RUN add-apt-repository ppa:sumo/stable
+RUN apt-get update && apt-get install -y sumo sumo-tools sumo-doc
+ENV SUMO_HOME=/usr/share/sumo
+ENV PATH=$PATH:$SUMO_HOME/bin
+
+# Install pip for Python 3.10
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
+
+# Set Python 3.10 as the default python version
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1
+RUN update-alternatives --set python3 /usr/bin/python3.10
+
+# Install TensorFlow and other dependencies
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install tensorflow==2.13.0
+RUN python3 -m pip install tensorflow-probability
+RUN python3 -m pip install matplotlib
+RUN python3 -m pip install gymnasium
+RUN python3 -m pip install torch
+RUN python3 -m pip install parameterized
+RUN python3 -m pip install traci
+RUN python3 -m pip install statsmodels
+RUN python3 -m pip install sb3-contrib
+RUN python3 -m pip install stable-baselines3
+RUN python3 -m pip install gymnasium
+
+# Set the working directory
+WORKDIR /app
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Clone the repository
+RUN git clone https://github.com/nyculescu/phd_speed_harmo_v3.git /app/phd_speed_harmo_v3
+
+# Set the working directory
+WORKDIR /app/phd_speed_harmo_v3
+
+# Command to run when the container starts
+# CMD ["python3", "rl_learn.py"]
+
+### Build the Docker image with the following command from the folder containing the docker file:
+# With cache /> docker build -f Dockerfile_py310_tf2 -t phd-speed-harmo:py310-tf2 .
+# Without cache /> docker build --no-cache -f Dockerfile_py310_tf2 -t phd-speed-harmo:py310-tf2 .
+
+### After building the image, you can run the container with the following command:
+# download and install VcXsrv, then configure it like this:
+    # 1. Choose "Multiple windows" in the first screen.
+    # 2. Select "Start no client" in the second screen.
+    # 3. In the "Extra settings" screen:
+        # 3.1. Check "Disable access control"
+        # 3.2. Optionally, check "Native opengl" (this can help with some applications)
+    # 4. Click "Finish" to start the X server.
+# Get the IP address of the host machine with /> ipconfig
+# Start Docker container/> docker run -it --rm -e DISPLAY=192.168.0.37:0.0 phd-speed-harmo:py310-tf2
+# Start Docker container V2/> docker run --gpus all -it --rm -e DISPLAY=192.168.0.37:0.0 phd-speed-harmo:py310-tf2 bash
+# Inside the Docker container, run:
+    # /> export LIBGL_ALWAYS_INDIRECT=1
+    # /> sumo-gui

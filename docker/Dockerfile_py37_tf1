@@ -1,0 +1,140 @@
+FROM ubuntu:18.04
+
+# Set BASH as the default shell for all RUN commands in this Dockerfile
+# SHELL ["/bin/bash", "-c"]
+
+LABEL maintainer="Catalin NICULESCU (catalin-niculescu@ensity.eu)"
+LABEL Description="Dockerised Simulation of Urban MObility(SUMO)"
+
+ENV SUMO_VERSION=1.21.0
+ENV SUMO_HOME=/opt/sumo
+ENV SUMO_USER=nyculescu
+ENV PYTHON_VERSION=3.7
+ENV TENSORFLOW_VERSION=1.12.0
+ENV CUDA_VERSION=9.0
+ENV CUDNN_VERSION=7.2.1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    software-properties-common \
+    python3-apt \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y \
+    python3.7 \
+    python3.7-dev \
+    python3.7-distutils \
+    && rm -rf /var/lib/apt/lists/* 
+
+# Set Python 3.7 as the default version
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.7 1 \
+    && update-alternatives --set python3 /usr/bin/python3.7 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && apt-get update \
+    && apt-get install -y python3-distutils \
+    && wget https://bootstrap.pypa.io/pip/3.7/get-pip.py \
+    && python3 get-pip.py \
+    && rm get-pip.py \
+    && python3 -m pip install --upgrade pip
+
+# Set Python 3.7 as the default version
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.7 1 \
+    && update-alternatives --set python3 /usr/bin/python3.7 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python3 -m pip install --upgrade pip
+
+RUN apt-get install -y python3-apt python3-distutils
+
+# Install CUDA and cuDNN
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg2 curl ca-certificates && \
+    curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub | apt-key add - && \
+    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64 /" > /etc/apt/sources.list.d/cuda.list && \
+    echo "deb https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64 /" > /etc/apt/sources.list.d/nvidia-ml.list && \
+    echo "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1704/x86_64 /" >> /etc/apt/sources.list.d/cuda.list && \
+    echo "deb https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1604/x86_64 /" >> /etc/apt/sources.list.d/nvidia-ml.list && \
+    apt-get purge --autoremove -y curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set Working Directory and Copy Project Files
+WORKDIR /app
+COPY . /app
+
+# Download and extract SUMO source code
+RUN wget http://downloads.sourceforge.net/project/sumo/sumo/version%20$SUMO_VERSION/sumo-src-$SUMO_VERSION.tar.gz \
+    && tar xzf sumo-src-$SUMO_VERSION.tar.gz \
+    && mv sumo-$SUMO_VERSION $SUMO_HOME \
+    && rm sumo-src-$SUMO_VERSION.tar.gz
+
+# Configure and build SUMO from source
+RUN rm -f /etc/apt/sources.list.d/cuda.list /etc/apt/sources.list.d/nvidia-ml.list
+RUN apt-key del 7fa2af80
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub
+RUN apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/machine-learning/repos/ubuntu1804/x86_64/7fa2af80.pub
+RUN apt-get update
+RUN apt-get install -y software-properties-common
+RUN ln -s /usr/lib/python3/dist-packages/apt_pkg.cpython-36m-x86_64-linux-gnu.so /usr/lib/python3/dist-packages/apt_pkg.so
+RUN ln -s /usr/lib/python3/dist-packages/gi/_gi.cpython-36m-x86_64-linux-gnu.so /usr/lib/python3/dist-packages/gi/_gi.so
+RUN add-apt-repository universe
+RUN apt-get update
+RUN apt-get install -y \
+    git \
+    cmake \
+    python3 \
+    g++ \
+    libxerces-c-dev \
+    libfox-1.6-dev \
+    libgdal-dev \
+    libproj-dev \
+    libgl2ps-dev \
+    swig \
+    default-jdk \
+    maven \
+    libeigen3-dev \
+    make
+
+RUN cd $SUMO_HOME && \
+    mkdir -p build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    make install
+
+# Install TensorFlow and Stable-Baselines
+RUN pip3 install tensorflow-gpu==${TENSORFLOW_VERSION} \
+    && pip3 install stable-baselines[mpi]
+
+RUN adduser $SUMO_USER --disabled-password
+
+RUN git clone https://github.com/nyculescu/phd_speed_harmo_v3.git \
+    && cd phd_speed_harmo_v3 \
+    && if [ -f requirements.txt ]; then \
+         sed -i 's/fsspec==2024.9.0/fsspec==2023.1.0/' requirements.txt && \
+         pip3 install -r requirements.txt || echo "Warning: Some packages could not be installed. Continuing build."; \
+       else \
+         echo "Warning: requirements.txt not found. Skipping package installation."; \
+       fi
+
+RUN ln -sf /usr/bin/python3.7 /usr/bin/python
+
+### Build the Docker image with the following command from the folder containing the docker file:
+# With cache, custom /> docker build -f Dockerfile_py37_tf1 -t phd-speed-harmo:py37-tf1 .
+# Without cache /> docker builder prune --all --force && docker build --no-cache -t phd-speed-harmo .
+# Without cache, custom /> docker build --no-cache -f Dockerfile_py37_tf1 -t phd-speed-harmo:py37-tf1 .
+
+### After building the image, you can run the container with the following command:
+# download and install VcXsrv, then configure it like this:
+    # 1. Choose "Multiple windows" in the first screen.
+    # 2. Select "Start no client" in the second screen.
+    # 3. In the "Extra settings" screen:
+        # 3.1. Check "Disable access control"
+        # 3.2. Optionally, check "Native opengl" (this can help with some applications)
+    # 4. Click "Finish" to start the X server.
+# Get the IP address of the host machine with /> ipconfig
+# Start Docker container/> docker run --gpus all -it --rm -e DISPLAY=192.168.0.37:0.0 phd-speed-harmo:py310-tf2 bash
+# Start Docker container V2/> docker run --gpus all --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -it --rm -e DISPLAY=192.168.0.37:0.0 phd-speed-harmo:py310-tf2 bash
+
+# Inside the Docker container, run:
+    # /> export LIBGL_ALWAYS_INDIRECT=1
+    # /> /usr/bin/sumo-gui
+
