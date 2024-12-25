@@ -16,7 +16,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 # from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
-from stable_baselines import DQN as DQN_sb2
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
