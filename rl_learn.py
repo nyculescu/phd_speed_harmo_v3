@@ -5,10 +5,9 @@ import logging
 import logging.handlers
 
 from sb3_contrib import TRPO #, CrossQ, TQC
-from stable_baselines3 import PPO, A2C, SAC, TD3, DDPG #, DroQ, DQN
-from stable_baselines3 import DQN as DQN_sb3
+from stable_baselines3 import PPO, A2C, SAC, TD3, DDPG #, DQN #, DroQ, DQN
 from rl_models.custom_models.DDPG_PRDDPG import PRDDPG
-from rl_models.custom_models.DQN_FPWDDQN import FPWDDQN
+from rl_models.custom_models.DoubleDQN import DoubleDQN as DQN
 # from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -16,7 +15,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 # from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
-from stable_baselines import DQN as DQN_sb2
 from traffic_environment.rl_gym_environments import *
 from traffic_environment.reward_functions import *
 from traffic_environment.flow_gen import *
@@ -194,11 +192,17 @@ def train_dqn():
     #     tensorboard_log=log_dir,
     #     device='cuda'
     # )
-    model = DQN_sb3("MlpPolicy", 
+    model = DQN("MlpPolicy", 
                 SubprocVecEnv([get_traffic_env(base_sumo_port + idx, model_name, idx, is_learning=True) for idx in range(num_envs_per_model)]), 
-                # learning_rate=1e-3, 
+                learning_rate=1e-3, # Learning rate: 1e-4 to 1e-3
                 buffer_size=50000, 
-                verbose=1, tensorboard_log=log_dir,
+                batch_size = 64, # Batch size: 32 to 128
+                # target_update_interval = 1000, # Target network update frequency: 1000 to 10000
+                # exploration_initial_eps=1.0,    # Start with 100% random actions
+                # exploration_final_eps=0.01,     # End with 1% random actions  
+                # exploration_fraction=0.5,       # Decay over first half of training
+                verbose=1, 
+                tensorboard_log=log_dir,
                 device='cuda')
     train_model(model_name, model)
 
