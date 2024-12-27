@@ -10,11 +10,13 @@ discrete_act_space_models = ["TRPO", "DQN", "A2C", "PPO"] #+ cust_discrete_act_s
 all_models = cont_act_space_models + discrete_act_space_models
 
 base_sumo_port = 8800
-num_of_episodes = 5
-num_of_hr_intervals = 8
-num_envs_per_model = 1
+num_of_episodes = 10
+num_of_hr_intervals = 20
+num_envs_per_model = 3
+num_of_iterations = 5
 test_with_electric = True # default value
 test_with_disobedient = True # default value
+episode_length = 1 # hours
 
 model_paths = {
     "PPO": "rl_models/PPO/best_model",
@@ -125,8 +127,6 @@ day_of_the_week_factor = [
     np.random.uniform(0.30, 0.70)   # Sunday
 ]
 
-episode_length = 2 # hours
-
 def mock_daily_pattern(isFixed = True):
     retVal = np.array(mock_daily_pattern_fixed, dtype=int) # or mock_daily_pattern_rand
     if isFixed:
@@ -178,6 +178,7 @@ def check_sumo_env():
 # sumoExecutable = 'sumo.exe' if os.name == 'nt' else 'sumo'
 # -d, --delay FLOAT  Use FLOAT in ms as delay between simulation steps
 sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
+# sumoExecutable = 'sumo.exe' if os.name == 'nt' else 'sumo'
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
 
 """ Route and other common flow attributes """

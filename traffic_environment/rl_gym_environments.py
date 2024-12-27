@@ -34,7 +34,7 @@ class TrafficEnv(gym.Env):
         self.model = model
         self.model_idx = model_idx if is_learning else model_idx + num_envs_per_model + 1
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
-        self.speed_limits = np.array([30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130])
+        self.speed_limits = np.arange(50, 135, 5) # end = max + step
         if model in cont_act_space_models:
             self.action_space = gym.spaces.Box(low=np.min(self.speed_limits), high=np.max(self.speed_limits), shape=(1,), dtype=np.float64)
         else:
@@ -68,7 +68,7 @@ class TrafficEnv(gym.Env):
         self.target_min = None
         self.target_max = None
         self.is_first_step_delay_on = False
-        self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
+        # self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
         self.prev_act_spdlim = None
         self.act_spdlim_change_amounts = []
         self.density = []
@@ -322,16 +322,16 @@ class TrafficEnv(gym.Env):
 
         self.occupancy = self.occupancy_sum / self.aggregation_time
 
-        self.sim_length -= 1  # Reduce simulation length by 1 second
-        done = False
-        if self.sim_length <= 0:
-            if not self.is_learning and traci.edge.getLastStepVehicleNumber("seg_0_before") > 0:
-                pass # wait until no vehicle is present in the merging zone
-            else:
-                done = True
+        # self.sim_length -= 1  # Reduce simulation length by 1 second
+        # done = False
+        # if self.sim_length <= 0:
+            # if not self.is_learning and traci.edge.getLastStepVehicleNumber("seg_0_before") > 0:
+                # pass # wait until no vehicle is present in the merging zone
+            # else:
+                # done = True
 
-        if done:
-            self.close_sumo("simulation done")
+        # if done:
+            # self.close_sumo("simulation done")
 
         # if self.sim_length % 60 == 0:
         #     self.hour += 1
@@ -353,7 +353,7 @@ class TrafficEnv(gym.Env):
         # Update the previous action
         self.prev_act_spdlim = self.speed_limit
 
-        return self.obs, self.reward, done, False, {}
+        return self.obs, self.reward, False, False, {}
 
     def render(self):
         # Implement viz
@@ -394,7 +394,7 @@ class TrafficEnv(gym.Env):
         self.speed_limit = 130
         
         # Reset time
-        self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
+        # self.sim_length = round(len(mock_daily_pattern()) * 3600 / self.aggregation_time)
 
         self.obs = np.array([0], dtype=np.float64)
 

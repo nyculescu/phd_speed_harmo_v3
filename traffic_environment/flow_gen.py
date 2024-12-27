@@ -403,135 +403,136 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, is_
         flows = [] # Collect flows here
 
         # Iterate over each pair of rates
-        for i in range(num_of_hrs * num_of_hr_intervals):
-            num_veh_per_hr_temp = base_num_veh_per_hr + (i // num_of_hrs) * 50 if is_learning else base_num_veh_per_hr
-            # Vehicle type distributions
-            trucks = np.random.uniform(10, 15)
-            cars = np.random.uniform(70, 85) * 1.15
-            motorcycle = 0
-            bus = 0
-            van = 0
+        for itr in range(num_of_iterations):
+            for i in range(num_of_hrs * num_of_hr_intervals):
+                num_veh_per_hr_temp = base_num_veh_per_hr + (i // num_of_hrs) * 100 if is_learning else base_num_veh_per_hr
+                # Vehicle type distributions
+                trucks = np.random.uniform(10, 15)
+                cars = np.random.uniform(70, 85) * 1.15
+                motorcycle = 0
+                bus = 0
+                van = 0
 
-            if (trucks + cars < 92.5):
-                remaining_veh = 100 - trucks - cars
-                van = np.random.uniform(min(9, remaining_veh), min(12, remaining_veh))
-                remaining_veh = 100 - trucks - cars - van
-                if (remaining_veh < 95):
-                    bus = np.random.uniform(remaining_veh * 0.95, remaining_veh)
-                    motorcycle = max(0, remaining_veh - bus)
+                if (trucks + cars < 92.5):
+                    remaining_veh = 100 - trucks - cars
+                    van = np.random.uniform(min(9, remaining_veh), min(12, remaining_veh))
+                    remaining_veh = 100 - trucks - cars - van
+                    if (remaining_veh < 95):
+                        bus = np.random.uniform(remaining_veh * 0.95, remaining_veh)
+                        motorcycle = max(0, remaining_veh - bus)
+                    else:
+                        trucks = trucks * 0.95
+                        cars = cars * 0.95
+                        remaining_veh = 100 - trucks - cars
+                        van = np.random.uniform(remaining_veh * 0.75, remaining_veh * 0.95)
+                        remaining_veh = 100 - trucks - cars - van
+                        bus = np.random.uniform(remaining_veh * 0.90, remaining_veh * 0.98)
+                        motorcycle = remaining_veh - bus
                 else:
-                    trucks = trucks * 0.95
-                    cars = cars * 0.95
+                    trucks = trucks * 0.925
+                    cars = cars * 0.925
                     remaining_veh = 100 - trucks - cars
                     van = np.random.uniform(remaining_veh * 0.75, remaining_veh * 0.95)
                     remaining_veh = 100 - trucks - cars - van
                     bus = np.random.uniform(remaining_veh * 0.90, remaining_veh * 0.98)
                     motorcycle = remaining_veh - bus
-            else:
-                trucks = trucks * 0.925
-                cars = cars * 0.925
-                remaining_veh = 100 - trucks - cars
-                van = np.random.uniform(remaining_veh * 0.75, remaining_veh * 0.95)
-                remaining_veh = 100 - trucks - cars - van
-                bus = np.random.uniform(remaining_veh * 0.90, remaining_veh * 0.98)
-                motorcycle = remaining_veh - bus
-            
-            normal_car = cars * np.random.uniform(0.75, 0.95)
-            fast_car = cars - normal_car
-            trailer = trucks * 0.98
-            truck = trucks - trailer
-
-            # Calculate proportions
-            total_distribution = normal_car + fast_car + van + bus + motorcycle + trucks
-            assert_tolerance = 0.5
-            assert_allclose(total_distribution, 100, atol=assert_tolerance, err_msg=f"Total distribution is under {100-assert_tolerance}%")
-
-            if get_disobedient_vehicles():
-                disobedient_normal_car_proportion = np.random.uniform(0.01, 0.1) * normal_car
-                disobedient_fast_car_proportion = np.random.uniform(0.5, 0.2) * fast_car
-                disobedient_van_proportion = np.random.uniform(0.01, 0.5) * van
-                disobedient_bus_proportion = np.random.uniform(0, 0.01) * bus
-                disobedient_motorcycle_proportion = np.random.uniform(0, 0.06) * motorcycle
-                disobedient_truck_proportion = np.random.uniform(0, 0.02) * truck
-                disobedient_trailer_proportion = np.random.uniform(0, 0.005) * trailer
-            else:
-                disobedient_normal_car_proportion = 0
-                disobedient_fast_car_proportion = 0
-                disobedient_van_proportion = 0
-                disobedient_bus_proportion = 0
-                disobedient_motorcycle_proportion = 0
-                disobedient_truck_proportion = 0
-                disobedient_trailer_proportion = 0
-
-            if get_electric_vehicles():
-                electric_normal_car_proportion = np.random.uniform(0.05, 0.1) * normal_car
-                electric_fast_car_proportion = np.random.uniform(0.07, 0.1) * fast_car
-                electric_van_proportion = np.random.uniform(0.02, 0.04) * van
-                electric_bus_proportion = np.random.uniform(0.005, 0.01) * bus
-                electric_motorcycle_proportion = np.random.uniform(0.03, 0.06) * motorcycle
-                electric_truck_proportion = np.random.uniform(0.01, 0.02) * truck
-                electric_trailer_proportion = np.random.uniform(0.0025, 0.005) * trailer
-            else:
-                electric_normal_car_proportion = 0
-                electric_fast_car_proportion = 0
-                electric_van_proportion = 0
-                electric_bus_proportion = 0
-                electric_motorcycle_proportion = 0
-                electric_truck_proportion = 0
-                electric_trailer_proportion = 0
-
-            proportions = {
-                "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion),
-                "passenger/hatchback": (fast_car-disobedient_fast_car_proportion-electric_fast_car_proportion),
-                "passenger/van": (van-disobedient_van_proportion-electric_van_proportion),
-                "bus": (bus-disobedient_bus_proportion-electric_bus_proportion),
-                "motorcycle": (motorcycle-disobedient_motorcycle_proportion-electric_motorcycle_proportion),
-                "truck": (truck-disobedient_truck_proportion-electric_truck_proportion),
-                "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion),
-
-                # Disobedient proportions:
-                "disobedient_passenger": disobedient_normal_car_proportion,
-                "disobedient_passenger/hatchback": disobedient_fast_car_proportion,
-                "disobedient_passenger/van": disobedient_van_proportion,
-                "disobedient_bus": disobedient_bus_proportion,
-                "disobedient_motorcycle": disobedient_motorcycle_proportion,
-                "disobedient_truck": disobedient_truck_proportion,
-                "disobedient_truck/trailer": disobedient_trailer_proportion,
-
-                # Electric proportions:
-                "electric_passenger": electric_normal_car_proportion,
-                "electric_passenger/hatchback": electric_fast_car_proportion,
-                "electric_passenger/van": electric_van_proportion,
-                "electric_bus": electric_bus_proportion,
-                "electric_motorcycle": electric_motorcycle_proportion,
-                "electric_truck": electric_truck_proportion,
-                "electric_truck/trailer": electric_trailer_proportion,
-            }
-
-            # Calculate start and end times for each flow
-            begin_time = i * 3600
-            end_time = begin_time + 3600
-                            
-            # Create flows for each vehicle type based on their proportions
-            for vehicle_type in proportions:
-                vehs_gen = round(num_veh_per_hr_temp * proportions[vehicle_type] / 100)
                 
-                if vehs_gen > 0:
-                    if "disobedient" in vehicle_type and get_disobedient_vehicles():
-                        flows.append((begin_time,
-                                    f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                    f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
-                    elif "electric" in vehicle_type and get_electric_vehicles():
-                        flows.append((begin_time,
-                                    f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                    f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
-                    else:
-                        flows.append((begin_time,
-                                    f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                    f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                    f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
+                normal_car = cars * np.random.uniform(0.75, 0.95)
+                fast_car = cars - normal_car
+                trailer = trucks * 0.98
+                truck = trucks - trailer
+
+                # Calculate proportions
+                total_distribution = normal_car + fast_car + van + bus + motorcycle + trucks
+                assert_tolerance = 0.5
+                assert_allclose(total_distribution, 100, atol=assert_tolerance, err_msg=f"Total distribution is under {100-assert_tolerance}%")
+
+                if get_disobedient_vehicles():
+                    disobedient_normal_car_proportion = np.random.uniform(0.01, 0.1) * normal_car
+                    disobedient_fast_car_proportion = np.random.uniform(0.5, 0.2) * fast_car
+                    disobedient_van_proportion = np.random.uniform(0.01, 0.5) * van
+                    disobedient_bus_proportion = np.random.uniform(0, 0.01) * bus
+                    disobedient_motorcycle_proportion = np.random.uniform(0, 0.06) * motorcycle
+                    disobedient_truck_proportion = np.random.uniform(0, 0.02) * truck
+                    disobedient_trailer_proportion = np.random.uniform(0, 0.005) * trailer
+                else:
+                    disobedient_normal_car_proportion = 0
+                    disobedient_fast_car_proportion = 0
+                    disobedient_van_proportion = 0
+                    disobedient_bus_proportion = 0
+                    disobedient_motorcycle_proportion = 0
+                    disobedient_truck_proportion = 0
+                    disobedient_trailer_proportion = 0
+
+                if get_electric_vehicles():
+                    electric_normal_car_proportion = np.random.uniform(0.05, 0.1) * normal_car
+                    electric_fast_car_proportion = np.random.uniform(0.07, 0.1) * fast_car
+                    electric_van_proportion = np.random.uniform(0.02, 0.04) * van
+                    electric_bus_proportion = np.random.uniform(0.005, 0.01) * bus
+                    electric_motorcycle_proportion = np.random.uniform(0.03, 0.06) * motorcycle
+                    electric_truck_proportion = np.random.uniform(0.01, 0.02) * truck
+                    electric_trailer_proportion = np.random.uniform(0.0025, 0.005) * trailer
+                else:
+                    electric_normal_car_proportion = 0
+                    electric_fast_car_proportion = 0
+                    electric_van_proportion = 0
+                    electric_bus_proportion = 0
+                    electric_motorcycle_proportion = 0
+                    electric_truck_proportion = 0
+                    electric_trailer_proportion = 0
+
+                proportions = {
+                    "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion),
+                    "passenger/hatchback": (fast_car-disobedient_fast_car_proportion-electric_fast_car_proportion),
+                    "passenger/van": (van-disobedient_van_proportion-electric_van_proportion),
+                    "bus": (bus-disobedient_bus_proportion-electric_bus_proportion),
+                    "motorcycle": (motorcycle-disobedient_motorcycle_proportion-electric_motorcycle_proportion),
+                    "truck": (truck-disobedient_truck_proportion-electric_truck_proportion),
+                    "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion),
+
+                    # Disobedient proportions:
+                    "disobedient_passenger": disobedient_normal_car_proportion,
+                    "disobedient_passenger/hatchback": disobedient_fast_car_proportion,
+                    "disobedient_passenger/van": disobedient_van_proportion,
+                    "disobedient_bus": disobedient_bus_proportion,
+                    "disobedient_motorcycle": disobedient_motorcycle_proportion,
+                    "disobedient_truck": disobedient_truck_proportion,
+                    "disobedient_truck/trailer": disobedient_trailer_proportion,
+
+                    # Electric proportions:
+                    "electric_passenger": electric_normal_car_proportion,
+                    "electric_passenger/hatchback": electric_fast_car_proportion,
+                    "electric_passenger/van": electric_van_proportion,
+                    "electric_bus": electric_bus_proportion,
+                    "electric_motorcycle": electric_motorcycle_proportion,
+                    "electric_truck": electric_truck_proportion,
+                    "electric_truck/trailer": electric_trailer_proportion,
+                }
+
+                # Calculate start and end times for each flow
+                begin_time = i * 3600 + (num_of_hrs * num_of_hr_intervals * itr * 3600)
+                end_time = begin_time + 3600
+
+                # Create flows for each vehicle type based on their proportions
+                for vehicle_type in proportions:
+                    vehs_gen = round(num_veh_per_hr_temp * proportions[vehicle_type] / 100)
+                    
+                    if vehs_gen > 0:
+                        if "disobedient" in vehicle_type and get_disobedient_vehicles():
+                            flows.append((begin_time,
+                                        f'    <flow id="{vehicle_type}_flow_{i}_iter_{itr}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
+                        elif "electric" in vehicle_type and get_electric_vehicles():
+                            flows.append((begin_time,
+                                        f'    <flow id="{vehicle_type}_flow_{i}_iter_{itr}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
+                        else:
+                            flows.append((begin_time,
+                                        f'    <flow id="{vehicle_type}_flow_{i}_iter_{itr}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
 
         # Sort flows by begin time only (no need to sort by day index first)
         flows.sort(key=lambda x: (x[0]))
