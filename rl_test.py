@@ -15,10 +15,10 @@ from traci.exceptions import FatalTraCIError, TraCIException
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.callbacks import BaseCallback
-from traffic_environment.rl_gym_environments import TrafficEnv
+from traffic_environment.rl_gym_environments import TrafficEnv, RuleBasedTrafficEnv
 from config import *
-from traffic_environment.flow_gen import flow_generation_wrapper, bimodal_distribution_24h, triangular_distribution_24h
 from datetime import datetime
+from traffic_environment.setup import create_sumocfg
 
 # Configure logging
 logging.basicConfig(
@@ -231,7 +231,7 @@ def test_ppo():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -274,7 +274,7 @@ def test_a2c():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     # check_env(env)
     
     # Set up TensorBoard logger
@@ -313,7 +313,7 @@ def test_dqn():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["bimodal", 2.5])
     
     # check_env(env)
     
@@ -323,6 +323,7 @@ def test_dqn():
 
     obs, _ = env.reset()
     done = False
+    env.sim_length = 24 * 60 # 24h
 
     rewards = []
     # Initialize custom callback for logging with the environment passed in
@@ -337,6 +338,9 @@ def test_dqn():
         tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
         
         rewards.append(reward)
+
+    env.logger.save_to_csv(f"rl_test_{model_name}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+    env.close()
     
     tf_logger.dump(step=0)  # Ensure logs are written
 
@@ -353,7 +357,7 @@ def test_td3():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     
     # check_env(env)
     
@@ -393,7 +397,7 @@ def test_trpo():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     
     # check_env(env)
     
@@ -433,7 +437,7 @@ def test_sac():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     
     # check_env(env)
     
@@ -473,7 +477,7 @@ def test_ddpg():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     
     # check_env(env)
     
@@ -513,7 +517,7 @@ def test_prddpg():
     model.policy.eval()  # Set policy to evaluation mode
     # test_model(model, model_name)
     logging.debug(f"Starting {model_name} test")
-    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib="[uniform, 100]")
+    env = TrafficEnv(port=ports[model_name], model=model_name, model_idx=0, is_learning=False, base_gen_car_distrib=["uniform", 100])
     
     # check_env(env)
     
@@ -547,14 +551,65 @@ def test_prddpg():
 
     return (model_name, result)
 
-if __name__ == '__main__':
+def test_rule_based():
+    model_name = "RULE_BASED"
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
+    create_sumocfg(model_name, 1)
+
+    # Rule-based evaluation
+    rule_based_env = RuleBasedTrafficEnv(
+                        port=9000,
+                        model=model_name,
+                        model_idx=0,
+                        is_learning=False,
+                        base_gen_car_distrib=["bimodal", 3]
+                    )
+    rule_based_env.model_idx = 0
+
+    rule_based_env.reset()
+    done = False
+
+    while not done:      
+        _, _, done, _, _ = rule_based_env.step(None)
+    
+    rule_based_env.logger.save_to_csv(f"rl_test_{model_name}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+    rule_based_env.close()
+
+""" 
+Note: DEPRECATED, no intention to be used since manual trial-and-error tuning of gains must be done
+"""
+def test_pid_based():
+    model_name = "PID_BASED"
+    log_dir = f"./logs/{model_name}/"
+    model_dir = f"./rl_models/{model_name}/"
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(model_dir, exist_ok=True)
+    create_sumocfg(model_name, 1)
+
+    # Rule-based evaluation
+    rule_based_env = PIDBasedTrafficEnv(
+                        port=9000,
+                        model=model_name,
+                        model_idx=0,
+                        is_learning=False,
+                        base_gen_car_distrib=["bimodal", 4]
+                    )
+    rule_based_env.model_idx = 0
+
+    rule_based_env.reset()
+    done = False
+
+    while not done:
+        _, _, done, _, _ = rule_based_env.step(None)
+    
+    rule_based_env.logger.save_to_csv(f"rl_test_{model_name}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+    rule_based_env.close()
+
+def run_parallel_tests():
     async_results = []
-
-    # override the default values defined in config.py
-    set_disobedient_vehicles(True)
-    set_electric_vehicles(True)
-
-    flow_generation_wrapper(model = "all", idx = 0, num_days = 1, daily_pattern=bimodal_distribution_24h(amplitude=1.0))
 
     # Ensure freeze_support() is called if necessary (typically for Windows)
     multiprocessing.freeze_support()
@@ -589,10 +644,14 @@ if __name__ == '__main__':
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
     plot_metrics(get_electric_vehicles(), get_disobedient_vehicles())
-    
-    # test_ppo()
 
-    try:
-        traci_close()
-    except (FatalTraCIError, TraCIException):
-        logging.debug(f"SUMO is not closing.")
+if __name__ == '__main__':
+    # override the default values defined in config.py
+    set_disobedient_vehicles(True)
+    set_electric_vehicles(True)
+
+    # run_parallel_tests()
+    
+    test_dqn()
+
+    # test_rule_based()

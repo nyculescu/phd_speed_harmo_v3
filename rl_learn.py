@@ -48,8 +48,6 @@ Note about policies:
   
 ''' Learning rate values: https://arxiv.org/html/2407.14151v1 '''
 
-first_evaluation_length = int(episode_length * num_of_hr_intervals * 60 / num_envs_per_model * 0.8)
-
 def get_traffic_env(port, model, model_idx, is_learning):
     def _init():
         if is_learning:
@@ -83,6 +81,7 @@ def train_dqn():
     model_dir = f"./rl_models/{model_name}/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
+    create_sumocfg(model_name, num_envs_per_model)
 
     def train_env_constructor(port, is_learning):
         return get_traffic_env(port, model_name, model_idx=port - base_sumo_port, is_learning=is_learning)
