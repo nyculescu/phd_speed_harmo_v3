@@ -246,40 +246,41 @@ def flow_generation(model, idx, daily_pattern, num_days):
         f.write('\n')
         
         """ Define vehicle types """
+        lcDuration = 0.2
         # Define specific vehicle types
         accel = np.random.uniform(2.4, 2.8)
         decel = np.random.uniform(4.3, 4.7)
         length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
         emissionClass = "HBEFA4/PC_petrol_Euro-4"
-        f.write(f'    <vType id="passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{180/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{180/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.7)}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.7)}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
         emissionClass = "HBEFA4/PC_petrol_Euro-6ab" # UBus_Electric_Artic_gt18t
-        f.write(f'    <vType id="motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="8" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="8" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="13.6" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="13.6" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
         """ Disobedient vehicle types """
         accel = np.random.uniform(2.4, 2.8)
@@ -290,7 +291,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5) # between 0 and 50% faster. This allows the vehicle to exceed the lane's max speed.
         speedDev = np.random.uniform(0, 0.1) # between 0 and 10% deviation. Introduces some randomness in how much faster or slower than the calculated max speed (lane max speed * speedFactor) the vehicle might drive
         emissionClass = "HBEFA4/PC_petrol_Euro-4"
-        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
@@ -299,7 +300,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
@@ -308,7 +309,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
@@ -317,7 +318,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
@@ -326,7 +327,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-6ab"
-        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
         impatience = np.random.uniform(0.5, 1)
@@ -334,7 +335,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
         impatience = np.random.uniform(0.5, 1)
@@ -342,7 +343,7 @@ def flow_generation(model, idx, daily_pattern, num_days):
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
         """ Electric vehicle types """
         speedFactor = 1
@@ -351,29 +352,29 @@ def flow_generation(model, idx, daily_pattern, num_days):
         accel = np.random.uniform(2.4, 2.8)
         decel = np.random.uniform(4.3, 4.7)
         length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
-        f.write(f'    <vType id="electric_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.8)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.8)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
-        f.write(f'    <vType id="electric_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
-        f.write(f'    <vType id="electric_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
-        f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
 
         f.write('\n')
@@ -534,40 +535,41 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         f.write('\n')
         
         """ Define vehicle types """
+        lcDuration = 0.2
         # Define specific vehicle types
         accel = np.random.uniform(2.4, 2.8)
         decel = np.random.uniform(4.3, 4.7)
         length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
         emissionClass = "HBEFA4/PC_petrol_Euro-4"
-        f.write(f'    <vType id="passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{180/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{180/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.7)}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.7)}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.5)}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
         emissionClass = "HBEFA4/PC_petrol_Euro-6ab" # UBus_Electric_Artic_gt18t
-        f.write(f'    <vType id="motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="8" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.35)}" length="8" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="13.6" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" sigma="{np.random.uniform(0.1, 0.3)}" length="13.6" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
         """ Disobedient vehicle types """
         accel = np.random.uniform(2.4, 2.8)
@@ -578,7 +580,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5) # between 0 and 50% faster. This allows the vehicle to exceed the lane's max speed.
         speedDev = np.random.uniform(0, 0.1) # between 0 and 10% deviation. Introduces some randomness in how much faster or slower than the calculated max speed (lane max speed * speedFactor) the vehicle might drive
         emissionClass = "HBEFA4/PC_petrol_Euro-4"
-        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
@@ -587,7 +589,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
@@ -596,7 +598,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-5"
-        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
@@ -605,7 +607,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
@@ -614,7 +616,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/PC_petrol_Euro-6ab"
-        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
         impatience = np.random.uniform(0.5, 1)
@@ -622,7 +624,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
         impatience = np.random.uniform(0.5, 1)
@@ -630,7 +632,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         speedFactor = np.random.uniform(1, 1.5)
         speedDev = np.random.uniform(0, 0.1)
         emissionClass = "HBEFA4/RT_le7.5t_Euro-VI_A-C"
-        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="disobedient_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" impatience="{impatience}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
         """ Electric vehicle types """
         speedFactor = 1
@@ -639,29 +641,29 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         accel = np.random.uniform(2.4, 2.8)
         decel = np.random.uniform(4.3, 4.7)
         length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
-        f.write(f'    <vType id="electric_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="1,0,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.0, 3.4)
         decel = np.random.uniform(4.5, 5.0)
         length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.8)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger/hatchback" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0.8,0.8,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.8)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.5, 2.0)
         decel = np.random.uniform(3.0, 3.4)
         length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_passenger/van" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="1,1,1" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{np.random.uniform(0.1, 0.5)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.5)
         decel = np.random.uniform(3.5, 4.1)
         length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
-        f.write(f'    <vType id="electric_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_bus" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="1,.5,.5" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(3.5, 4.1)
         decel = np.random.uniform(5.0, 6.4)
         length = np.random.uniform(2.2, 2.6)
-        f.write(f'    <vType id="electric_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_motorcycle" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color=".2,.2,.8" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.4, 1.8)
         decel = np.random.uniform(3.3, 3.8)
-        f.write(f'    <vType id="electric_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_truck" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color=".4,.1,.4" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{np.random.uniform(0.1, 0.35)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
         accel = np.random.uniform(1.0, 1.4)
         decel = np.random.uniform(3.0, 3.4)
-        f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}"/>\n')
+        f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" lcStrategic="0.5" lcCooperative="0.1" lcSpeedGain="1.5" emissionClass="{emissionClass}" lcDuration="{lcDuration}"/>\n')
 
 
         f.write('\n')

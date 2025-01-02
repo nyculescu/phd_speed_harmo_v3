@@ -127,7 +127,7 @@
         <lane id="seg_9_before_2" index="2" speed="33.33" length="500.00" shape="-1451.66,64.80 -1306.79,65.36"/>
     </edge>
 
-    <junction id="J0" type="priority" x="-213.66" y="71.95" incLanes="seg_1_before_0 seg_1_before_1 seg_1_before_2" intLanes=":J0_0_0 :J0_0_1 :J0_0_2" shape="-213.51,71.95 -213.39,62.35 -213.68,62.35 -213.81,71.95">
+    <junction id="J0" type="zipper" x="-213.66" y="71.95" incLanes="seg_1_before_0 seg_1_before_1 seg_1_before_2" intLanes=":J0_0_0 :J0_0_1 :J0_0_2" shape="-213.51,71.95 -213.39,62.35 -213.68,62.35 -213.81,71.95">
         <request index="0" response="000" foes="000" cont="0"/>
         <request index="1" response="000" foes="000" cont="0"/>
         <request index="2" response="000" foes="000" cont="0"/>

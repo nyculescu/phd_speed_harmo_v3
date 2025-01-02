@@ -87,6 +87,9 @@ def create_sumocfg(model):
             <additional-files value="loops_detectors.add.xml"/>
             <gui-settings-file value="colored.view.xml"/>
         </input>
+        <processing>
+            <lateral-resolution value="0.8"/>
+        </processing>
     </configuration>
     """
 
@@ -329,6 +332,8 @@ class TrafficEnv(gym.Env):
                                                      + ["--default.emergencydecel=7"]
                                                      + ['--random-depart-offset=3600']
                                                      + ["--remote-port", str(port)] 
+                                                     + ["--step-length=0.1"]
+                                                     + ["--default.action-step-length=0.1"]
                                                      + ["--quit-on-end"]
                                                        ,
                                     stdout=subprocess.PIPE, 
@@ -399,6 +404,7 @@ class TrafficEnv(gym.Env):
         mean_speeds_seg_0_after = 0
         self.occupancy_sum = 0
         mean_speed_merge_seg = 0
+        departed_vehicles = 0
 
         while self.is_first_step_delay_on:
             try:
@@ -441,6 +447,8 @@ class TrafficEnv(gym.Env):
                 if occ_loop > occ_max:
                     occ_max = occ_loop
             self.occupancy_sum += occ_max
+
+            departed_vehicles += traci.simulation.getDepartedNumber()
 
         self.occupancy = self.occupancy_sum / self.aggregation_time
         avg_speed_before = mean_speeds_seg_1_before / self.aggregation_time
@@ -514,7 +522,8 @@ class TrafficEnv(gym.Env):
             avg_speed_trend=avg_speed_trend,
             reward_weights = weights,
             rewards = [R_occ, R_flow, R_smooth],
-            action=action
+            action=action,
+            departed_vehicles=departed_vehicles
         )
 
         self.state_before = state
@@ -562,12 +571,12 @@ class TrafficDataLogger:
         self.header = [
             "timestamp", "VSS", "occupancy", "avg_speed_before", "avg_speed_after",
             "reward", "flow_upstream", "flow_downstream", "avg_speed_trend", 
-            "reward_weights", "rewards", "action"
+            "reward_weights", "rewards", "action", "departed_vehicles"
         ]
 
     def log_step(self, vss, occupancy, speed_before, speed_after, reward,
                  flow_upstream, flow_downstream, avg_speed_trend, reward_weights,
-                 rewards, action):
+                 rewards, action, departed_vehicles):
         self.traffic_data.append({
             "timestamp": time.time(),
             "VSS": vss,
@@ -581,6 +590,7 @@ class TrafficDataLogger:
             "reward_weights": reward_weights,
             "rewards": rewards,
             "action": action,
+            "departed_vehicles": departed_vehicles,
         })
 
     def save_to_csv(self, filename="traffic_data.csv"):
