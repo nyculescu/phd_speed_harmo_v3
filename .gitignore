@@ -1,7 +1,6 @@
 *.pyc
 *.csv
 .py310_tf_env/
-.py37_tf1_env/
 __pycache__/
 logs/
 metrics/
@@ -19,3 +18,4 @@ eval/rew_func/*/correlation_heatmap*.png
 eval/rew_func/*/reward_func_plot/*.png
 eval/rew_func/*/reward_plots/*.png
 eval/rew_func/*/reward_speed_plots/*.png
+misc.py

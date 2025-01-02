@@ -2,6 +2,8 @@ import logging
 import logging.handlers
 from stable_baselines3 import DQN
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
@@ -9,6 +11,7 @@ from stable_baselines3.common.logger import configure
 from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
+from gymnasium import spaces
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from datetime import datetime 
@@ -20,6 +23,8 @@ from traci import FatalTraCIError, TraCIException
 import subprocess
 import sys
 from pathlib import Path
+import csv
+import collections
 
 # Configure logging
 logging.basicConfig(
@@ -60,24 +65,18 @@ base_train_sumo_port = 8000
 base_eval_sumo_port = 9000
 """ Curriculum learning for the DQN agent, which means gradually increasing the difficulty of the training scenarios. """
 interval_length_h = 1 # hours
-num_of_intervals = 10
-num_of_episodes = 10
+num_of_intervals = 1
 num_test_envs_per_model = 1
 num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
-test_with_electric = True # default value
-test_with_disobedient = True # default value
-metrics_to_plot = ['rewards'
-                #    , 'obs'
-                   , 'emissions'
-                   , 'mean speed'
-                   , 'flow'
-                   , 'density'
-                   ]
 sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
 
+MAX_OCCUPANCY = 100.0  # Occupancy measured 0..100
+MAX_FLOW = 7200.0      # 2 lanes, up to 2 cars/sec => 7200 cars/hour (example)
+MAX_SPEED_DIFF = 80.0  # Range from 50 to 130 => 80 km/h difference
+OBSERVATION_SPACE_SIZE = 7
 
 def create_sumocfg(model):
     sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
@@ -109,57 +108,61 @@ def create_sumocfg(model):
         
         logging.debug(f"Created {filepath}")
 
-def train_dqn():
+def train_env_constructor(idx, model_name, num_of_episodes):
+    def _init():
+        env = Monitor(TrafficEnv(port=base_train_sumo_port + idx, 
+                                 model_name=model_name, 
+                                 model_idx=idx, 
+                                 op_mode="train", 
+                                 base_gen_car_distrib=["uniform", 2000],
+                                 num_of_episodes=num_of_episodes))
+        return env
+    return _init
+
+def eval_env_constructor(model_name):
+    def _init():
+        env = Monitor(TimeLimit(TrafficEnv(port=base_eval_sumo_port, 
+                                           model_name=model_name, 
+                                           model_idx=num_envs_per_model - 1, 
+                                           op_mode="eval", 
+                                           base_gen_car_distrib=["uniform", 3000],
+                                           num_of_episodes=1), 
+                max_episode_steps=interval_length))
+        return env
+    return _init
+
+def train_dqn(num_of_episodes):
     total_timesteps = int(interval_length * num_of_intervals * num_of_episodes)
     eval_timesteps = int(interval_length * num_of_intervals)
     model_name = 'DQN'
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
+    
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
-
-    def train_env_constructor(idx):
-        def _init():
-            env = Monitor(TrafficEnv(port=base_train_sumo_port + idx, 
-                                     model=model_name, 
-                                     model_idx=idx, 
-                                     op_mode="train", 
-                                     base_gen_car_distrib=["uniform", 2000]))
-            return env
-        return _init
-
-    def eval_env_constructor():
-        def _init():
-            env = Monitor(TimeLimit(TrafficEnv(port=base_eval_sumo_port, 
-                                               model=model_name, 
-                                               model_idx=num_envs_per_model - 1, 
-                                               op_mode="eval", 
-                                               base_gen_car_distrib=["uniform", 3000]), 
-                    max_episode_steps=interval_length))
-            return env
-        return _init
     
     train_env = SubprocVecEnv([
-        train_env_constructor(i)
+        train_env_constructor(i, model_name, num_of_episodes)
         for i in range(num_train_envs_per_model)
     ])
-    env_eval = SubprocVecEnv([eval_env_constructor()])
+    env_eval = SubprocVecEnv([eval_env_constructor(model_name)])
 
-    policy_kwargs = dict(
-        net_arch=[256, 256, 128],  # Deeper network
-        activation_fn=torch.nn.ReLU
-    )
+    # policy_kwargs = dict(
+    #     net_arch=[256, 256, 128],  # Deeper network
+    #     activation_fn=nn.ReLU
+    # )
     
-    model = DQN(
+    model = DoubleDQN(
         "MlpPolicy",
         train_env,
         learning_rate=1e-4,
         buffer_size=100000,
         batch_size=128,
-        learning_starts=50000,
-        exploration_fraction=0.3,
-        exploration_final_eps=0.02,
-        policy_kwargs=policy_kwargs,
+        gamma=0.99,
+        target_update_interval=1000,
+        exploration_fraction=0.1,
+        exploration_final_eps=0.01,
+        # policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda'
@@ -193,14 +196,14 @@ def train_dqn():
         verbose=1
     )
 
-    callbacks = [checkpoint_cb, eval_cb]
-
     try:
         model.learn(total_timesteps=total_timesteps, 
-            callback=callbacks, 
+            callback=[checkpoint_cb, eval_cb], 
             progress_bar=True, 
             reset_num_timesteps=False
             )
+        model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
+        
     except KeyboardInterrupt:
         print("Training interrupted by user.")
     except Exception as e:
@@ -214,16 +217,18 @@ def test_dqn():
     model_name = "DQN"
     model = DQN.load(f"rl_models/{model_name}/best_model")
     model.policy.eval()  # Set policy to evaluation mode
-        
+
     logging.debug(f"Starting {model_name} test")
     env = TrafficEnv(port=base_eval_sumo_port, 
-                     model=model_name, 
-                     model_idx=num_envs_per_model, 
+                     model_name=model_name, 
+                     model_idx=num_envs_per_model - 1, 
                      op_mode="test", 
-                     base_gen_car_distrib=["bimodal", 2.5])
-    
+                     base_gen_car_distrib=["bimodal", 3])
+
     tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
     model.set_logger(tf_logger)
+
+    logging.info("Loaded best reward weights for testing.")
 
     obs, _ = env.reset()
     done = False
@@ -242,83 +247,63 @@ def test_dqn():
         
         rewards.append(reward)
 
-    env.logger.save_to_csv(f"rl_test_{model_name}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
     env.close()
 
     tf_logger.dump(step=0)  # Ensure logs are written
 
 """ Classes """
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model, model_idx, op_mode, base_gen_car_distrib):
+    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, num_of_episodes = 0):
         super(TrafficEnv, self).__init__()
+        self.default_speed_limit = 130 # [km/h]
         self.port = port
-        self.model = model
+        self.model_name = model_name
         self.model_idx = model_idx
-        # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
-        self.speed_limits = np.arange(50, 135, 5) # end = max + step
-        self.action_space = gym.spaces.Discrete(len(self.speed_limits))
-        self.obs = np.array([0]*5, dtype=np.float64)
-        self.observation_space = gym.spaces.Box(
-            low=np.array([0, 0, 0, 0, 0]), 
-            high=np.array([130/3.6, 100, 5000, 5000, 130/3.6]),
-            dtype="float64", 
-            shape=(5,)
-        )
-        self.speed_limit = 130 # this is changed actively
-        self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
+        self.aggregation_time = 60 # [s] Data aggregation duration
         self.occupancy_sum = 0
         self.occupancy = 0
         self.sumo_process = None
         self.sumo_max_retries = 3
-        self.reward = 0
         self.operation_mode = op_mode
-        self.test_with_electric = test_with_electric
-        self.test_with_disobedient = test_with_disobedient
         self.is_first_step_delay_on = False
-        self.n_before0 = 0
-        self.n_before1 = 0
-        self.n_after = 0
         self.collisions = 0
         self.gen_car_distrib = base_gen_car_distrib
-        self.logger = TrafficDataLogger()
+        self.logger = TrafficDataLogger(self.default_speed_limit)
+        self.num_of_episodes = num_of_episodes
+        self.state_before = 130
+        self.preloaded_weights = [0.5, 0.3, 0.2]
+
+        self.action_space = gym.spaces.Discrete(3) # [-5 km/h, +0 km/h, +5 km/h]
+        self.current_speed_limit = self.default_speed_limit
+        
+        # This is a blueprint, defining what observations can look like
+        self.observation_space = spaces.Box(
+            low=np.array([0,  0,  0,  0, -np.inf, 0, 50]),
+            high=np.array([
+                self.default_speed_limit/3.6,  # avg_speed_before
+                np.inf,                       # flow_upstream
+                np.inf,                       # flow_downstream
+                np.inf,                       # queue_length_upstream
+                np.inf,                       # speed_trend_val
+                1.0,                          # occupancy in fraction form
+                130                           # last_speed_limit
+            ]),
+            shape=(OBSERVATION_SPACE_SIZE,),
+            dtype=np.float64
+        )
+
+        # Initialize historical data structures
+        self.speed_history = collections.deque(maxlen=15)  # For speed trend
+        self.queue_length_upstream = 0
+        self.flow_upstream = 0
+        self.flow_downstream = 0
+        self.time_step = 0  # To track simulation time steps
+        
         if self.operation_mode == "eval":
-            self.sim_length = int(interval_length * num_of_intervals * num_of_episodes)
+            self.sim_length = int(interval_length * num_of_intervals * self.num_of_episodes)
         elif self.operation_mode == "test":
             self.sim_length = int(24 * 60)
-            
-    def quad_occ_reward(self):
-        ''' This function rewards occupancy rates around 12% the most, with decreasing rewards for both lower and higher occupancies.
-            - low occupancy rates (0-12%) => increases from 0.5 at x=0 to 1 at x=12
-            - medium to high occupancy rates (12-80%) => decreases from 1 at x=12 to 0 at x=80
-            - very low (≤0) or very high (≥80) occupancy rates => reward is 0
-            The function is continuous at x=12, where both pieces evaluate to 1. However, it is not differentiable at x=12 due to the change in slope.
-            Ref.: Kidando, E., Moses, R., Ozguven, E. E., & Sando, T. (2017). Evaluating traffic congestion using the traffic occupancy and speed distribution relationship: An application of Bayesian Dirichlet process mixtures of generalized linear model. Journal of Transportation Technologies, 7(03), 318.
-        '''
-        if 0 < self.occupancy <= 12:
-            return ((0.5 * self.occupancy) + 6) / 12
-        elif 12 < self.occupancy < 80:
-            return ((self.occupancy-80)**2/68**2)
-        else:
-            return 0
-
-    def get_collisions_on_segment(self, segment_id):
-        # Get the list of vehicles involved in collisions during this simulation step
-        colliding_vehicles = traci.simulation.getCollidingVehiclesIDList()
-        
-        # Initialize a counter for collisions on the specific segment
-        collision_count = 0
-        
-        # Iterate over each colliding vehicle
-        for vehicle_id in colliding_vehicles:
-            # Get the current road (edge) ID where the vehicle is located
-            road_id = traci.vehicle.getRoadID(vehicle_id)
-            
-            # Check if the road ID matches the target segment (e.g., "seg_0_before")
-            if road_id == segment_id:
-                collision_count += 1
-        
-        return collision_count
-
+    
     def start_sumo(self):
         # If SUMO is running, then perform a restart
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
@@ -331,16 +316,16 @@ class TrafficEnv(gym.Env):
             try:
                 port = self.port
                 if self.gen_car_distrib[0] == 'uniform':
-                    flow_generation_fix_num_veh(self.model, self.model_idx, 
+                    flow_generation_fix_num_veh(self.model_name, self.model_idx, 
                                                 self.gen_car_distrib[1], 
                                                 int(interval_length // 60), 
-                                                num_of_episodes, 
+                                                self.num_of_episodes, 
                                                 num_of_intervals, 
                                                 self.operation_mode)
                 elif self.gen_car_distrib[0] == 'bimodal':
-                    flow_generation(self.model, self.model_idx, bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
+                    flow_generation(self.model_name, self.model_idx, bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
                 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
-                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model}_{self.model_idx}.sumocfg", '--start'] 
+                self.sumo_process = subprocess.Popen([sumoBinary, "-c", f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg", '--start'] 
                                                      + ["--default.emergencydecel=7"]
                                                      + ['--random-depart-offset=3600']
                                                      + ["--remote-port", str(port)] 
@@ -364,6 +349,7 @@ class TrafficEnv(gym.Env):
 
     def close_sumo(self, reason):
         logging.debug(f"Closing SUMO: {reason}")
+        self.logger.save_to_csv(f"rl_test_{self.model_name}_{self.model_idx}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
         if hasattr(self, 'sumo_process') and self.sumo_process is not None:
             for attempt in range(self.sumo_max_retries):
                 try:
@@ -376,23 +362,43 @@ class TrafficEnv(gym.Env):
                         sleep(2)  # Wait before retrying
                         logging.debug("Killing SUMO process due to non-responsive close") 
                 finally:
-                    self.sumo_process = None               
+                    self.sumo_process = None
     
+    def feedback_adjustment(self, speed_limit):
+        # If free-flow, do nothing
+        if self.occupancy < 12:
+            return speed_limit
+        
+        speed_variance = np.var(list(self.speed_history))
+        # Adjust speed if traffic is unstable or queue is large
+        if (self.flow_downstream < self.flow_upstream * 0.8) or (self.queue_length_upstream > 100) or (speed_variance > 5):
+            speed_limit = max(speed_limit - 10, 50)
+        elif (self.flow_downstream > self.flow_upstream * 1.2) and (self.queue_length_upstream < 50) and (speed_variance < 2):
+            speed_limit = min(speed_limit + 10, self.default_speed_limit)
+        
+        return speed_limit
+
     def step(self, action):
         is_sumo_running = psutil.pid_exists(self.sumo_process.pid) if self.sumo_process else False
         if not is_sumo_running:
             self.start_sumo()
         else:
             for segment in [seg_1_before]:
-                [traci.lane.setMaxSpeed(segId, self.speed_limit / 3.6) for segId in segment] # km/h to m/s
+                [traci.lane.setMaxSpeed(segId, self.default_speed_limit / 3.6) for segId in segment] # km/h to m/s
 
-        self.speed_limit = self.speed_limits[action]
+        speed_changes = [-5, 0, +5] # Gradual Speed Adjustment instead of Absolute Speed Mapping
+        self.current_speed_limit += speed_changes[action]
+        invalid_action_penaly = -1 if (self.current_speed_limit == 50 and action == 0) or (self.current_speed_limit == 130 and action == 2) else 0
+        self.current_speed_limit = max(50, min(130, self.current_speed_limit)) # state clamping
+        state = self.current_speed_limit
 
-        veh_time_sum = 0
-        num_vehicles_in_merging_zone_temp = 0
-        mean_speeds_seg_1_before_mps_temp = 0
-        mean_speeds_seg_0_after_mps_temp = 0
-        emissions_seg_1_before_temp = 0
+        flow_upstream_temp = 0
+        flow_downstream_temp = 0
+        queue_length_temp = 0
+        mean_speeds_seg_1_before = 0
+        mean_speeds_seg_0_after = 0
+        self.occupancy_sum = 0
+        mean_speed_merge_seg = 0
 
         while self.is_first_step_delay_on:
             try:
@@ -405,125 +411,137 @@ class TrafficEnv(gym.Env):
                 self.close_sumo("lost comm with SUMO")
                 return self.reset()
 
-        n_before0_avg = []
-        n_before1_avg = []
-        n_after_avg = []
-        for i in range(self.aggregation_time):
-            if not self.operation_mode == "train" and not self.test_with_electric:
-                # Identify vehicles of type "electric_passenger" and change their emission class to match the corresponding petrol vehicle
-                vehicle_ids = traci.vehicle.getIDList()
-                for vehicle_id in vehicle_ids:
-                    veh_id = traci.vehicle.getTypeID(vehicle_id)
-                    if veh_id == "electric_passenger":
-                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-4")
-                    if veh_id == "electric_passenger/hatchback" or veh_id == "electric_passenger/van":
-                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-5")
-                    if veh_id == "electric_bus" or veh_id == "electric_truck" or veh_id == "electric_truck/trailer":
-                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/RT_le7.5t_Euro-VI_A-C")
-                    if veh_id == "electric_motorcycle":
-                        traci.vehicle.setEmissionClass(vehicle_id, "HBEFA4/PC_petrol_Euro-6ab")
-            if not self.operation_mode == "train" and not self.test_with_disobedient:
-                # Identify vehicles of type "disobedient"
-                vehicle_ids = traci.vehicle.getIDList()
-                for vehicle_id in vehicle_ids:
-                    veh_id = traci.vehicle.getTypeID(vehicle_id)
-                    if "disobedient" in veh_id:
-                        traci.vehicle.setImperfection(vehicle_id, 0.1)
-                        traci.vehicle.setImpatience(vehicle_id, 0.1)
-
+        # Simulation steps and data collection
+        for _ in range(self.aggregation_time):
             try:
                 traci.simulationStep()
             except (FatalTraCIError, TraCIException):
                 logging.debug("Lost connection to SUMO from steps")
                 self.close_sumo("lost comm with SUMO")
-                return self.reset()  # End episode on connection loss
-
-            veh_time_sum += sum([traci.inductionloop.getLastStepVehicleNumber(loop) for loop in loops_after])
-
-            mean_speeds_seg_1_before_mps_temp += traci.edge.getLastStepMeanSpeed("seg_1_before")
-            mean_speeds_seg_0_after_mps_temp += traci.edge.getLastStepMeanSpeed("seg_0_after")
-            emissions_seg_1_before_temp += traci.edge.getCO2Emission("seg_1_before")
-            num_vehicles_in_merging_zone_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
-
+                return self.reset()
+    
+            # Collect flow measurements
+            flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_1_before")
+            flow_downstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_after")
+            mean_speed_merge_seg += traci.edge.getLastStepMeanSpeed("seg_0_after")
+    
+            # Collect queue length upstream based on halting vehicles
+            queue_length_temp += sum([
+                traci.lane.getLastStepHaltingNumber(lane) * 7.5
+                for lane in seg_1_before
+            ])
+    
+            mean_speeds_seg_1_before += traci.edge.getLastStepMeanSpeed("seg_1_before")
+            mean_speeds_seg_0_after += traci.edge.getLastStepMeanSpeed("seg_0_after")
+    
+            # Calculate occupancy
             occ_max = 0
             for loops in loops_before:
                 occ_loop = sum([traci.inductionloop.getLastStepOccupancy(loop) for loop in loops]) / len(loops)
                 if occ_loop > occ_max:
                     occ_max = occ_loop
-            
             self.occupancy_sum += occ_max
 
-            # self.collisions += len(traci.simulation.getCollidingVehiclesIDList())
-            self.collisions += self.get_collisions_on_segment("seg_0_before")
-            
-            n_before0_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_before"))
-            n_before1_avg.append(traci.edge.getLastStepVehicleNumber("seg_1_before"))
-            n_after_avg.append(traci.edge.getLastStepVehicleNumber("seg_0_after") + traci.edge.getLastStepVehicleNumber("seg_1_after"))
-        
-        # Calculate average speed and emissions over the aggregation period
-        avg_speed_before_1_now = np.mean(mean_speeds_seg_1_before_mps_temp) / self.aggregation_time
-        avg_speed_after_0_now = np.mean(mean_speeds_seg_0_after_mps_temp) / self.aggregation_time
-
-        self.n_before0 = np.average(n_before0_avg) if len(n_before0_avg) > 0 else 0
-        self.n_before1 = np.average(n_before1_avg) if len(n_before1_avg) > 0 else 0
-        self.n_after = np.average(n_after_avg) if len(n_after_avg) > 0 else 0
-        
         self.occupancy = self.occupancy_sum / self.aggregation_time
+        avg_speed_before = mean_speeds_seg_1_before / self.aggregation_time
+        
+        self.flow_upstream = (flow_upstream_temp * 3600) / self.aggregation_time
+        self.flow_downstream = (flow_downstream_temp * 3600) / self.aggregation_time
+        self.queue_length_upstream = queue_length_temp / self.aggregation_time
+        avg_speed_merging = mean_speed_merge_seg / self.aggregation_time
 
-        flow_upstream = 0 # FIXME: Compute it!
-        flow_downstream = 0 # FIXME: Compute it!
+        self.speed_history.append(avg_speed_before)
+        speed_history_queue_length = 10
+        if len(self.speed_history) < speed_history_queue_length:
+            avg_speed_trend = [avg_speed_before] * speed_history_queue_length
+        else:
+            # Convert to list if self.speed_history is not already a list
+            avg_speed_trend = list(self.speed_history)[-speed_history_queue_length:]
+        speed_trend_val = avg_speed_merging - np.mean(avg_speed_trend)
 
-        self.obs = np.array([
-            avg_speed_before_1_now,      # Current speed
-            self.occupancy,              # Current occupancy
-            flow_upstream,               # Upstream flow
-            flow_downstream,             # Downstream flow
-            self.speed_limit/3.6         # Current speed limit
-        ])
+        # Time-step update (e.g., for cyclical encoding) used only in the agent testing
+        self.time_step = (self.time_step + 1) % (24 * 60) if self.operation_mode == "test" else 0
 
+        # Apply feedback adjustment based on downstream impact and queue lengths
+        state = self.feedback_adjustment(state)
+
+        # Speed Smoothing
+        state = math.ceil(int(0.749 * state + 0.251 * self.logger.get_last_logged_speed()) / 5) * 5
+
+        # Apply the adjusted speed limit to all lanes
+        [traci.lane.setMaxSpeed(l, state/3.6) for l in seg_1_before]
+        
+        # This is an instance of self.observation_space, conforming to its blueprint
+        observation = np.array([
+            avg_speed_before,
+            self.flow_upstream,
+            self.flow_downstream,
+            self.queue_length_upstream,
+            speed_trend_val,
+            self.occupancy / MAX_OCCUPANCY,
+            float(self.state_before)
+        ], dtype=np.float64)
+        
+        # Compute reward dynamically using RewardWeightNet
+        R_occ = min(self.occupancy / MAX_OCCUPANCY, 1.0)
+        R_flow = min(self.flow_downstream / MAX_FLOW, 1.0)
+        # Speed smoothing: penalize large jumps from last action or from default_speed
+        #    Example: difference from last_speed_limit => self.current_speed_limit
+        #    Scale it to [0..1] by dividing by MAX_SPEED_DIFF, then turn into negative reward
+        R_smooth = - (abs(self.current_speed_limit - self.state_before) / MAX_SPEED_DIFF)
+        
+        if self.operation_mode == "train":
+            # obs_tensor = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
+            # weights = self.reward_weight_net(obs_tensor).detach().numpy().flatten()
+            weights = self.preloaded_weights # FIXME: Get a stable framework to generate the best weights
+            w_occ, w_flow, w_smooth = weights[0], weights[1], weights[2]
+            reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
+        else:
+            # Load stored weights (preloaded in test_dqn function)
+            weights = self.preloaded_weights  # Use preloaded weights
+            w_occ, w_flow, w_smooth = weights[0], weights[1], weights[2]
+            reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
+
+        # Log metrics
         self.logger.log_step(
-            vss=self.speed_limit,
+            vss=state,
             occupancy=self.occupancy,
-            speed_before=avg_speed_before_1_now,
-            speed_after=avg_speed_after_0_now,
-            reward=self.reward,
-            flow_downstream=0,
-            flow_upstream=0,
-            avg_speed_trend=0
+            speed_before=avg_speed_before,
+            speed_after=mean_speeds_seg_0_after / self.aggregation_time,
+            reward=reward,
+            flow_upstream=self.flow_upstream,
+            flow_downstream=self.flow_downstream,
+            avg_speed_trend=avg_speed_trend,
+            reward_weights = weights,
+            rewards = [R_occ, R_flow, R_smooth],
+            action=action
         )
 
-        self.reward = self.quad_occ_reward()
-
+        self.state_before = state
+    
+        # Determine if the episode is done
         if self.operation_mode == "train":
             done = (traci.simulation.getMinExpectedNumber() <= 0)
         else:
             self.sim_length -= 1
-            if self.sim_length <= 0: 
-                done = True
-                logging.debug("Sim length elapsed.")
-            else:
-                done = False
-
-        return self.obs, self.reward, done, False, {}
+            done = self.sim_length <= 0
+    
+        return observation, reward, done, False, {}
 
     def render(self):
         # Implement viz
         pass
 
     def reset(self, seed=None):
-        self.isUnstableFlowConditions = False
-        self.total_waiting_time = 0
+        super().reset(seed=seed)
         self.occupancy_sum = 0
         self.occupancy = 0
         self.is_first_step_delay_on = True
-        self.n_before0 = 0
-        self.n_before1 = 0
-        self.n_after = 0
         self.collisions = 0
-        self.speed_limit = 130
-        self.obs = np.array([0]*5, dtype=np.float64)
-        
-        return self.obs, {}
+
+        initial_observation = np.array([0]*OBSERVATION_SPACE_SIZE, dtype=np.float64)
+
+        return initial_observation, {}
     
     def close(self):
         self.close_sumo("close() method called")
@@ -536,16 +554,20 @@ class TrafficEnv(gym.Env):
             logging.warning("Attempted to delete an uninitialized TrafficEnv instance.")
 
 class TrafficDataLogger:
-    def __init__(self, output_dir="logs/rl_test"):
-        # Initialize the traffic data logger.
+    def __init__(self, default_speed_limit, output_dir="logs/rl_test"):
+        self.default_speed_limit = default_speed_limit
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.traffic_data = []
-        self.header = ["timestamp", "VSS", "occupancy", "avg_speed_before", "avg_speed_after", "reward", 
-                       "flow_upstream", "flow_downstream", "avg_speed_trend"]
-        
-    def log_step(self, vss, occupancy, speed_before, speed_after, reward, flow_upstream, flow_downstream, avg_speed_trend):
-        # Log data from a single simulation step.
+        self.header = [
+            "timestamp", "VSS", "occupancy", "avg_speed_before", "avg_speed_after",
+            "reward", "flow_upstream", "flow_downstream", "avg_speed_trend", 
+            "reward_weights", "rewards", "action"
+        ]
+
+    def log_step(self, vss, occupancy, speed_before, speed_after, reward,
+                 flow_upstream, flow_downstream, avg_speed_trend, reward_weights,
+                 rewards, action):
         self.traffic_data.append({
             "timestamp": time.time(),
             "VSS": vss,
@@ -555,16 +577,23 @@ class TrafficDataLogger:
             "reward": reward,
             "flow_upstream": flow_upstream,
             "flow_downstream": flow_downstream,
-            "avg_speed_trend": avg_speed_trend
+            "avg_speed_trend": avg_speed_trend,
+            "reward_weights": reward_weights,
+            "rewards": rewards,
+            "action": action,
         })
-        
+
     def save_to_csv(self, filename="traffic_data.csv"):
-        # Save logged data to CSV file.
         filepath = self.output_dir / filename
         with open(filepath, mode="w", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=self.header)
             writer.writeheader()
             writer.writerows(self.traffic_data)
+
+    def get_last_logged_speed(self):
+        if len(self.traffic_data) > 0:
+            return self.traffic_data[-1]["VSS"]
+        return self.default_speed_limit  # default fallback
 
 class TensorboardCallback(BaseCallback):
     def __init__(self, env, model, verbose=0):
@@ -574,10 +603,12 @@ class TensorboardCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         # Access metrics from the environment
-        reward = self.locals['rewards']  # Access rewards from the environment
-        emissions = self.env.emissions_over_time[-1]  # Log latest emissions data
-        mean_speed = self.env.mean_speed_over_time[-1]  # Log latest mean speed data
-        flow = self.env.flows[-1]  # Log latest flow data
+        reward = self.locals.get('rewards', 0)  # Safeguard against missing keys
+        # Assuming emissions_over_time, mean_speed_over_time, and flows are maintained in TrafficEnv
+        # You might need to adjust based on actual implementation
+        emissions = getattr(self.env, 'emissions_over_time', [0])[-1]
+        mean_speed = getattr(self.env, 'mean_speed_over_time', [0])[-1]
+        flow = getattr(self.env, 'flows', [0])[-1]
         
         # Record these values in TensorBoard using SB3's built-in logger
         self.logger.record('test/reward', reward)
@@ -596,11 +627,36 @@ class DoubleDQN(DQN):
             # Select actions using online network
             next_q_values = self.q_net(replay_data.next_observations)
             next_actions = next_q_values.argmax(dim=1).reshape(-1, 1)
+            
             # Evaluate actions using target network
             next_q_values_target = self.q_net_target(replay_data.next_observations)
             target_q_values = next_q_values_target.gather(1, next_actions)
         return target_q_values
 
+"""
+class RewardWeightNet(nn.Module):
+    def __init__(self, input_dim):
+        super(RewardWeightNet, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 64)  # First hidden layer
+        self.fc2 = nn.Linear(64, 32)        # Second hidden layer
+        self.fc3 = nn.Linear(32, 3)         # Output layer. 3 outputs: w_occ, w_flow, w_smooth
+
+    def forward(self, state_features):
+        x = F.relu(self.fc1(state_features))  # Apply ReLU activation
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)                      # Raw output (logits)
+        weights = F.softmax(x, dim=-1)       # Normalize to sum to 1 (softmax)
+        return weights
+
+    def save_weights(self, path):
+        logging.debug("Saving the reward weights")
+        torch.save(self.state_dict(), path)
+
+    def load_weights(self, path):
+        logging.debug("Loading the reward weights")
+        self.load_state_dict(torch.load(path))
+"""
+        
 if __name__ == '__main__':
     # Suppress matplotlib debug output
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -615,6 +671,6 @@ if __name__ == '__main__':
 
     create_sumocfg("DQN")
     
-    train_dqn()
+    train_dqn(num_of_episodes=7)
 
-    # test_dqn()
+    test_dqn()
