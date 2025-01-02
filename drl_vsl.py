@@ -64,8 +64,8 @@ detector_length = 50 # meters
 base_train_sumo_port = 8000
 base_eval_sumo_port = 9000
 """ Curriculum learning for the DQN agent, which means gradually increasing the difficulty of the training scenarios. """
-interval_length_h = 1 # hours
-num_of_intervals = 1
+interval_length_h = 2 # hours
+num_of_intervals = 10
 num_test_envs_per_model = 1
 num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
@@ -150,10 +150,10 @@ def train_dqn(num_of_episodes):
     ])
     env_eval = SubprocVecEnv([eval_env_constructor(model_name)])
 
-    # policy_kwargs = dict(
-    #     net_arch=[256, 256, 128],  # Deeper network
-    #     activation_fn=nn.ReLU
-    # )
+    policy_kwargs = dict(
+        net_arch=[256, 256, 128],  # Deeper network
+        activation_fn=nn.ReLU
+    )
     
     model = DoubleDQN(
         "MlpPolicy",
@@ -165,7 +165,7 @@ def train_dqn(num_of_episodes):
         target_update_interval=1000,
         exploration_fraction=0.1,
         exploration_final_eps=0.01,
-        # policy_kwargs=policy_kwargs,
+        policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda'
@@ -332,8 +332,8 @@ class TrafficEnv(gym.Env):
                                                      + ["--default.emergencydecel=7"]
                                                      + ['--random-depart-offset=3600']
                                                      + ["--remote-port", str(port)] 
-                                                     + ["--step-length=0.1"]
-                                                     + ["--default.action-step-length=0.1"]
+                                                     + ["--step-length=1"]
+                                                     + ["--default.action-step-length=1"]
                                                      + ["--quit-on-end"]
                                                        ,
                                     stdout=subprocess.PIPE, 
@@ -427,7 +427,7 @@ class TrafficEnv(gym.Env):
                 return self.reset()
     
             # Collect flow measurements
-            flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_1_before")
+            flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_1_before") + traci.edge.getLastStepVehicleNumber("seg_0_before")
             flow_downstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_after")
             mean_speed_merge_seg += traci.edge.getLastStepMeanSpeed("seg_0_after")
     
@@ -437,7 +437,7 @@ class TrafficEnv(gym.Env):
                 for lane in seg_1_before
             ])
     
-            mean_speeds_seg_1_before += traci.edge.getLastStepMeanSpeed("seg_1_before")
+            mean_speeds_seg_1_before += (traci.edge.getLastStepMeanSpeed("seg_0_before") + traci.edge.getLastStepMeanSpeed("seg_1_before")) / 2
             mean_speeds_seg_0_after += traci.edge.getLastStepMeanSpeed("seg_0_after")
     
             # Calculate occupancy
@@ -514,12 +514,11 @@ class TrafficEnv(gym.Env):
         self.logger.log_step(
             vss=state,
             occupancy=self.occupancy,
-            speed_before=avg_speed_before,
-            speed_after=mean_speeds_seg_0_after / self.aggregation_time,
+            speed_before=avg_speed_before * 3.6,
+            speed_after=(mean_speeds_seg_0_after / self.aggregation_time) * 3.6,
             reward=reward,
             flow_upstream=self.flow_upstream,
             flow_downstream=self.flow_downstream,
-            avg_speed_trend=avg_speed_trend,
             reward_weights = weights,
             rewards = [R_occ, R_flow, R_smooth],
             action=action,
@@ -570,12 +569,12 @@ class TrafficDataLogger:
         self.traffic_data = []
         self.header = [
             "timestamp", "VSS", "occupancy", "avg_speed_before", "avg_speed_after",
-            "reward", "flow_upstream", "flow_downstream", "avg_speed_trend", 
+            "reward", "flow_upstream", "flow_downstream", 
             "reward_weights", "rewards", "action", "departed_vehicles"
         ]
 
     def log_step(self, vss, occupancy, speed_before, speed_after, reward,
-                 flow_upstream, flow_downstream, avg_speed_trend, reward_weights,
+                 flow_upstream, flow_downstream, reward_weights,
                  rewards, action, departed_vehicles):
         self.traffic_data.append({
             "timestamp": time.time(),
@@ -586,7 +585,6 @@ class TrafficDataLogger:
             "reward": reward,
             "flow_upstream": flow_upstream,
             "flow_downstream": flow_downstream,
-            "avg_speed_trend": avg_speed_trend,
             "reward_weights": reward_weights,
             "rewards": rewards,
             "action": action,

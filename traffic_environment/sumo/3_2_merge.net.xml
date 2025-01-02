@@ -127,7 +127,7 @@
         <lane id="seg_9_before_2" index="2" speed="33.33" length="500.00" shape="-1451.66,64.80 -1306.79,65.36"/>
     </edge>
 
-    <junction id="J0" type="zipper" x="-213.66" y="71.95" incLanes="seg_1_before_0 seg_1_before_1 seg_1_before_2" intLanes=":J0_0_0 :J0_0_1 :J0_0_2" shape="-213.51,71.95 -213.39,62.35 -213.68,62.35 -213.81,71.95">
+    <junction id="J0" type="priority" x="-213.66" y="71.95" incLanes="seg_1_before_0 seg_1_before_1 seg_1_before_2" intLanes=":J0_0_0 :J0_0_1 :J0_0_2" shape="-213.51,71.95 -213.39,62.35 -213.68,62.35 -213.81,71.95">
         <request index="0" response="000" foes="000" cont="0"/>
         <request index="1" response="000" foes="000" cont="0"/>
         <request index="2" response="000" foes="000" cont="0"/>
@@ -183,7 +183,8 @@
     </junction>
     <junction id="J23" type="dead_end" x="-1545.99" y="65.66" incLanes="" intLanes="" shape="-1545.99,65.66 -1545.91,56.06"/>
     <junction id="J24" type="dead_end" x="788.40" y="74.41" incLanes="seg_1_after_0 seg_1_after_1" intLanes="" shape="788.42,68.01 788.40,74.41"/>
-    <junction id="J25" type="priority" x="166.05" y="76.56" incLanes="seg_0_before_0 seg_0_before_1 seg_0_before_2" intLanes=":J25_0_0 :J25_0_1" shape="170.08,76.54 170.06,70.14 167.06,69.33 166.10,68.55 165.15,67.78 163.92,67.17 162.15,66.91 162.03,76.51">
+    
+    <junction id="J25" type="zipper" x="166.05" y="76.56" incLanes="seg_0_before_0 seg_0_before_1 seg_0_before_2" intLanes=":J25_0_0 :J25_0_1" shape="170.08,76.54 170.06,70.14 167.06,69.33 166.10,68.55 165.15,67.78 163.92,67.17 162.15,66.91 162.03,76.51">
         <request index="0" response="00" foes="00" cont="0"/>
         <request index="1" response="00" foes="00" cont="0"/>
     </junction>
