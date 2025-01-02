@@ -643,13 +643,9 @@ def run_parallel_tests():
 
     # Once all processes are complete, plot the metrics
     logging.debug("Plotting metrics")
-    plot_metrics(get_electric_vehicles(), get_disobedient_vehicles())
+    plot_metrics(test_with_electric = True, test_with_disobedient = True)
 
 if __name__ == '__main__':
-    # override the default values defined in config.py
-    set_disobedient_vehicles(True)
-    set_electric_vehicles(True)
-
     # run_parallel_tests()
     
     test_dqn()
