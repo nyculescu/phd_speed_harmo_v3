@@ -1,6 +1,7 @@
 *.pyc
 *.csv
 .py310_tf_env/
+.py37_tf1_env/
 __pycache__/
 logs/
 metrics/
