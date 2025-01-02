@@ -58,6 +58,7 @@ detectors_after = ["detector_seg_0_after_1", "detector_seg_0_after_0"]
 detector_length = 50 # meters
 base_train_sumo_port = 8000
 base_eval_sumo_port = 9000
+""" Curriculum learning for the DQN agent, which means gradually increasing the difficulty of the training scenarios. """
 interval_length_h = 1 # hours
 num_of_intervals = 10
 num_of_episodes = 10
@@ -144,12 +145,21 @@ def train_dqn():
     ])
     env_eval = SubprocVecEnv([eval_env_constructor()])
 
+    policy_kwargs = dict(
+        net_arch=[256, 256, 128],  # Deeper network
+        activation_fn=torch.nn.ReLU
+    )
+    
     model = DQN(
         "MlpPolicy",
         train_env,
-        learning_rate=1e-3,
-        buffer_size=50000,
-        batch_size=64,
+        learning_rate=1e-4,
+        buffer_size=100000,
+        batch_size=128,
+        learning_starts=50000,
+        exploration_fraction=0.3,
+        exploration_final_eps=0.02,
+        policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
         device='cuda'
@@ -247,8 +257,13 @@ class TrafficEnv(gym.Env):
         # Actions will be one of the following values [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130]
         self.speed_limits = np.arange(50, 135, 5) # end = max + step
         self.action_space = gym.spaces.Discrete(len(self.speed_limits))
-        self.obs = np.array([0], dtype=np.float64)
-        self.observation_space = gym.spaces.Box(low=np.array([0]), high=np.array([130/3.6]), dtype="float64", shape=(1,))
+        self.obs = np.array([0]*5, dtype=np.float64)
+        self.observation_space = gym.spaces.Box(
+            low=np.array([0, 0, 0, 0, 0]), 
+            high=np.array([130/3.6, 100, 5000, 5000, 130/3.6]),
+            dtype="float64", 
+            shape=(5,)
+        )
         self.speed_limit = 130 # this is changed actively
         self.aggregation_time = 60 # [s] duration over which data is aggregated or averaged in the simulation
         self.occupancy_sum = 0
@@ -455,7 +470,16 @@ class TrafficEnv(gym.Env):
         
         self.occupancy = self.occupancy_sum / self.aggregation_time
 
-        self.obs = np.array([avg_speed_before_1_now])
+        flow_upstream = 0 # FIXME: Compute it!
+        flow_downstream = 0 # FIXME: Compute it!
+
+        self.obs = np.array([
+            avg_speed_before_1_now,      # Current speed
+            self.occupancy,              # Current occupancy
+            flow_upstream,               # Upstream flow
+            flow_downstream,             # Downstream flow
+            self.speed_limit/3.6         # Current speed limit
+        ])
 
         self.logger.log_step(
             vss=self.speed_limit,
@@ -497,7 +521,7 @@ class TrafficEnv(gym.Env):
         self.n_after = 0
         self.collisions = 0
         self.speed_limit = 130
-        self.obs = np.array([0], dtype=np.float64)
+        self.obs = np.array([0]*5, dtype=np.float64)
         
         return self.obs, {}
     
