@@ -88,7 +88,9 @@ def create_sumocfg(model):
             <gui-settings-file value="colored.view.xml"/>
         </input>
         <processing>
-            <lateral-resolution value="0.8"/>
+            <!-- Vehicles can occupy fractional positions within a lane, enabling smoother lateral movements.
+                 This is important for zipper merging, as vehicles need to adjust their positions dynamically -->
+            <lateral-resolution value="0.2"/>
         </processing>
     </configuration>
     """
@@ -332,10 +334,11 @@ class TrafficEnv(gym.Env):
                                                      + ["--default.emergencydecel=7"]
                                                      + ['--random-depart-offset=3600']
                                                      + ["--remote-port", str(port)] 
-                                                     + ["--step-length=1"]
-                                                     + ["--default.action-step-length=1"]
-                                                     + ["--quit-on-end"]
-                                                       ,
+                                                     # simulation timestep (--step-length) and action step length (--default.action-step-length) 
+                                                     # are small enough for smooth lateral dynamics
+                                                     + ["--step-length=0.1"]
+                                                     + ["--default.action-step-length=0.2"]
+                                                     + ["--quit-on-end"],
                                     stdout=subprocess.PIPE, 
                                     stderr=subprocess.PIPE)
                 logging.info(f"Attempting to connect to SUMO on port {port}")
@@ -468,7 +471,7 @@ class TrafficEnv(gym.Env):
         speed_trend_val = avg_speed_merging - np.mean(avg_speed_trend)
 
         # Time-step update (e.g., for cyclical encoding) used only in the agent testing
-        self.time_step = (self.time_step + 1) % (24 * 60) if self.operation_mode == "test" else 0
+        self.time_step = (self.time_step + 1) % (24 * 60)
 
         # Apply feedback adjustment based on downstream impact and queue lengths
         state = self.feedback_adjustment(state)
@@ -498,16 +501,16 @@ class TrafficEnv(gym.Env):
         #    Scale it to [0..1] by dividing by MAX_SPEED_DIFF, then turn into negative reward
         R_smooth = - (abs(self.current_speed_limit - self.state_before) / MAX_SPEED_DIFF)
         
+        # FIXME: Get a stable framework to generate the best weights when training
         if self.operation_mode == "train":
             # obs_tensor = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
             # weights = self.reward_weight_net(obs_tensor).detach().numpy().flatten()
-            weights = self.preloaded_weights # FIXME: Get a stable framework to generate the best weights
+            weights = self.preloaded_weights
             w_occ, w_flow, w_smooth = weights[0], weights[1], weights[2]
             reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
         else:
-            # Load stored weights (preloaded in test_dqn function)
-            weights = self.preloaded_weights  # Use preloaded weights
-            w_occ, w_flow, w_smooth = weights[0], weights[1], weights[2]
+            # Use hardcoded weights
+            w_occ, w_flow, w_smooth = self.preloaded_weights[0], self.preloaded_weights[1], self.preloaded_weights[2]
             reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
 
         # Log metrics
