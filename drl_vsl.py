@@ -24,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 import csv
-import collections
+from collections import deque
 
 # Configure logging
 logging.basicConfig(
@@ -265,18 +265,24 @@ class TrafficEnv(gym.Env):
         self.model_name = model_name
         self.model_idx = model_idx
         self.aggregation_time = 60 # [s] Data aggregation duration
-        self.occupancy_sum = 0
-        self.occupancy = 0
+        # self.occupancy_sum = 0
+        self.occupancy_downstream = 0
         self.sumo_process = None
         self.sumo_max_retries = 3
         self.operation_mode = op_mode
         self.is_first_step_delay_on = False
-        self.collisions = 0
+        self.collisions = []
+        self.collisions_penalty = 0
         self.gen_car_distrib = base_gen_car_distrib
         self.logger = TrafficDataLogger(self.default_speed_limit)
         self.num_of_episodes = num_of_episodes
         self.state_before = 130
         self.preloaded_weights = [0.5, 0.3, 0.2]
+        self.flow_downstream_history = deque(maxlen=5)       # Store last 5 minutes of flow
+        self.occupancy_downstream_history = deque(maxlen=5)  # Store last 5 minutes of occupancy
+        self.veh_count_downstream_history = deque(maxlen=5)  # Store last 5 minutes of vehicle counts
+        self.flow_smoothed = 0.0
+        self.occupancy_smoothed = 0.0
 
         self.action_space = gym.spaces.Discrete(3) # [-5 km/h, +0 km/h, +5 km/h]
         self.current_speed_limit = self.default_speed_limit
@@ -298,11 +304,12 @@ class TrafficEnv(gym.Env):
         )
 
         # Initialize historical data structures
-        self.speed_history = collections.deque(maxlen=15)  # For speed trend
+        self.speed_history = deque(maxlen=15)  # For speed trend
         self.queue_length_upstream = 0
         self.flow_upstream = 0
         self.flow_downstream = 0
-        self.time_step = 0  # To track simulation time steps
+        self.prev_occupancy = 0
+        self.prev_flow_downstream = 0
         
         if self.operation_mode == "eval":
             self.sim_length = int(interval_length * num_of_intervals * self.num_of_episodes)
@@ -357,7 +364,7 @@ class TrafficEnv(gym.Env):
 
     def close_sumo(self, reason):
         logging.debug(f"Closing SUMO: {reason}")
-        self.logger.save_to_csv(f"rl_test_{self.model_name}_{self.model_idx}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        self.logger.save_to_csv(f"rl_test_{self.model_name}_{self.model_idx}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv")
         if hasattr(self, 'sumo_process') and self.sumo_process is not None:
             for attempt in range(self.sumo_max_retries):
                 try:
@@ -374,7 +381,7 @@ class TrafficEnv(gym.Env):
     
     def feedback_adjustment(self, speed_limit):
         # If free-flow, do nothing
-        if self.occupancy < 12:
+        if self.occupancy_downstream < 12:
             return speed_limit
         
         speed_variance = np.var(list(self.speed_history))
@@ -394,21 +401,6 @@ class TrafficEnv(gym.Env):
             for segment in [seg_1_before]:
                 [traci.lane.setMaxSpeed(segId, self.default_speed_limit / 3.6) for segId in segment] # km/h to m/s
 
-        speed_changes = [-5, 0, +5] # Gradual Speed Adjustment instead of Absolute Speed Mapping
-        self.current_speed_limit += speed_changes[action]
-        invalid_action_penaly = -1 if (self.current_speed_limit == 50 and action == 0) or (self.current_speed_limit == 130 and action == 2) else 0
-        self.current_speed_limit = max(50, min(130, self.current_speed_limit)) # state clamping
-        state = self.current_speed_limit
-
-        flow_upstream_temp = 0
-        flow_downstream_temp = 0
-        queue_length_temp = 0
-        mean_speeds_seg_1_before = 0
-        mean_speeds_seg_0_after = 0
-        self.occupancy_sum = 0
-        mean_speed_merge_seg = 0
-        departed_vehicles = 0
-
         while self.is_first_step_delay_on:
             try:
                 traci.simulationStep()
@@ -420,6 +412,29 @@ class TrafficEnv(gym.Env):
                 self.close_sumo("lost comm with SUMO")
                 return self.reset()
 
+        flow_temp = 0.0
+        occupancy_upstream_temp = 0.0
+        occupancy_downstream_temp = 0.0
+        vehicle_count_temp = 0
+
+        speed_changes = [-5, 0, +5] # Gradual Speed Adjustment instead of Absolute Speed Mapping
+        self.current_speed_limit += speed_changes[action]
+        invalid_action_penalty = -1 if (self.current_speed_limit == 50 and action == 0) or (self.current_speed_limit == 130 and action == 2) else 0
+        self.current_speed_limit = max(50, min(130, self.current_speed_limit)) # state clamping
+        state = self.current_speed_limit
+        # change_speed_no_reason_penalty = 0
+
+        flow_upstream_temp = 0
+        flow_downstream_temp = 0
+        queue_length_temp = 0
+        mean_speeds_downstream = 0
+        mean_speeds_upstream = 0
+        # self.occupancy_sum = 0
+        departed_vehicles = 0
+
+        # Evaluate speed change
+        speed_change = abs(self.current_speed_limit - self.state_before)  # km/h difference
+
         # Simulation steps and data collection
         for _ in range(self.aggregation_time):
             try:
@@ -430,48 +445,101 @@ class TrafficEnv(gym.Env):
                 return self.reset()
     
             # Collect flow measurements
-            flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_1_before") + traci.edge.getLastStepVehicleNumber("seg_0_before")
+            flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
             flow_downstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_after")
-            mean_speed_merge_seg += traci.edge.getLastStepMeanSpeed("seg_0_after")
     
-            # Collect queue length upstream based on halting vehicles
+            # Collect queue length outside the merging area based on halting vehicles (seg_1_before)
             queue_length_temp += sum([
                 traci.lane.getLastStepHaltingNumber(lane) * 7.5
                 for lane in seg_1_before
             ])
     
-            mean_speeds_seg_1_before += (traci.edge.getLastStepMeanSpeed("seg_0_before") + traci.edge.getLastStepMeanSpeed("seg_1_before")) / 2
-            mean_speeds_seg_0_after += traci.edge.getLastStepMeanSpeed("seg_0_after")
+            mean_speeds_downstream += traci.edge.getLastStepMeanSpeed("seg_0_before")
+            mean_speeds_upstream += traci.edge.getLastStepMeanSpeed("seg_0_after")
     
-            # Calculate occupancy
+            # Calculate occupancy [deprecated]
+            """
             occ_max = 0
             for loops in loops_before:
                 occ_loop = sum([traci.inductionloop.getLastStepOccupancy(loop) for loop in loops]) / len(loops)
                 if occ_loop > occ_max:
                     occ_max = occ_loop
             self.occupancy_sum += occ_max
+            """
+
+            # Caclualte the occupancy upstream
+            occupancy_upstream_temp += sum([traci.inductionloop.getLastStepOccupancy(loop_id) 
+                                   for loop_ids in loops_before 
+                                   for loop_id in loop_ids]) / len(loops_before)
+            
+            # Caclualte the occupancy downstream
+            # occupancy_downstream_temp += sum([traci.inductionloop.getLastStepOccupancy(loop_id) 
+                                #    for loop_ids in loops_after 
+                                #    for loop_id in loop_ids]) / len(loops_after)
 
             departed_vehicles += traci.simulation.getDepartedNumber()
 
-        self.occupancy = self.occupancy_sum / self.aggregation_time
-        avg_speed_before = mean_speeds_seg_1_before / self.aggregation_time
-        
-        self.flow_upstream = (flow_upstream_temp * 3600) / self.aggregation_time
-        self.flow_downstream = (flow_downstream_temp * 3600) / self.aggregation_time
-        self.queue_length_upstream = queue_length_temp / self.aggregation_time
-        avg_speed_merging = mean_speed_merge_seg / self.aggregation_time
+            # Compute the collisions
+            current_time = traci.simulation.getTime()
+            collisions_in_step = traci.simulation.getCollidingVehiclesNumber()
+            if collisions_in_step > 0:
+                current_time = traci.simulation.getTime()  # Get simulation time in seconds
+                self.collisions.append(current_time)
+            # Remove expired collisions (older than two hours)
+            expiration_time = current_time - (2 * 3600)  # Two hours in seconds
+            self.collisions = [t for t in self.collisions if t > expiration_time]
+            # Check if at least two collisions occurred within the last two hours
+            if len(self.collisions) > 2:
+                self.collisions_penalty = -5
+            else:
+                self.collisions_penalty = 0
 
-        self.speed_history.append(avg_speed_before)
+        # self.occupancy = self.occupancy_sum / self.aggregation_time
+        avg_speed_downstream = mean_speeds_downstream / self.aggregation_time
+        avg_speed_upstream = mean_speeds_upstream / self.aggregation_time
+        self.flow_upstream = flow_upstream_temp / self.aggregation_time
+        self.flow_downstream = flow_downstream_temp / self.aggregation_time
+        self.queue_length_upstream = queue_length_temp / self.aggregation_time
+        occupancy_upstream = occupancy_upstream_temp / self.aggregation_time
+        occupancy_downstream = occupancy_downstream_temp / self.aggregation_time
+
+        # Store in sliding window
+        self.flow_downstream_history.append(self.flow_downstream)
+        self.occupancy_downstream_history.append(occupancy_downstream)
+        # self.occupancy_upstream_history.append(occupancy_upstream)
+        self.veh_count_downstream_history.append(flow_downstream_temp)
+
+        # Fallback: if total_veh_recent < threshold, clamp or reduce the effect
+        if sum(self.veh_count_downstream_history) < 12:
+            self.flow_downstream = 0.0
+            self.occupancy_downstream  = 0.0
+        else:
+            # Use the smoothed flow/occupancy from the last 5 values
+            self.flow_downstream = np.mean(self.flow_downstream_history)
+            self.occupancy_downstream = np.mean(self.occupancy_downstream_history)
+
+        # FIXME: use deque
+        self.speed_history.append(avg_speed_downstream)
         speed_history_queue_length = 10
         if len(self.speed_history) < speed_history_queue_length:
-            avg_speed_trend = [avg_speed_before] * speed_history_queue_length
+            avg_speed_trend = [avg_speed_downstream] * speed_history_queue_length
         else:
             # Convert to list if self.speed_history is not already a list
             avg_speed_trend = list(self.speed_history)[-speed_history_queue_length:]
-        speed_trend_val = avg_speed_merging - np.mean(avg_speed_trend)
+        speed_trend_val = avg_speed_downstream - np.mean(avg_speed_trend)
 
-        # Time-step update (e.g., for cyclical encoding) used only in the agent testing
-        self.time_step = (self.time_step + 1) % (24 * 60)
+        flow_diff = self.flow_downstream - self.prev_flow_downstream
+        occ_diff = self.occupancy_downstream - self.prev_occupancy
+        # Decide if improvement is negligible
+        # If flow or occupancy improved less than epsilon, we consider that "no real improvement"
+        epsilon_flow = 50.0       # 50 vehicles/hour threshold
+        epsilon_occ = 2.0         # 2% occupancy threshold
+        negligible_improvement = (abs(flow_diff) < epsilon_flow) and (abs(occ_diff) < epsilon_occ)
+        useless_change_penalty = 0.0
+        if speed_change > 0 and negligible_improvement:
+            # Penalize changes if no improvement in flow or occupancy
+            useless_change_penalty = -0.5 * (speed_change / 5.0)  
+            # for each 5 km/h step, -0.5 reward if no improvement
 
         # Apply feedback adjustment based on downstream impact and queue lengths
         state = self.feedback_adjustment(state)
@@ -484,17 +552,17 @@ class TrafficEnv(gym.Env):
         
         # This is an instance of self.observation_space, conforming to its blueprint
         observation = np.array([
-            avg_speed_before,
+            avg_speed_downstream,
             self.flow_upstream,
             self.flow_downstream,
             self.queue_length_upstream,
             speed_trend_val,
-            self.occupancy / MAX_OCCUPANCY,
+            self.occupancy_downstream / MAX_OCCUPANCY,
             float(self.state_before)
         ], dtype=np.float64)
         
         # Compute reward dynamically using RewardWeightNet
-        R_occ = min(self.occupancy / MAX_OCCUPANCY, 1.0)
+        R_occ = min(self.occupancy_downstream / MAX_OCCUPANCY, 1.0)
         R_flow = min(self.flow_downstream / MAX_FLOW, 1.0)
         # Speed smoothing: penalize large jumps from last action or from default_speed
         #    Example: difference from last_speed_limit => self.current_speed_limit
@@ -502,33 +570,32 @@ class TrafficEnv(gym.Env):
         R_smooth = - (abs(self.current_speed_limit - self.state_before) / MAX_SPEED_DIFF)
         
         # FIXME: Get a stable framework to generate the best weights when training
-        if self.operation_mode == "train":
+        # FIXME: For now, use hardcoded weights
+        if True: #self.operation_mode == "train":
             # obs_tensor = torch.tensor(observation, dtype=torch.float32).unsqueeze(0)
             # weights = self.reward_weight_net(obs_tensor).detach().numpy().flatten()
             weights = self.preloaded_weights
             w_occ, w_flow, w_smooth = weights[0], weights[1], weights[2]
-            reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
-        else:
-            # Use hardcoded weights
-            w_occ, w_flow, w_smooth = self.preloaded_weights[0], self.preloaded_weights[1], self.preloaded_weights[2]
-            reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penaly
+            reward = (w_occ * R_occ) + (w_flow * R_flow) + (w_smooth * R_smooth) + invalid_action_penalty + self.collisions_penalty + useless_change_penalty 
 
         # Log metrics
         self.logger.log_step(
             vss=state,
-            occupancy=self.occupancy,
-            speed_before=avg_speed_before * 3.6,
-            speed_after=(mean_speeds_seg_0_after / self.aggregation_time) * 3.6,
-            reward=reward,
+            occupancy=self.occupancy_downstream,
+            avg_speeds=[avg_speed_downstream, avg_speed_upstream],
+            total_reward=reward,
+            # reward_weights = weights,
+            rewards = [R_occ, R_flow, R_smooth, invalid_action_penalty, self.collisions_penalty, useless_change_penalty],
             flow_upstream=self.flow_upstream,
             flow_downstream=self.flow_downstream,
-            reward_weights = weights,
-            rewards = [R_occ, R_flow, R_smooth],
             action=action,
-            departed_vehicles=departed_vehicles
+            departed_vehicles=departed_vehicles,
+            collisions=collisions_in_step
         )
 
         self.state_before = state
+        self.prev_flow_downstream = self.flow_downstream
+        self.prev_occupancy = self.occupancy_downstream
     
         # Determine if the episode is done
         if self.operation_mode == "train":
@@ -545,10 +612,10 @@ class TrafficEnv(gym.Env):
 
     def reset(self, seed=None):
         super().reset(seed=seed)
-        self.occupancy_sum = 0
-        self.occupancy = 0
+        # self.occupancy_sum = 0
+        self.occupancy_downstream = 0
         self.is_first_step_delay_on = True
-        self.collisions = 0
+        self.collisions = []
 
         initial_observation = np.array([0]*OBSERVATION_SPACE_SIZE, dtype=np.float64)
 
@@ -571,27 +638,35 @@ class TrafficDataLogger:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.traffic_data = []
         self.header = [
-            "timestamp", "VSS", "occupancy", "avg_speed_before", "avg_speed_after",
-            "reward", "flow_upstream", "flow_downstream", 
-            "reward_weights", "rewards", "action", "departed_vehicles"
+            "timestamp", 
+            "VSS", 
+            "occupancy", 
+            "avg_speeds", 
+            "total_reward", 
+            # "reward_weights", 
+            "rewards", 
+            "flow_upstream", 
+            "flow_downstream", 
+            "action", 
+            "departed_vehicles", 
+            "collisions"
         ]
 
-    def log_step(self, vss, occupancy, speed_before, speed_after, reward,
-                 flow_upstream, flow_downstream, reward_weights,
-                 rewards, action, departed_vehicles):
+    def log_step(self, vss, occupancy, avg_speeds, total_reward, rewards,
+                 flow_upstream, flow_downstream, action, departed_vehicles, collisions):
         self.traffic_data.append({
             "timestamp": time.time(),
             "VSS": vss,
             "occupancy": occupancy,
-            "avg_speed_before": speed_before,
-            "avg_speed_after": speed_after,
-            "reward": reward,
+            "avg_speeds": avg_speeds,
+            "total_reward": total_reward,
+            # "reward_weights": reward_weights,
+            "rewards": rewards,
             "flow_upstream": flow_upstream,
             "flow_downstream": flow_downstream,
-            "reward_weights": reward_weights,
-            "rewards": rewards,
             "action": action,
             "departed_vehicles": departed_vehicles,
+            "collisions": collisions,
         })
 
     def save_to_csv(self, filename="traffic_data.csv"):
@@ -684,4 +759,4 @@ if __name__ == '__main__':
     
     train_dqn(num_of_episodes=7)
 
-    test_dqn()
+    # test_dqn()
