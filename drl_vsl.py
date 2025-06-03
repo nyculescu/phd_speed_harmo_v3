@@ -230,31 +230,19 @@ def test_dqn():
                      op_mode="test", 
                      base_gen_car_distrib=["bimodal", 3])
 
-    tf_logger = configure(f"./tensorboard_logs/{model_name}_test", ["tensorboard"])
-    model.set_logger(tf_logger)
-
-    logging.info("Loaded best reward weights for testing.")
-
     obs, _ = env.reset()
     done = False
-
     rewards = []
-    # Initialize custom callback for logging with the environment passed in
-    tensorboard_callback = TensorboardCallback(env, model)
 
     while not done:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, _, _ = env.step(action)
-        
-        # Log reward and other metrics to TensorBoard using the callback
-        tensorboard_callback.locals = {'rewards': reward}
-        tensorboard_callback._on_step()  # Manually call _on_step() to log metrics
-        
         rewards.append(reward)
 
     env.close()
-
-    tf_logger.dump(step=0)  # Ensure logs are written
+    
+    print(f"Test completed. Total reward: {sum(rewards)}")
+    print(f"Average reward per step: {np.mean(rewards)}")
 
 """ Classes """
 class TrafficEnv(gym.Env):
@@ -757,6 +745,6 @@ if __name__ == '__main__':
 
     create_sumocfg("DQN")
     
-    train_dqn(num_of_episodes=7)
+    # train_dqn(num_of_episodes=7)
 
-    # test_dqn()
+    test_dqn()
