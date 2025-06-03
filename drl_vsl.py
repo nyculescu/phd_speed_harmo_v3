@@ -598,8 +598,13 @@ class TrafficEnv(gym.Env):
         # Implement viz
         pass
 
+<<<<<<< HEAD
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
+=======
+    def reset(self, seed=None):
+        super().reset(seed=seed)
+>>>>>>> 6de51bbbdfbf8f5755606e4d20f4c30ac7edfd27
         # self.occupancy_sum = 0
         self.occupancy_downstream = 0
         self.is_first_step_delay_on = True
@@ -747,4 +752,4 @@ if __name__ == '__main__':
     
     # train_dqn(num_of_episodes=7)
 
-    test_dqn()
+    # test_dqn()
