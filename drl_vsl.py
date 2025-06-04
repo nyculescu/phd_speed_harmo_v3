@@ -701,6 +701,10 @@ class TrafficEnv(gym.Env):
         elif self.operation_mode == "test":
             self.sim_length = int(24 * 3600)  # 24 hours in seconds
 
+        # Track a moving average of recent rewards. If this average falls below a threshold for a certain number of steps, terminate the episode early.
+        self.reward_window = deque(maxlen=50)  # Track last 50 rewards
+        self.reward_threshold = -5 # Threshold for early termination in tuning
+
     def start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
         # Check if SUMO is already running and responsive
@@ -862,6 +866,8 @@ class TrafficEnv(gym.Env):
         
         # Calculate reward
         reward = self._calculate_reward(invalid_action_penalty)
+
+        self.reward_window.append(reward)
         
         # Prepare observation
         speed_trend_val = self._calculate_speed_trend()
@@ -877,7 +883,7 @@ class TrafficEnv(gym.Env):
         
         # Check termination conditions
         # End when simulation time reaches limit OR no more vehicles expected
-        done = (current_time >= self.sim_length) or (traci.simulation.getMinExpectedNumber() <= 0)
+        done = (current_time >= self.sim_length) or (traci.simulation.getMinExpectedNumber() <= 0) or (len(self.reward_window) == self.reward_window.maxlen and np.mean(self.reward_window) < self.reward_threshold)
         
         # Log data
         self.logger.log_step_data(
@@ -1532,7 +1538,7 @@ class TrafficEnvForTuning(TrafficEnv):
         """
         # Call parent step method
         observation, reward, done, truncated, info = super().step(action)
-        
+                
         # **TUNING OPTIMIZATION**: Early termination for clearly poor performers
         if hasattr(self, '_tuning_step_count'):
             self._tuning_step_count += 1
@@ -1635,7 +1641,7 @@ if __name__ == '__main__':
     else:
         logging.info("SUMO environment is not set up correctly.")
 
-    option = 3
+    option = 1
     algo_used = "DQN"
     reward_used = "balanced"
     
