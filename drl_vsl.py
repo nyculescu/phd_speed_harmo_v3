@@ -100,7 +100,7 @@ ENHANCED_HYPERPARAMS = {
     }
 }
 
-def create_sumocfg(model):
+def create_sumocfg(model, vsl_enforcement="lane_only"):  # Add vsl_enforcement parameter
     sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
@@ -193,7 +193,7 @@ def train_model(algorithm,
     total_timesteps = steps_per_episode * num_of_episodes
     eval_timesteps = steps_per_episode // 4
 
-    model_name = f"{algorithm}_{reward_function}"
+    model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
     os.makedirs(log_dir, exist_ok=True)
@@ -272,9 +272,9 @@ def train_model(algorithm,
         train_env.close()
         env_eval.close()
 
-def test_model(algorithm, reward_function):
+def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     """Test a trained DQN model with comprehensive evaluation."""
-    model_name = algorithm
+    model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     try:
         model_path = f"rl_models/{model_name}/best_model"
         model = DQN.load(model_path)
@@ -288,7 +288,8 @@ def test_model(algorithm, reward_function):
                      model_idx=0,
                      op_mode="test",
                      base_gen_car_distrib=["bimodal", 3],
-                     reward_fn=reward_function)
+                     reward_fn=reward_function,
+                     vsl_enforcement=vsl_enforcement)  # Add VSL enforcement parameter
 
     obs, _ = env.reset()
     total_reward = 0
@@ -310,17 +311,21 @@ def test_model(algorithm, reward_function):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file="best_optuna_params.json", vsl_enforcement="lane_only"):
+def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file=None, vsl_enforcement="lane_only"):
     """
     Efficient hyperparameter tuning using existing infrastructure. DQN only.
     """
+    # Generate unique warm start file name if not provided
+    if warm_start_file is None:
+        warm_start_file = f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json"
+    
     scenario_configs = [
         {"id": 100, "demand": 2000, "pattern": "uniform"},
         {"id": 101, "demand": 2500, "pattern": "uniform"}, 
         {"id": 102, "demand": 3000, "pattern": "uniform"},
         {"id": 103, "demand": 3500, "pattern": "uniform"}
     ]
-    model_name = f"{algorithm}_tune"
+    model_name = f"{algorithm}_tune_{vsl_enforcement}"  # Updated line
     output_dir_sumo = Path("./traffic_environment/sumo")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
 
@@ -438,7 +443,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
         for filepath in glob.glob(f"./traffic_environment/sumo/{pattern}"):
             if any(str(sid) in filepath for sid in ([config["id"] for config in scenario_configs])):
                 wait_for_file_release(filepath)
-    with open("best_optuna_params.json", "w") as f:
+    with open(f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json", "w") as f:
         json.dump(study.best_params, f)
     return study.best_params
 
@@ -1562,17 +1567,17 @@ if __name__ == '__main__':
     algo_used = "DQN"
     reward_used = "balanced"
     
-    config_model_name = f"{algo_used}_{reward_used}"
+    config_model_name = f"{algo_used}_{reward_used}_{vsl_mode}"  # Updated line
 
     if option == 1:
-        create_sumocfg(config_model_name)
+        create_sumocfg(config_model_name, vsl_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_used, 
                     reward_function=reward_used, 
                     use_enhanced_params=True,
                     vsl_enforcement=vsl_mode)
     elif option == 2:
         optimal_params = get_optimal_params(algorithm=algo_used, traffic_density="high", episode_length="long")
-        create_sumocfg(config_model_name)
+        create_sumocfg(config_model_name, vsl_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
@@ -1584,7 +1589,7 @@ if __name__ == '__main__':
                                            reward_function=reward_used, 
                                            n_trials=15,
                                            vsl_enforcement=vsl_mode)
-        create_sumocfg(config_model_name)
+        create_sumocfg(config_model_name, vsl_mode)  # Add vsl_mode parameter
         if "net_arch_str" in best_params:
             net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
             best_params["net_arch"] = net_arch_list
@@ -1596,8 +1601,7 @@ if __name__ == '__main__':
                     vsl_enforcement=vsl_mode)
 
     # Evaluate the trained model
-    # test_model(algorithm=algo_used, reward_function=reward_used)
-
+    # test_model(algorithm=algo_used, reward_function=reward_used, vsl_enforcement=vsl_mode)  # Add vsl_mode parameter
 """
 Limitations and Future Work:
 - Accepted error: "ERROR - Failed to remove ./traffic_environment/sumo\generated_flows_DQN_tune_102.rou.xml after 5 seconds."
