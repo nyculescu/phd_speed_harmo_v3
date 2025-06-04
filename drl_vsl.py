@@ -135,7 +135,7 @@ def create_sumocfg(model):
         
         logging.debug(f"Created {filepath}")
 
-def train_env_constructor(idx, model_name, num_of_episodes, reward_fn): #Pass reward function
+def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="lane_only"):
     def _init():
         env = Monitor(TrafficEnv(port=base_train_sumo_port + idx,
                                 model_name=model_name,
@@ -143,19 +143,21 @@ def train_env_constructor(idx, model_name, num_of_episodes, reward_fn): #Pass re
                                 op_mode="train",
                                 base_gen_car_distrib=["uniform", 2000],
                                 num_of_episodes=num_of_episodes,
-                                reward_fn=reward_fn)) #Pass reward function
+                                reward_fn=reward_fn,
+                                vsl_enforcement=vsl_enforcement))
         return env
     return _init
 
-def eval_env_constructor(model_name, reward_fn): #Pass reward function
+def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only"):
     def _init():
         env = Monitor(TimeLimit(TrafficEnv(port=base_eval_sumo_port,
                                             model_name=model_name,
                                             model_idx=num_envs_per_model - 1,
                                             op_mode="eval",
                                             base_gen_car_distrib=["uniform", 3000],
-                                            num_of_episodes=1, #Fixed to 1
-                                            reward_fn=reward_fn), #Pass reward function
+                                            num_of_episodes=1,
+                                            reward_fn=reward_fn,
+                                            vsl_enforcement=vsl_enforcement),
                                 max_episode_steps=interval_length))
         return env
     return _init
@@ -164,7 +166,8 @@ def train_model(algorithm,
                 reward_function="balanced", 
                 num_of_episodes=7,
                 use_enhanced_params=True,
-                custom_params=None):
+                custom_params=None,
+                vsl_enforcement="lane_only"):
     """Fixed version with correct SB3 2.6.0 parameter names. DQN only."""
     # Only DQN supported
     params = ENHANCED_HYPERPARAMS["DQN"].copy() if use_enhanced_params else {
@@ -197,10 +200,10 @@ def train_model(algorithm,
     os.makedirs(model_dir, exist_ok=True)
 
     train_env = SubprocVecEnv([
-        train_env_constructor(i, model_name, num_of_episodes, reward_function)
+        train_env_constructor(i, model_name, num_of_episodes, reward_function, vsl_enforcement)
         for i in range(num_train_envs_per_model)
     ])
-    env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function)])
+    env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function, vsl_enforcement)])
 
     policy_kwargs = dict(
         net_arch=params.pop("net_arch", [256, 256, 128]), # Deeper network for complex traffic patterns
@@ -307,7 +310,7 @@ def test_model(algorithm, reward_function):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file="best_optuna_params.json"):
+def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file="best_optuna_params.json", vsl_enforcement="lane_only"):
     """
     Efficient hyperparameter tuning using existing infrastructure. DQN only.
     """
@@ -381,7 +384,8 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
                     base_gen_car_distrib=["uniform", config["demand"]],
                     num_of_episodes=1,
                     reward_fn=reward_function,
-                    skip_flow_generation=True 
+                    skip_flow_generation=True,
+                    vsl_enforcement=vsl_enforcement  # Add this line
                 )
                 model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
                 model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False)
@@ -463,7 +467,7 @@ MAX_QUEUE_LENGTH = 500.0        # meters
 SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
 
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, num_of_episodes=0, reward_fn="balanced"):
+    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, num_of_episodes=0, reward_fn="balanced", vsl_enforcement="lane_only"):
         super(TrafficEnv, self).__init__()
         self.default_speed_limit = 130
         self.port = port
@@ -481,7 +485,7 @@ class TrafficEnv(gym.Env):
         self.num_of_episodes = num_of_episodes
         self.reward_fn = reward_fn
         
-        # Historical data for analysis[1]
+        # Historical data for analysis
         self.flow_downstream_history = deque(maxlen=5)
         self.occupancy_downstream_history = deque(maxlen=5)
         self.speed_history = deque(maxlen=15)
@@ -523,6 +527,10 @@ class TrafficEnv(gym.Env):
         self.reward_window = deque(maxlen=50)  # Track last 50 rewards
         self.reward_threshold = -5 # Threshold for early termination in tuning
 
+        # VSL Enforcement Mode Configuration
+        # Options: "all_vehicles", "electric_only", "lane_only"
+        self.vsl_enforcement = vsl_enforcement
+        
     def start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
         # Check if SUMO is already running and responsive
@@ -600,7 +608,7 @@ class TrafficEnv(gym.Env):
             self.start_sumo()
             current_time = traci.simulation.getTime()
         
-        # Apply action: gradual speed limit changes[1]
+        # Apply action: gradual speed limit changes
         speed_changes = [-5, 0, +5]
         previous_speed_limit = self.current_speed_limit
         self.current_speed_limit += speed_changes[action]
@@ -612,9 +620,8 @@ class TrafficEnv(gym.Env):
         
         self.current_speed_limit = max(50, min(130, self.current_speed_limit))
         
-        # Apply speed limit to controlled segment
-        for segId in seg_1_before:
-            traci.lane.setMaxSpeed(segId, self.current_speed_limit / 3.6)
+        # Apply VSL enforcement using the new method
+        self.apply_vsl_enforcement(self.current_speed_limit)
         
         # Initialize data collection variables
         flow_upstream_temp = 0
@@ -635,7 +642,7 @@ class TrafficEnv(gym.Env):
                 # Reset environment instead of crashing
                 return self.reset()
             
-            # Collect traffic measurements[1]
+            # Collect traffic measurements
             flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
             flow_downstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_after")
             
@@ -656,7 +663,7 @@ class TrafficEnv(gym.Env):
                 for loop_id in loop_ids
             ]) / len([loop for loops in loops_before for loop in loops])
             
-            # Collision detection[1]
+            # Collision detection
             collisions_in_step = traci.simulation.getCollidingVehiclesNumber()
             if collisions_in_step > 0:
                 self.collisions.append(current_time)
@@ -668,7 +675,7 @@ class TrafficEnv(gym.Env):
         self.queue_length_upstream = queue_length_temp / self.aggregation_time
         self.occupancy_upstream = min(occupancy_upstream_temp / self.aggregation_time, 100.0)
         
-        # Update historical data for smoothing[1]
+        # Update historical data for smoothing
         self.flow_downstream_history.append(self.flow_downstream)
         self.occupancy_downstream_history.append(self.occupancy_upstream)
         self.speed_history.append(self.avg_speed_before)
@@ -677,7 +684,7 @@ class TrafficEnv(gym.Env):
         self.flow_smoothed = np.mean(list(self.flow_downstream_history)) if self.flow_downstream_history else 0
         self.occupancy_smoothed = np.mean(list(self.occupancy_downstream_history)) if self.occupancy_downstream_history else 0
         
-        # Collision penalty (2-hour sliding window)[1]
+        # Collision penalty (2-hour sliding window)
         expiration_time = current_time - (2 * 3600)
         self.collisions = [t for t in self.collisions if t > expiration_time]
         self.collisions_penalty = -5 if len(self.collisions) > 2 else 0
@@ -940,6 +947,63 @@ class TrafficEnv(gym.Env):
         ], dtype=np.float32)
         
         return normalized_state
+
+    def apply_vsl_enforcement(self, speed_limit_kmh):
+        """
+        Apply Variable Speed Limit enforcement based on configured mode.
+        
+        Args:
+            speed_limit_kmh (float): Speed limit in km/h
+        """
+        speed_limit_ms = speed_limit_kmh / 3.6  # Convert to m/s
+        
+        if self.vsl_enforcement == "lane_only":
+            # Option 3: Only set maximum allowed speed for the lane
+            for segId in seg_1_before:
+                traci.lane.setMaxSpeed(segId, speed_limit_ms)
+            logging.debug(f"VSL Mode 3: Set lane max speed to {speed_limit_kmh} km/h")
+            
+        elif self.vsl_enforcement == "all_vehicles":
+            # Option 1: Force all vehicles to obey speed limit immediately
+            for segId in seg_1_before:
+                # Set lane max speed
+                traci.lane.setMaxSpeed(segId, speed_limit_ms)
+                
+                # Force all vehicles in this lane to obey the new speed limit
+                veh_ids = traci.lane.getLastStepVehicleIDs(segId)
+                for veh_id in veh_ids:
+                    try:
+                        # Set vehicle speed to the new speed limit
+                        traci.vehicle.setSpeed(veh_id, speed_limit_ms)
+                    except Exception as e:
+                        logging.debug(f"Could not set speed for vehicle {veh_id}: {e}")
+            
+            logging.debug(f"VSL Mode 1: Forced all vehicles to {speed_limit_kmh} km/h")
+            
+        elif self.vsl_enforcement == "electric_only":
+            # Option 2: Force only electric_passenger vehicles to obey speed limit
+            for segId in seg_1_before:
+                # Set lane max speed
+                traci.lane.setMaxSpeed(segId, speed_limit_ms)
+                
+                # Force only electric_passenger vehicles to obey the new speed limit
+                veh_ids = traci.lane.getLastStepVehicleIDs(segId)
+                for veh_id in veh_ids:
+                    try:
+                        # Check if vehicle type is electric_passenger
+                        veh_type = traci.vehicle.getTypeID(veh_id)
+                        if veh_type == "electric_passenger":
+                            traci.vehicle.setSpeed(veh_id, speed_limit_ms)
+                    except Exception as e:
+                        logging.debug(f"Could not check/set speed for vehicle {veh_id}: {e}")
+            
+            logging.debug(f"VSL Mode 2: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
+            
+        else:
+            logging.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using lane_only.")
+            # Fallback to lane_only
+            for segId in seg_1_before:
+                traci.lane.setMaxSpeed(segId, speed_limit_ms)
 
 class TrafficDataLogger:
     """
@@ -1269,17 +1333,10 @@ class TrafficEnvForTuning(TrafficEnv):
     """
     
     def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True):
-        """
-        Initialize TrafficEnvForTuning.
-        
-        Args:
-            skip_flow_generation (bool): If True, uses pre-generated flow files
-            Other args: Same as TrafficEnv parent class
-        """
-        # Initialize parent class
+                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="lane_only"):
+        # Initialize parent class with VSL enforcement mode
         super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                        num_of_episodes, reward_fn)
+                        num_of_episodes, reward_fn, vsl_enforcement)
         
         self.skip_flow_generation = skip_flow_generation
         
@@ -1497,32 +1554,37 @@ if __name__ == '__main__':
     else:
         logging.info("SUMO environment is not set up correctly.")
 
+    # VSL Enforcement Mode Selection
+    # Options: "all_vehicles", "electric_only", "lane_only"
+    vsl_mode = "electric_only"  # Change this to test different modes
+    
     option = 3
     algo_used = "DQN"
     reward_used = "balanced"
     
-    # Consistent model name for config generation
     config_model_name = f"{algo_used}_{reward_used}"
 
     if option == 1:
-        # Option 1: Use enhanced parameters directly
         create_sumocfg(config_model_name)
-        train_model(algorithm=algo_used, reward_function=reward_used, use_enhanced_params=True)
+        train_model(algorithm=algo_used, 
+                    reward_function=reward_used, 
+                    use_enhanced_params=True,
+                    vsl_enforcement=vsl_mode)
     elif option == 2:
-        # Option 2: Use adaptive parameter selection
         optimal_params = get_optimal_params(algorithm=algo_used, traffic_density="high", episode_length="long")
         create_sumocfg(config_model_name)
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
-                    custom_params=optimal_params)
+                    custom_params=optimal_params,
+                    vsl_enforcement=vsl_mode)
     elif option == 3:
-        # Option 3: Run hyperparameter tuning first
+        # Update tuning function to also support VSL enforcement
         best_params = tune_hyperparameters(algorithm=algo_used, 
                                            reward_function=reward_used, 
-                                           n_trials=15)
-        create_sumocfg(config_model_name) # Create configs for the main training after tuning
-        # After Optuna tuning, before train_model
+                                           n_trials=15,
+                                           vsl_enforcement=vsl_mode)
+        create_sumocfg(config_model_name)
         if "net_arch_str" in best_params:
             net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
             best_params["net_arch"] = net_arch_list
@@ -1530,7 +1592,8 @@ if __name__ == '__main__':
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
-                    custom_params=best_params)
+                    custom_params=best_params,
+                    vsl_enforcement=vsl_mode)
 
     # Evaluate the trained model
     # test_model(algorithm=algo_used, reward_function=reward_used)
