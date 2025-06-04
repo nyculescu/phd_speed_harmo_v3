@@ -25,6 +25,7 @@ import pandas as pd
 import optuna
 import glob
 import time
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -419,7 +420,7 @@ def test_model(algorithm, reward_function):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=20):
+def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file="best_optuna_params.json"):
     """
     Efficient hyperparameter tuning using existing infrastructure.
     Uses different {id} values to create diverse scenarios.
@@ -429,7 +430,8 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20):
     scenario_configs = [
         {"id": 100, "demand": 2000, "pattern": "uniform"},
         {"id": 101, "demand": 2500, "pattern": "uniform"}, 
-        {"id": 102, "demand": 3000, "pattern": "uniform"}
+        {"id": 102, "demand": 3000, "pattern": "uniform"},
+        {"id": 103, "demand": 3500, "pattern": "uniform"}
     ]
     
     model_name = f"{algorithm}_tune"
@@ -580,8 +582,23 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20):
     
     # Run optimization
     study = optuna.create_study(direction='maximize')
+
+    # --- Warm start: enqueue previous best params if available ---
+    try:
+        with open(warm_start_file, "r") as f:
+            prev_best_params = json.load(f)
+        # Only enqueue params that match the current search space
+        study.enqueue_trial(prev_best_params)
+        logging.info(f"Enqueued previous best parameters for warm start: {prev_best_params}")
+    except Exception as e:
+        logging.info(f"No previous Optuna params for warm start: {e}")
+
     study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
-    
+
+    # Save best params for future warm starts
+    with open(warm_start_file, "w") as f:
+        json.dump(study.best_params, f)
+
     # Cleanup scenario files
     """Clean up temporary files created for hyperparameter tuning."""
     patterns_to_clean = [
@@ -607,6 +624,10 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20):
         for filepath in glob.glob(f"./traffic_environment/sumo/{pattern}"):
             if any(str(sid) in filepath for sid in ([config["id"] for config in scenario_configs])):
                 wait_for_file_release(filepath)
+    
+    # Save best parameters to JSON file
+    with open("best_optuna_params.json", "w") as f:
+        json.dump(study.best_params, f)
     
     return study.best_params
   
@@ -1475,7 +1496,7 @@ class TrafficEnvForTuning(TrafficEnv):
             try:
                 port = self.port
                 
-                # Always close any existing TraCI connection before starting a new one
+                # Always close any TraCI connection before starting a new one
                 if traci.isLoaded():
                     try:
                         traci.close()
@@ -1641,7 +1662,7 @@ if __name__ == '__main__':
     else:
         logging.info("SUMO environment is not set up correctly.")
 
-    option = 1
+    option = 3
     algo_used = "DQN"
     reward_used = "balanced"
     
