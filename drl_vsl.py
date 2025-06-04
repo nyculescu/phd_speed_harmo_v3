@@ -8,7 +8,6 @@ from stable_baselines3.common.logger import configure
 from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
-from gymnasium import spaces
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from datetime import datetime 
@@ -85,14 +84,14 @@ OBSERVATION_SPACE_SIZE = 7
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
     "DQN": {
-        "learning_rate": 5e-4,
-        "buffer_size": 200000,
-        "batch_size": 64,
+        "learning_rate": 0.0001,
+        "buffer_size": 100000,
+        "batch_size": 32,
         "target_update_interval": 5000,
         "exploration_fraction": 0.15,
         "exploration_initial_eps": 1.0,
         "exploration_final_eps": 0.02,
-        "learning_starts": 1000,
+        "learning_starts": 10000,
         "train_freq": 4,
         "gradient_steps": 1,
         "tau": 1.0,
@@ -204,7 +203,7 @@ def train_model(algorithm,
     env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function)])
 
     policy_kwargs = dict(
-        net_arch=params.pop("net_arch", [256, 256, 128]),
+        net_arch=params.pop("net_arch", [256, 256, 128]), # Deeper network for complex traffic patterns
         activation_fn=nn.ReLU
     )
 
@@ -458,6 +457,11 @@ def get_optimal_params(algorithm, traffic_density, episode_length):
     return base_params
 
 """ Classes """
+MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
+MAX_FLOW = 7200.0               # vehicles per hour
+MAX_QUEUE_LENGTH = 500.0        # meters
+SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
+
 class TrafficEnv(gym.Env):
     def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, num_of_episodes=0, reward_fn="balanced"):
         super(TrafficEnv, self).__init__()
@@ -685,7 +689,7 @@ class TrafficEnv(gym.Env):
         
         # Prepare observation
         speed_trend_val = self._calculate_speed_trend()
-        observation = np.array([
+        raw_observation = np.array([
             self.avg_speed_before,
             self.flow_upstream,
             self.flow_smoothed,
@@ -694,7 +698,10 @@ class TrafficEnv(gym.Env):
             self.occupancy_smoothed / 100.0,
             self.current_speed_limit
         ], dtype=np.float64)
-        
+
+        # Normalize observation for DQN
+        observation = self.preprocess_state(raw_observation)
+                
         # Check termination conditions
         # End when simulation time reaches limit OR no more vehicles expected
         done = (current_time >= self.sim_length) or (traci.simulation.getMinExpectedNumber() <= 0) or (len(self.reward_window) == self.reward_window.maxlen and np.mean(self.reward_window) < self.reward_threshold)
@@ -746,14 +753,15 @@ class TrafficEnv(gym.Env):
         
         # Start fresh SUMO instance
         self.start_sumo()
-        
-        # Initial observation
-        observation = np.array([
+                
+        raw_observation = np.array([
             self.default_speed_limit / 3.6,
             0.0, 0.0, 0.0, 0.0, 0.0,
             self.default_speed_limit
         ], dtype=np.float64)
-        
+
+        observation = self.preprocess_state(raw_observation)
+
         info = {
             'flow_upstream': 0, 'flow_downstream': 0, 'occupancy': 0,
             'queue_length': 0, 'speed_limit': self.default_speed_limit,
@@ -898,6 +906,40 @@ class TrafficEnv(gym.Env):
         
         slope = numerator / denominator
         return float(slope)
+
+    def preprocess_state(self, raw_state):
+        """
+        Normalize raw observation state vector to [0,1] range for DQN input.
+
+        Args:
+            raw_state (np.ndarray): Raw observation from environment step.
+
+        Returns:
+            np.ndarray: Normalized state vector as float32.
+        """
+        avg_speed = np.clip(raw_state[0], 0, MAX_SPEED_MPS) / MAX_SPEED_MPS
+        flow_upstream = np.clip(raw_state[1], 0, MAX_FLOW) / MAX_FLOW
+        flow_smoothed = np.clip(raw_state[2], 0, MAX_FLOW) / MAX_FLOW
+        queue_length = np.clip(raw_state[3], 0, MAX_QUEUE_LENGTH) / MAX_QUEUE_LENGTH
+        
+        # Speed trend normalization: clip to [-1,1], then scale to [0,1]
+        speed_trend = np.clip(raw_state[4], -SPEED_TREND_CLIP, SPEED_TREND_CLIP)
+        speed_trend_norm = (speed_trend + SPEED_TREND_CLIP) / (2 * SPEED_TREND_CLIP)
+        
+        occupancy = np.clip(raw_state[5], 0, 1)  # already fraction
+        speed_limit = np.clip(raw_state[6], 50, 130) / 130.0
+        
+        normalized_state = np.array([
+            avg_speed,
+            flow_upstream,
+            flow_smoothed,
+            queue_length,
+            speed_trend_norm,
+            occupancy,
+            speed_limit
+        ], dtype=np.float32)
+        
+        return normalized_state
 
 class TrafficDataLogger:
     """
