@@ -1,7 +1,6 @@
 import logging
-from stable_baselines3 import DQN, A2C, PPO
+from stable_baselines3 import DQN
 import torch.nn as nn
-import torch.nn.functional as F
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
@@ -99,30 +98,6 @@ ENHANCED_HYPERPARAMS = {
         "tau": 1.0,
         "gamma": 0.995,
         "net_arch": [512, 256, 128]
-    },
-    "PPO": {
-        "learning_rate": 3e-4,
-        "n_steps": 2048,
-        "batch_size": 64,
-        "n_epochs": 10,
-        "gamma": 0.995,
-        "gae_lambda": 0.95,
-        "clip_range": 0.2,
-        "ent_coef": 0.0,
-        "vf_coef": 0.5,
-        "max_grad_norm": 0.5,
-        "net_arch": [256, 256]
-    },
-    "A2C": {
-        "learning_rate": 7e-4,
-        "n_steps": 5,
-        "gamma": 0.99,
-        "gae_lambda": 1.0,
-        "ent_coef": 0.0,
-        "vf_coef": 0.25,
-        "max_grad_norm": 0.5,
-        "normalize_advantage": False,
-        "net_arch": [256, 128]
     }
 }
 
@@ -191,138 +166,68 @@ def train_model(algorithm,
                 num_of_episodes=7,
                 use_enhanced_params=True,
                 custom_params=None):
-    """Fixed version with correct SB3 2.6.0 parameter names."""
-    
-    # Get enhanced parameters if enabled[1]
-    if use_enhanced_params and algorithm in ENHANCED_HYPERPARAMS:
-        params = ENHANCED_HYPERPARAMS[algorithm].copy()
-        logging.info(f"Using enhanced hyperparameters for {algorithm}")
-    else:
-        # Fallback with CORRECT parameter names for SB3 2.6.0
-        if algorithm == "DQN":
-            params = {
-                "learning_rate": 1e-4,
-                "buffer_size": 100000,
-                "batch_size": 128,
-                "target_update_interval": 1000,
-                "exploration_fraction": 0.1,
-                "exploration_initial_eps": 1.0,
-                "exploration_final_eps": 0.01,
-                "learning_starts": 1000,
-                "train_freq": 4,
-                "gradient_steps": 1,
-                "tau": 1.0,
-                "gamma": 0.99,
-                "net_arch": [256, 256, 128]
-            }
-        elif algorithm == "PPO":
-            params = {
-                "learning_rate": 3e-4,
-                "n_steps": 2048,
-                "batch_size": 64,
-                "n_epochs": 10,
-                "gamma": 0.99,
-                "gae_lambda": 0.95,
-                "clip_range": 0.2,
-                "ent_coef": 0.0,
-                "vf_coef": 0.5,
-                "max_grad_norm": 0.5,
-                "net_arch": [256, 256]
-            }
-        elif algorithm == "A2C":
-            params = {
-                "learning_rate": 7e-4,
-                "n_steps": 5,
-                "gamma": 0.99,
-                "gae_lambda": 1.0,
-                "ent_coef": 0.0,
-                "vf_coef": 0.25,
-                "max_grad_norm": 0.5,
-                "normalize_advantage": False,
-                "net_arch": [256, 128]
-            }
-    
-    # Override with custom parameters if provided
+    """Fixed version with correct SB3 2.6.0 parameter names. DQN only."""
+    # Only DQN supported
+    params = ENHANCED_HYPERPARAMS["DQN"].copy() if use_enhanced_params else {
+        "learning_rate": 1e-4,
+        "buffer_size": 100000,
+        "batch_size": 128,
+        "target_update_interval": 1000,
+        "exploration_fraction": 0.1,
+        "exploration_initial_eps": 1.0,
+        "exploration_final_eps": 0.01,
+        "learning_starts": 1000,
+        "train_freq": 4,
+        "gradient_steps": 1,
+        "tau": 1.0,
+        "gamma": 0.99,
+        "net_arch": [256, 256, 128]
+    }
     if custom_params:
         params.update(custom_params)
         logging.info(f"Applied custom parameter overrides: {custom_params}")
-    
-    # Calculate timesteps and setup
+
     steps_per_episode = 504000 // 60  
     total_timesteps = steps_per_episode * num_of_episodes
     eval_timesteps = steps_per_episode // 4
-    
+
     model_name = f"{algorithm}_{reward_function}"
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
-    
-    # Create environments
+
     train_env = SubprocVecEnv([
         train_env_constructor(i, model_name, num_of_episodes, reward_function)
         for i in range(num_train_envs_per_model)
     ])
     env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function)])
-    
-    # Extract policy kwargs correctly
+
     policy_kwargs = dict(
-        net_arch=params.pop("net_arch", [256, 256, 128]),  # Remove from params
+        net_arch=params.pop("net_arch", [256, 256, 128]),
         activation_fn=nn.ReLU
     )
-    
-    if algorithm == "DQN":
-        model = DQN("MlpPolicy", train_env, 
-                   learning_rate=params["learning_rate"],
-                   buffer_size=params["buffer_size"],
-                   batch_size=params["batch_size"],
-                   target_update_interval=params["target_update_interval"],
-                   exploration_fraction=params["exploration_fraction"],
-                   exploration_initial_eps=params["exploration_initial_eps"],
-                   exploration_final_eps=params["exploration_final_eps"],
-                   learning_starts=params["learning_starts"],
-                   train_freq=params["train_freq"],
-                   gradient_steps=params["gradient_steps"],
-                   tau=params["tau"],
-                   gamma=params["gamma"],
-                   policy_kwargs=policy_kwargs,
-                   verbose=1, tensorboard_log=log_dir, device='cuda')
-                   
-    elif algorithm == "PPO":
-        model = PPO("MlpPolicy", train_env,
-                   learning_rate=params["learning_rate"],
-                   n_steps=params["n_steps"],
-                   batch_size=params["batch_size"],
-                   n_epochs=params["n_epochs"],
-                   gamma=params["gamma"],
-                   gae_lambda=params["gae_lambda"],
-                   clip_range=params["clip_range"],
-                   ent_coef=params["ent_coef"],
-                   vf_coef=params["vf_coef"],
-                   max_grad_norm=params["max_grad_norm"],
-                   policy_kwargs=policy_kwargs,
-                   verbose=1, tensorboard_log=log_dir, device='cuda')
-                   
-    elif algorithm == "A2C":
-        model = A2C("MlpPolicy", train_env,
-                   learning_rate=params["learning_rate"],
-                   n_steps=params["n_steps"],
-                   gamma=params["gamma"],
-                   gae_lambda=params["gae_lambda"],
-                   ent_coef=params["ent_coef"],
-                   vf_coef=params["vf_coef"],
-                   max_grad_norm=params["max_grad_norm"],
-                   normalize_advantage=params["normalize_advantage"],
-                   policy_kwargs=policy_kwargs,
-                   verbose=1, tensorboard_log=log_dir, device='cuda')
-    
-    # Log the parameters being used
-    logging.info(f"Training {algorithm} with parameters: {params}")
-    
-    # Configure logger
+
+    model = DQN("MlpPolicy", train_env, 
+               learning_rate=params["learning_rate"],
+               buffer_size=params["buffer_size"],
+               batch_size=params["batch_size"],
+               target_update_interval=params["target_update_interval"],
+               exploration_fraction=params["exploration_fraction"],
+               exploration_initial_eps=params["exploration_initial_eps"],
+               exploration_final_eps=params["exploration_final_eps"],
+               learning_starts=params["learning_starts"],
+               train_freq=params["train_freq"],
+               gradient_steps=params["gradient_steps"],
+               tau=params["tau"],
+               gamma=params["gamma"],
+               policy_kwargs=policy_kwargs,
+               verbose=1, tensorboard_log=log_dir, device='cuda')
+
+    logging.info(f"Training DQN with parameters: {params}")
+
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
-    
-    # Callbacks (same as before)
+
     checkpoint_cb = CheckpointCallback(
         save_freq=eval_timesteps,
         save_path=model_dir,
@@ -331,13 +236,13 @@ def train_model(algorithm,
         save_vecnormalize=True,
         verbose=1
     )
-    
+
     no_improve_cb = StopTrainingOnNoModelImprovement(
         max_no_improvement_evals=1,
         min_evals=3,
         verbose=1
     )
-    
+
     eval_cb = EvalCallback(
         env_eval,
         best_model_save_path=model_dir,
@@ -349,7 +254,7 @@ def train_model(algorithm,
         callback_after_eval=no_improve_cb,
         verbose=1
     )
-    
+
     # Training loop
     try:
         model.learn(total_timesteps=total_timesteps,
@@ -357,7 +262,6 @@ def train_model(algorithm,
                     progress_bar=True,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
-        
     except KeyboardInterrupt:
         print("Training interrupted by user.")
     except Exception as e:
@@ -367,53 +271,37 @@ def train_model(algorithm,
         env_eval.close()
 
 def test_model(algorithm, reward_function):
-    """Test a trained RL model with comprehensive evaluation."""
-    # model_name = f"{algorithm}_{reward_function}"
+    """Test a trained DQN model with comprehensive evaluation."""
     model_name = algorithm
-
-    # Load the best model
     try:
         model_path = f"rl_models/{model_name}/best_model"
-        if algorithm == "DQN":
-            model = DQN.load(model_path)
-        elif algorithm == "A2C":
-            model = A2C.load(model_path)
-        elif algorithm == "PPO":
-            model = PPO.load(model_path)
+        model = DQN.load(model_path)
     except FileNotFoundError:
         logging.warning(f"Best model not found, loading checkpoint...")
-        # Load latest checkpoint
         checkpoint_path = f"rl_models/{model_name}/rl_model_{model_name}_final.zip"
-        if algorithm == "DQN":            model = DQN.load(checkpoint_path)
-        elif algorithm == "A2C":
-            model = A2C.load(checkpoint_path)
-        elif algorithm == "PPO":
-            model = PPO.load(checkpoint_path)
-    
-    # Test environment setup
+        model = DQN.load(checkpoint_path)
+
     env = TrafficEnv(port=base_eval_sumo_port,
                      model_name=model_name,
                      model_idx=0,
                      op_mode="test",
                      base_gen_car_distrib=["bimodal", 3],
                      reward_fn=reward_function)
-    
-    # Evaluation loop
+
     obs, _ = env.reset()
     total_reward = 0
     step_count = 0
-    
+
     while True:
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, done, truncated, info = env.step(action)
         total_reward += reward
         step_count += 1
-        
         if done or truncated:
             break
-    
+
     env.close()
-    
+
     print(f"Test Results for {model_name}:")
     print(f"Total Steps: {step_count}")
     print(f"Total Reward: {total_reward:.2f}")
@@ -422,24 +310,18 @@ def test_model(algorithm, reward_function):
 
 def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file="best_optuna_params.json"):
     """
-    Efficient hyperparameter tuning using existing infrastructure.
-    Uses different {id} values to create diverse scenarios.
+    Efficient hyperparameter tuning using existing infrastructure. DQN only.
     """
-    
-    # PRE-GENERATE diverse scenarios using existing flow generation
     scenario_configs = [
         {"id": 100, "demand": 2000, "pattern": "uniform"},
         {"id": 101, "demand": 2500, "pattern": "uniform"}, 
         {"id": 102, "demand": 3000, "pattern": "uniform"},
         {"id": 103, "demand": 3500, "pattern": "uniform"}
     ]
-    
     model_name = f"{algorithm}_tune"
-    
-    # Define sumocfg_template and output_dir here or ensure they are accessible
     output_dir_sumo = Path("./traffic_environment/sumo")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
-    
+
     sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
@@ -454,91 +336,45 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
     </configuration>
     """
 
-    # Generate scenarios and their specific sumocfg files
     for config in scenario_configs:
         flow_generation_fix_num_veh(
             model_name, 
-            config["id"],  # Use unique ID for each scenario's flow file
+            config["id"],
             config["demand"], 
-            num_of_hrs=1,  # Shorter episodes for tuning
+            num_of_hrs=1,
             num_of_episodes=1, 
             num_of_intervals=1, 
             op_mode="train"
         )
-        
-        # Create the specific sumocfg file for this tuning scenario
         cfg_filename = f"3_2_merge_{model_name}_{config['id']}.sumocfg"
         cfg_filepath = output_dir_sumo / cfg_filename
-        # The {model} in template is model_name (e.g. DQN_tune)
-        # The {index} in template is config['id'] (e.g. 100)
         cfg_content = sumocfg_template.format(model=model_name, index=config['id'])
         with open(cfg_filepath, 'w') as file:
             file.write(cfg_content)
         logging.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
-    
+
     def objective(trial):
-        policy_kwargs = {}
-        if algorithm == "DQN":
-            # Suggest net_arch as strings
-            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["256,256", "512,256", "256,128,64"]) # Example string representations
-            # Parse the string suggestion into a list of integers
-            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
-            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
-            
-            params = {
-                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-                "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 200000]),
-                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-                "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000),
-                "exploration_fraction": trial.suggest_float("exploration_fraction", 0.05, 0.3),
-                "exploration_initial_eps": trial.suggest_float("exploration_initial_eps", 0.5, 1.0),
-                "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
-                "learning_starts": trial.suggest_categorical("learning_starts", [1000, 5000]),
-                "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]),
-                "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]), # -1 means as many as train_freq
-                "tau": trial.suggest_float("tau", 0.5, 1.0),
-                "gamma": trial.suggest_float("gamma", 0.95, 0.999),
-                # "net_arch" is now handled by policy_kwargs
-            }
-        elif algorithm == "PPO":
-            # Suggest net_arch as strings for PPO
-            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64,64", "128,128", "256,256"])
-            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
-            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
-            params = {
-                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-                "n_steps": trial.suggest_categorical("n_steps", [128, 512, 1024, 2048]),
-                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
-                "n_epochs": trial.suggest_int("n_epochs", 5, 20),
-                "gamma": trial.suggest_float("gamma", 0.9, 0.999),
-                "gae_lambda": trial.suggest_float("gae_lambda", 0.9, 0.99),
-                "clip_range": trial.suggest_float("clip_range", 0.1, 0.3),
-                "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.1),
-                "vf_coef": trial.suggest_float("vf_coef", 0.2, 0.8),
-                "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
-            }
-        elif algorithm == "A2C":
-            # Suggest net_arch as strings for A2C
-            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64,64", "128,128", "256,128"])
-            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
-            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
-            params = {
-                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-                "n_steps": trial.suggest_categorical("n_steps", [5, 10, 20]),
-                "gamma": trial.suggest_float("gamma", 0.9, 0.999),
-                "gae_lambda": trial.suggest_float("gae_lambda", 0.9, 1.0),
-                "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.1),
-                "vf_coef": trial.suggest_float("vf_coef", 0.2, 0.8),
-                "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
-                "normalize_advantage": trial.suggest_categorical("normalize_advantage", [True, False]),
-            }
-        
-        # Test on multiple scenarios for robustness
+        net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["256,256", "512,256", "256,128,64"])
+        net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
+        policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+        params = {
+            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+            "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 200000]),
+            "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+            "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000),
+            "exploration_fraction": trial.suggest_float("exploration_fraction", 0.05, 0.3),
+            "exploration_initial_eps": trial.suggest_float("exploration_initial_eps", 0.5, 1.0),
+            "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
+            "learning_starts": trial.suggest_categorical("learning_starts", [1000, 5000]),
+            "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]),
+            "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]),
+            "tau": trial.suggest_float("tau", 0.5, 1.0),
+            "gamma": trial.suggest_float("gamma", 0.95, 0.999),
+        }
         total_reward = 0
-        
         for config in scenario_configs:
             try:
-                env = TrafficEnvForTuning(  # Use specialized environment
+                env = TrafficEnvForTuning(
                     port=base_train_sumo_port + trial.number + config["id"],
                     model_name=model_name,
                     model_idx=config["id"],
@@ -548,19 +384,8 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
                     reward_fn=reward_function,
                     skip_flow_generation=True 
                 )
-
-                # Quick training and evaluation
-                if algorithm == "DQN":
-                    model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
-                elif algorithm == "PPO":
-                    model = PPO("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
-                elif algorithm == "A2C":
-                    model = A2C("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
-
-                # Shorter training for hyperparameter tuning
+                model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
                 model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False)
-
-                # Shorter evaluation
                 obs, _ = env.reset()
                 episode_reward = 0
                 for step in range(HYPER_PARAM_MODEL_STEPS):
@@ -569,25 +394,17 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
                     episode_reward += reward
                     if done or truncated:
                         break
-                
                 env.close()
                 total_reward += episode_reward
-                
             except Exception as e:
                 logging.error(f"Trial {trial.number} scenario {config['id']} failed: {e}")
-                # Optionally, penalize this trial heavily or handle differently
-                return float('-inf') # Fail the trial if any scenario fails
-        
+                return float('-inf')
         return total_reward / len(scenario_configs)
-    
-    # Run optimization
-    study = optuna.create_study(direction='maximize')
 
-    # --- Warm start: enqueue previous best params if available ---
+    study = optuna.create_study(direction='maximize')
     try:
         with open(warm_start_file, "r") as f:
             prev_best_params = json.load(f)
-        # Only enqueue params that match the current search space
         study.enqueue_trial(prev_best_params)
         logging.info(f"Enqueued previous best parameters for warm start: {prev_best_params}")
     except Exception as e:
@@ -595,19 +412,14 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
 
     study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
 
-    # Save best params for future warm starts
     with open(warm_start_file, "w") as f:
         json.dump(study.best_params, f)
 
-    # Cleanup scenario files
-    """Clean up temporary files created for hyperparameter tuning."""
     patterns_to_clean = [
         f"generated_flows_{model_name}_*.rou.xml",
         f"3_2_merge_{model_name}_*.sumocfg"
     ]
-    
     def wait_for_file_release(filepath, timeout=5):
-        """Wait up to `timeout` seconds for a file to be released by all processes."""
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -619,49 +431,30 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
                 time.sleep(1)
         logging.error(f"Failed to remove {filepath} after {timeout} seconds.")
         return False
-    
     for pattern in patterns_to_clean:
         for filepath in glob.glob(f"./traffic_environment/sumo/{pattern}"):
             if any(str(sid) in filepath for sid in ([config["id"] for config in scenario_configs])):
                 wait_for_file_release(filepath)
-    
-    # Save best parameters to JSON file
     with open("best_optuna_params.json", "w") as f:
         json.dump(study.best_params, f)
-    
     return study.best_params
-  
+
 def get_optimal_params(algorithm, traffic_density, episode_length):
     """
-    Select optimal parameters based on traffic conditions and training requirements.
-    
-    Args:
-        algorithm (str): RL algorithm
-        traffic_density (str): Expected traffic density ("low", "medium", "high")
-        episode_length (str): Training episode length ("short", "medium", "long")
+    Select optimal parameters based on traffic conditions and training requirements. DQN only.
     """
-    base_params = ENHANCED_HYPERPARAMS[algorithm].copy()
-    
-    # Adjust based on traffic density[3][6]
+    base_params = ENHANCED_HYPERPARAMS["DQN"].copy()
     if traffic_density == "high":
-        # More exploration needed for complex scenarios
-        if algorithm == "DQN":
-            base_params["exploration_fraction"] = 0.2
-            base_params["exploration_final_eps"] = 0.05
-        base_params["learning_rate"] *= 0.5  # Slower learning for stability
-        
+        base_params["exploration_fraction"] = 0.2
+        base_params["exploration_final_eps"] = 0.05
+        base_params["learning_rate"] *= 0.5
     elif traffic_density == "low":
-        # Faster convergence possible
         base_params["learning_rate"] *= 1.5
-        if algorithm == "DQN":
-            base_params["exploration_fraction"] = 0.1
-    
-    # Adjust based on episode length
+        base_params["exploration_fraction"] = 0.1
     if episode_length == "long":
-        base_params["gamma"] = 0.999  # Higher discount for long-term rewards
+        base_params["gamma"] = 0.999
     elif episode_length == "short":
-        base_params["gamma"] = 0.95   # Lower discount for immediate rewards
-    
+        base_params["gamma"] = 0.95
     return base_params
 
 """ Classes """
