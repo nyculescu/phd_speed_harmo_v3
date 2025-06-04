@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 from collections import deque
 import pandas as pd
+import optuna
 
 # Configure logging
 logging.basicConfig(
@@ -346,6 +347,94 @@ def test_model(algorithm, reward_function):
     print(f"Total Reward: {total_reward:.2f}")
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
+
+def tune_hyperparameters(algorithm, reward_function, n_trials=50):
+    """
+    Hyperparameter tuning using Optuna for optimal performance.
+    
+    Args:
+        algorithm (str): RL algorithm to tune
+        reward_function (str): Reward function type  
+        n_trials (int): Number of optimization trials
+    """
+    
+    def objective(trial):
+        # Define search space based on algorithm[4][6]
+        if algorithm == "DQN":
+            params = {
+                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+                "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 200000]),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
+                "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000),
+                "exploration_fraction": trial.suggest_float("exploration_fraction", 0.05, 0.3),
+                "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
+                "gamma": trial.suggest_float("gamma", 0.95, 0.999),
+                "net_arch": trial.suggest_categorical("net_arch", 
+                    [[256, 256], [512, 256], [256, 256, 128], [512, 256, 128]])
+            }
+        elif algorithm == "PPO":
+            params = {
+                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+                "n_steps": trial.suggest_categorical("n_steps", [512, 1024, 2048, 4096]),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+                "gamma": trial.suggest_float("gamma", 0.95, 0.999),
+                "net_arch": trial.suggest_categorical("net_arch", 
+                    [[256, 256], [256, 128], [128, 128]])
+            }
+        
+        # Train model with suggested parameters
+        try:
+            # Use shorter episodes for tuning to save time[4]
+            reward = train_model(algorithm, reward_function, 
+                               num_of_episodes=2, 
+                               use_enhanced_params=False,
+                               custom_params=params)
+            return reward
+        except Exception as e:
+            logging.error(f"Trial failed: {e}")
+            return float('-inf')
+    
+    # Run optimization
+    study = optuna.create_study(direction='maximize')
+    study.optimize(objective, n_trials=n_trials)
+    
+    logging.info(f"Best parameters: {study.best_params}")
+    logging.info(f"Best value: {study.best_value}")
+    
+    return study.best_params
+
+def get_optimal_params(algorithm, traffic_density, episode_length):
+    """
+    Select optimal parameters based on traffic conditions and training requirements.
+    
+    Args:
+        algorithm (str): RL algorithm
+        traffic_density (str): Expected traffic density ("low", "medium", "high")
+        episode_length (str): Training episode length ("short", "medium", "long")
+    """
+    base_params = ENHANCED_HYPERPARAMS[algorithm].copy()
+    
+    # Adjust based on traffic density[3][6]
+    if traffic_density == "high":
+        # More exploration needed for complex scenarios
+        if algorithm == "DQN":
+            base_params["exploration_fraction"] = 0.2
+            base_params["exploration_final_eps"] = 0.05
+        base_params["learning_rate"] *= 0.5  # Slower learning for stability
+        
+    elif traffic_density == "low":
+        # Faster convergence possible
+        base_params["learning_rate"] *= 1.5
+        if algorithm == "DQN":
+            base_params["exploration_fraction"] = 0.1
+    
+    # Adjust based on episode length
+    if episode_length == "long":
+        base_params["gamma"] = 0.999  # Higher discount for long-term rewards
+    elif episode_length == "short":
+        base_params["gamma"] = 0.95   # Lower discount for immediate rewards
+    
+    return base_params
 
 """ Classes """
 class TrafficEnv(gym.Env):
@@ -1109,8 +1198,27 @@ if __name__ == '__main__':
     else:
         logging.info("SUMO environment is not set up correctly.")
 
+    option = 3
     algo_used = "DQN"
     reward_used = "balanced"
     create_sumocfg(algo_used)
-    train_model(algorithm=algo_used, reward_function=reward_used, use_enhanced_params=True)
+
+    if option == 1:
+        # Option 1: Use enhanced parameters directly
+        train_model(algorithm=algo_used, reward_function=reward_used, use_enhanced_params=True)
+    elif option == 2:
+        # Option 2: Use adaptive parameter selection
+        optimal_params = get_optimal_params(algorithm=algo_used, traffic_density="high", episode_length="long")
+        train_model(algorithm=algo_used, 
+                    reward_function=reward_used,
+                    use_enhanced_params=False,
+                    custom_params=optimal_params)
+    elif option == 3:
+        # Option 3: Run hyperparameter tuning first
+        best_params = tune_hyperparameters(algorithm=algo_used, reward_function=reward_used, n_trials=30)
+        train_model(algorithm=algo_used, 
+                    reward_function=reward_used,
+                    use_enhanced_params=False,
+                    custom_params=best_params)
+
     # test_model(algorithm=algo_used, reward_function=reward_used)
