@@ -23,6 +23,8 @@ from pathlib import Path
 from collections import deque
 import pandas as pd
 import optuna
+import glob
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -71,6 +73,9 @@ interval_length = 60 * interval_length_h
 sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
 
+HYPER_PARAM_SIM_LENGTH = 1800 # Simulation length for hyperparameter tuning [s]
+HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 60 # seconds for hyperparameter tuning
+HYPER_PARAM_MODEL_STEPS = 100
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
@@ -85,19 +90,37 @@ ENHANCED_HYPERPARAMS = {
         "batch_size": 64,
         "target_update_interval": 5000,
         "exploration_fraction": 0.15,
+        "exploration_initial_eps": 1.0,
         "exploration_final_eps": 0.02,
+        "learning_starts": 1000,
+        "train_freq": 4,
+        "gradient_steps": 1,
+        "tau": 1.0,
+        "gamma": 0.995,
         "net_arch": [512, 256, 128]
     },
     "PPO": {
         "learning_rate": 3e-4,
         "n_steps": 2048,
         "batch_size": 64,
+        "n_epochs": 10,
         "gamma": 0.995,
+        "gae_lambda": 0.95,
+        "clip_range": 0.2,
+        "ent_coef": 0.0,
+        "vf_coef": 0.5,
+        "max_grad_norm": 0.5,
         "net_arch": [256, 256]
     },
     "A2C": {
         "learning_rate": 7e-4,
+        "n_steps": 5,
         "gamma": 0.99,
+        "gae_lambda": 1.0,
+        "ent_coef": 0.0,
+        "vf_coef": 0.25,
+        "max_grad_norm": 0.5,
+        "normalize_advantage": False,
         "net_arch": [256, 128]
     }
 }
@@ -167,74 +190,100 @@ def train_model(algorithm,
                 num_of_episodes=7,
                 use_enhanced_params=True,
                 custom_params=None):
-    """
-    Train RL model using research-optimized hyperparameters.
+    """Fixed version with correct SB3 2.6.0 parameter names."""
     
-    Args:
-        algorithm (str): RL algorithm ("DQN", "A2C", "PPO")
-        reward_function (str): Reward function type
-        num_of_episodes (int): Training episodes
-        use_enhanced_params (bool): Use ENHANCED_HYPERPARAMS
-        custom_params (dict): Override specific hyperparameters
-    """
-
+    # Get enhanced parameters if enabled[1]
     if use_enhanced_params and algorithm in ENHANCED_HYPERPARAMS:
         params = ENHANCED_HYPERPARAMS[algorithm].copy()
         logging.info(f"Using enhanced hyperparameters for {algorithm}")
     else:
-        # Fallback to default parameters
-        params = {
-            "learning_rate": 1e-4,
-            "batch_size": 128,
-            "gamma": 0.99,
-            "net_arch": [256, 256, 128]
-        }
-        logging.warning(f"Using default hyperparameters for {algorithm}")
-
+        # Fallback with CORRECT parameter names for SB3 2.6.0
+        if algorithm == "DQN":
+            params = {
+                "learning_rate": 1e-4,
+                "buffer_size": 100000,
+                "batch_size": 128,
+                "target_update_interval": 1000,
+                "exploration_fraction": 0.1,
+                "exploration_initial_eps": 1.0,
+                "exploration_final_eps": 0.01,
+                "learning_starts": 1000,
+                "train_freq": 4,
+                "gradient_steps": 1,
+                "tau": 1.0,
+                "gamma": 0.99,
+                "net_arch": [256, 256, 128]
+            }
+        elif algorithm == "PPO":
+            params = {
+                "learning_rate": 3e-4,
+                "n_steps": 2048,
+                "batch_size": 64,
+                "n_epochs": 10,
+                "gamma": 0.99,
+                "gae_lambda": 0.95,
+                "clip_range": 0.2,
+                "ent_coef": 0.0,
+                "vf_coef": 0.5,
+                "max_grad_norm": 0.5,
+                "net_arch": [256, 256]
+            }
+        elif algorithm == "A2C":
+            params = {
+                "learning_rate": 7e-4,
+                "n_steps": 5,
+                "gamma": 0.99,
+                "gae_lambda": 1.0,
+                "ent_coef": 0.0,
+                "vf_coef": 0.25,
+                "max_grad_norm": 0.5,
+                "normalize_advantage": False,
+                "net_arch": [256, 128]
+            }
+    
+    # Override with custom parameters if provided
     if custom_params:
         params.update(custom_params)
         logging.info(f"Applied custom parameter overrides: {custom_params}")
-
-    steps_per_episode = 504000 // 60
+    
+    # Calculate timesteps and setup
+    steps_per_episode = 504000 // 60  
     total_timesteps = steps_per_episode * num_of_episodes
     eval_timesteps = steps_per_episode // 4
     
-    # model_name = f"{algorithm}_{reward_function}"
-    model_name = algorithm
+    model_name = f"{algorithm}_{reward_function}"
     log_dir = f"./logs/{model_name}/"
     model_dir = f"./rl_models/{model_name}/"
-    
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
     
-    # Select reward function
-    # reward_fn_map = {"mobility": "mobility", "safety": "safety", "balanced": "balanced"}
-    # reward_fn = reward_fn_map.get(reward_function)
-    # if not reward_fn:
-    #     raise ValueError("Invalid reward function name")
-    
+    # Create environments
     train_env = SubprocVecEnv([
         train_env_constructor(i, model_name, num_of_episodes, reward_function)
         for i in range(num_train_envs_per_model)
     ])
     env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function)])
     
-    # Model configuration
+    # Extract policy kwargs correctly
     policy_kwargs = dict(
-        net_arch=params["net_arch"], 
+        net_arch=params.pop("net_arch", [256, 256, 128]),  # Remove from params
         activation_fn=nn.ReLU
     )
     
-    # Initialize algorithm[3]
     if algorithm == "DQN":
         model = DQN("MlpPolicy", train_env, 
                    learning_rate=params["learning_rate"],
                    buffer_size=params["buffer_size"],
                    batch_size=params["batch_size"],
-                   gamma=params.get("gamma", 0.99),
                    target_update_interval=params["target_update_interval"],
                    exploration_fraction=params["exploration_fraction"],
+                   exploration_initial_eps=params["exploration_initial_eps"],
                    exploration_final_eps=params["exploration_final_eps"],
+                   learning_starts=params["learning_starts"],
+                   train_freq=params["train_freq"],
+                   gradient_steps=params["gradient_steps"],
+                   tau=params["tau"],
+                   gamma=params["gamma"],
                    policy_kwargs=policy_kwargs,
                    verbose=1, tensorboard_log=log_dir, device='cuda')
                    
@@ -243,24 +292,48 @@ def train_model(algorithm,
                    learning_rate=params["learning_rate"],
                    n_steps=params["n_steps"],
                    batch_size=params["batch_size"],
+                   n_epochs=params["n_epochs"],
                    gamma=params["gamma"],
+                   gae_lambda=params["gae_lambda"],
+                   clip_range=params["clip_range"],
+                   ent_coef=params["ent_coef"],
+                   vf_coef=params["vf_coef"],
+                   max_grad_norm=params["max_grad_norm"],
                    policy_kwargs=policy_kwargs,
                    verbose=1, tensorboard_log=log_dir, device='cuda')
                    
     elif algorithm == "A2C":
         model = A2C("MlpPolicy", train_env,
                    learning_rate=params["learning_rate"],
+                   n_steps=params["n_steps"],
                    gamma=params["gamma"],
+                   gae_lambda=params["gae_lambda"],
+                   ent_coef=params["ent_coef"],
+                   vf_coef=params["vf_coef"],
+                   max_grad_norm=params["max_grad_norm"],
+                   normalize_advantage=params["normalize_advantage"],
                    policy_kwargs=policy_kwargs,
                    verbose=1, tensorboard_log=log_dir, device='cuda')
     
-    # Configure callbacks for proper evaluation[3]
+    # Log the parameters being used
+    logging.info(f"Training {algorithm} with parameters: {params}")
+    
+    # Configure logger
+    model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
+    
+    # Callbacks (same as before)
     checkpoint_cb = CheckpointCallback(
         save_freq=eval_timesteps,
         save_path=model_dir,
         name_prefix=f"rl_model_{model_name}",
         save_replay_buffer=True,
         save_vecnormalize=True,
+        verbose=1
+    )
+    
+    no_improve_cb = StopTrainingOnNoModelImprovement(
+        max_no_improvement_evals=1,
+        min_evals=3,
         verbose=1
     )
     
@@ -272,19 +345,17 @@ def train_model(algorithm,
         n_eval_episodes=1,
         deterministic=True,
         render=False,
+        callback_after_eval=no_improve_cb,
         verbose=1
     )
     
-    # Training with proper timestep management[3]
+    # Training loop
     try:
-        logging.info(f"Starting training for {total_timesteps} timesteps ({num_of_episodes} episodes)")
         model.learn(total_timesteps=total_timesteps,
                     callback=[checkpoint_cb, eval_cb],
                     progress_bar=True,
                     reset_num_timesteps=False)
-        
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
-        logging.info("Training completed successfully")
         
     except KeyboardInterrupt:
         print("Training interrupted by user.")
@@ -348,61 +419,197 @@ def test_model(algorithm, reward_function):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=50):
+def tune_hyperparameters(algorithm, reward_function, n_trials=20):
     """
-    Hyperparameter tuning using Optuna for optimal performance.
+    Efficient hyperparameter tuning using existing infrastructure.
+    Uses different {id} values to create diverse scenarios.
+    """
     
-    Args:
-        algorithm (str): RL algorithm to tune
-        reward_function (str): Reward function type  
-        n_trials (int): Number of optimization trials
+    # PRE-GENERATE diverse scenarios using existing flow generation
+    scenario_configs = [
+        {"id": 100, "demand": 2000, "pattern": "uniform"},
+        {"id": 101, "demand": 2500, "pattern": "uniform"}, 
+        {"id": 102, "demand": 3000, "pattern": "uniform"}
+    ]
+    
+    model_name = f"{algorithm}_tune"
+    
+    # Define sumocfg_template and output_dir here or ensure they are accessible
+    output_dir_sumo = Path("./traffic_environment/sumo")
+    output_dir_sumo.mkdir(parents=True, exist_ok=True)
+    
+    sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
+    <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+        <input>
+            <net-file value="3_2_merge.net.xml"/>
+            <route-files value="generated_flows_{model}_{index}.rou.xml"/>
+            <additional-files value="loops_detectors.add.xml"/>
+            <gui-settings-file value="colored.view.xml"/>
+        </input>
+        <processing>
+            <lateral-resolution value="0.2"/>
+        </processing>
+    </configuration>
     """
+
+    # Generate scenarios and their specific sumocfg files
+    for config in scenario_configs:
+        flow_generation_fix_num_veh(
+            model_name, 
+            config["id"],  # Use unique ID for each scenario's flow file
+            config["demand"], 
+            num_of_hrs=1,  # Shorter episodes for tuning
+            num_of_episodes=1, 
+            num_of_intervals=1, 
+            op_mode="train"
+        )
+        
+        # Create the specific sumocfg file for this tuning scenario
+        cfg_filename = f"3_2_merge_{model_name}_{config['id']}.sumocfg"
+        cfg_filepath = output_dir_sumo / cfg_filename
+        # The {model} in template is model_name (e.g. DQN_tune)
+        # The {index} in template is config['id'] (e.g. 100)
+        cfg_content = sumocfg_template.format(model=model_name, index=config['id'])
+        with open(cfg_filepath, 'w') as file:
+            file.write(cfg_content)
+        logging.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
     
     def objective(trial):
-        # Define search space based on algorithm[4][6]
+        policy_kwargs = {}
         if algorithm == "DQN":
+            # Suggest net_arch as strings
+            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["256,256", "512,256", "256,128,64"]) # Example string representations
+            # Parse the string suggestion into a list of integers
+            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
+            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+            
             params = {
                 "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
                 "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 200000]),
-                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
                 "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000),
                 "exploration_fraction": trial.suggest_float("exploration_fraction", 0.05, 0.3),
+                "exploration_initial_eps": trial.suggest_float("exploration_initial_eps", 0.5, 1.0),
                 "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
+                "learning_starts": trial.suggest_categorical("learning_starts", [1000, 5000]),
+                "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]),
+                "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]), # -1 means as many as train_freq
+                "tau": trial.suggest_float("tau", 0.5, 1.0),
                 "gamma": trial.suggest_float("gamma", 0.95, 0.999),
-                "net_arch": trial.suggest_categorical("net_arch", 
-                    [[256, 256], [512, 256], [256, 256, 128], [512, 256, 128]])
+                # "net_arch" is now handled by policy_kwargs
             }
         elif algorithm == "PPO":
+            # Suggest net_arch as strings for PPO
+            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64,64", "128,128", "256,256"])
+            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
+            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
             params = {
                 "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-                "n_steps": trial.suggest_categorical("n_steps", [512, 1024, 2048, 4096]),
-                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-                "gamma": trial.suggest_float("gamma", 0.95, 0.999),
-                "net_arch": trial.suggest_categorical("net_arch", 
-                    [[256, 256], [256, 128], [128, 128]])
+                "n_steps": trial.suggest_categorical("n_steps", [128, 512, 1024, 2048]),
+                "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
+                "n_epochs": trial.suggest_int("n_epochs", 5, 20),
+                "gamma": trial.suggest_float("gamma", 0.9, 0.999),
+                "gae_lambda": trial.suggest_float("gae_lambda", 0.9, 0.99),
+                "clip_range": trial.suggest_float("clip_range", 0.1, 0.3),
+                "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.1),
+                "vf_coef": trial.suggest_float("vf_coef", 0.2, 0.8),
+                "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
+            }
+        elif algorithm == "A2C":
+            # Suggest net_arch as strings for A2C
+            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64,64", "128,128", "256,128"])
+            net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
+            policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+            params = {
+                "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
+                "n_steps": trial.suggest_categorical("n_steps", [5, 10, 20]),
+                "gamma": trial.suggest_float("gamma", 0.9, 0.999),
+                "gae_lambda": trial.suggest_float("gae_lambda", 0.9, 1.0),
+                "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.1),
+                "vf_coef": trial.suggest_float("vf_coef", 0.2, 0.8),
+                "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
+                "normalize_advantage": trial.suggest_categorical("normalize_advantage", [True, False]),
             }
         
-        # Train model with suggested parameters
-        try:
-            # Use shorter episodes for tuning to save time[4]
-            reward = train_model(algorithm, reward_function, 
-                               num_of_episodes=2, 
-                               use_enhanced_params=False,
-                               custom_params=params)
-            return reward
-        except Exception as e:
-            logging.error(f"Trial failed: {e}")
-            return float('-inf')
+        # Test on multiple scenarios for robustness
+        total_reward = 0
+        
+        for config in scenario_configs:
+            try:
+                env = TrafficEnvForTuning(  # Use specialized environment
+                    port=base_train_sumo_port + trial.number + config["id"],
+                    model_name=model_name,
+                    model_idx=config["id"],
+                    op_mode="train",
+                    base_gen_car_distrib=["uniform", config["demand"]],
+                    num_of_episodes=1,
+                    reward_fn=reward_function,
+                    skip_flow_generation=True 
+                )
+
+                # Quick training and evaluation
+                if algorithm == "DQN":
+                    model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
+                elif algorithm == "PPO":
+                    model = PPO("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
+                elif algorithm == "A2C":
+                    model = A2C("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
+
+                # Shorter training for hyperparameter tuning
+                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False)
+
+                # Shorter evaluation
+                obs, _ = env.reset()
+                episode_reward = 0
+                for step in range(HYPER_PARAM_MODEL_STEPS):
+                    action, _ = model.predict(obs, deterministic=True)
+                    obs, reward, done, truncated, _ = env.step(action)
+                    episode_reward += reward
+                    if done or truncated:
+                        break
+                
+                env.close()
+                total_reward += episode_reward
+                
+            except Exception as e:
+                logging.error(f"Trial {trial.number} scenario {config['id']} failed: {e}")
+                # Optionally, penalize this trial heavily or handle differently
+                return float('-inf') # Fail the trial if any scenario fails
+        
+        return total_reward / len(scenario_configs)
     
     # Run optimization
     study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=n_trials)
+    study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
     
-    logging.info(f"Best parameters: {study.best_params}")
-    logging.info(f"Best value: {study.best_value}")
+    # Cleanup scenario files
+    """Clean up temporary files created for hyperparameter tuning."""
+    patterns_to_clean = [
+        f"generated_flows_{model_name}_*.rou.xml",
+        f"3_2_merge_{model_name}_*.sumocfg"
+    ]
+    
+    def wait_for_file_release(filepath, timeout=5):
+        """Wait up to `timeout` seconds for a file to be released by all processes."""
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                os.remove(filepath)
+                logging.debug(f"Cleaned up: {filepath}")
+                return True
+            except Exception as e:
+                logging.warning(f"Could not remove {filepath}: {e}")
+                time.sleep(1)
+        logging.error(f"Failed to remove {filepath} after {timeout} seconds.")
+        return False
+    
+    for pattern in patterns_to_clean:
+        for filepath in glob.glob(f"./traffic_environment/sumo/{pattern}"):
+            if any(str(sid) in filepath for sid in ([config["id"] for config in scenario_configs])):
+                wait_for_file_release(filepath)
     
     return study.best_params
-
+  
 def get_optimal_params(algorithm, traffic_density, episode_length):
     """
     Select optimal parameters based on traffic conditions and training requirements.
@@ -538,7 +745,7 @@ class TrafficEnv(gym.Env):
                     "--remote-port", str(port),
                     "--step-length=0.1",
                     "--default.action-step-length=0.2",
-                    f"--end={self.sim_length}",  # Set proper end time[2]
+                    f"--end={self.sim_length}",
                     "--quit-on-end"
                 ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
@@ -750,7 +957,14 @@ class TrafficEnv(gym.Env):
                 logging.debug("SUMO was already closed")
             finally:
                 self.is_sumo_initialized = False
-                self.sumo_process = None
+                if self.sumo_process is not None:
+                    try:
+                        self.sumo_process.terminate()
+                        self.sumo_process.wait(timeout=5)
+                        logging.debug("SUMO process terminated and waited for exit.")
+                    except Exception as e:
+                        logging.warning(f"Error terminating SUMO process: {e}")
+                    self.sumo_process = None
 
     def _calculate_reward(self, invalid_action_penalty):
         """
@@ -1186,6 +1400,229 @@ class TensorboardCallback(BaseCallback):
         
         return True  # Continue running the environment
 
+class TrafficEnvForTuning(TrafficEnv):
+    """
+    Specialized TrafficEnv for hyperparameter tuning that uses pre-generated flow files.
+    Inherits from TrafficEnv but skips flow generation to use scenario-specific files.
+    """
+    
+    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
+                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True):
+        """
+        Initialize TrafficEnvForTuning.
+        
+        Args:
+            skip_flow_generation (bool): If True, uses pre-generated flow files
+            Other args: Same as TrafficEnv parent class
+        """
+        # Initialize parent class
+        super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
+                        num_of_episodes, reward_fn)
+        
+        self.skip_flow_generation = skip_flow_generation
+        
+        # Override simulation length for faster tuning
+        if self.operation_mode == "train":
+            # Shorter episodes for hyperparameter tuning (5 minutes instead of full simulation)
+            self.sim_length = HYPER_PARAM_SIM_LENGTH
+
+        # Verify pre-generated files exist
+        if self.skip_flow_generation:
+            self._verify_flow_files()
+    
+    def _verify_flow_files(self):
+        """Verify that required pre-generated flow files exist."""
+        expected_flow_file = f"./traffic_environment/sumo/generated_flows_{self.model_name}_{self.model_idx}.rou.xml"
+        expected_config_file = f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg"
+        
+        if not os.path.exists(expected_flow_file):
+            logging.error(f"Missing pre-generated flow file: {expected_flow_file}")
+            raise FileNotFoundError(f"Pre-generated flow file not found: {expected_flow_file}")
+        
+        if not os.path.exists(expected_config_file):
+            logging.error(f"Missing pre-generated config file: {expected_config_file}")
+            raise FileNotFoundError(f"Pre-generated config file not found: {expected_config_file}")
+        
+        logging.debug(f"Verified pre-generated files for scenario {self.model_idx}")
+    
+    def start_sumo(self):
+        """
+        Modified SUMO startup that optionally skips flow generation.
+        Uses pre-generated scenario-specific flow files for consistent tuning.
+        """
+        # Check if SUMO is already running and responsive
+        if self.is_sumo_initialized and self.sumo_process:
+            try:
+                traci.simulation.getTime()
+                logging.debug("SUMO is already running and responsive")
+                return
+            except (FatalTraCIError, TraCIException):
+                logging.warning("SUMO process exists but not responsive, restarting...")
+                self.is_sumo_initialized = False
+        
+        # Clean shutdown if needed
+        if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
+            self.close_sumo("Restarting SUMO for tuning initialization")
+            sleep(1)  # Shorter sleep for faster tuning
+        
+        for attempt in range(self.sumo_max_retries):
+            try:
+                port = self.port
+                
+                # Always close any existing TraCI connection before starting a new one
+                if traci.isLoaded():
+                    try:
+                        traci.close()
+                        logging.debug("Closed existing TraCI connection before starting new SUMO instance.")
+                    except Exception as e:
+                        logging.warning(f"Error closing previous TraCI connection: {e}")
+
+                # **KEY MODIFICATION**: Conditional flow generation
+                if not self.skip_flow_generation:
+                    # Generate traffic flow (original behavior)
+                    if self.gen_car_distrib[0] == 'uniform':
+                        flow_generation_fix_num_veh(self.model_name, self.model_idx,
+                                                  self.gen_car_distrib[1],
+                                                  int(interval_length // 60),
+                                                  self.num_of_episodes,
+                                                  num_of_intervals,
+                                                  self.operation_mode)
+                    elif self.gen_car_distrib[0] == 'bimodal':
+                        flow_generation(self.model_name, self.model_idx,
+                                      bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
+                else:
+                    # Use pre-generated files (tuning mode)
+                    expected_flow_file = f"generated_flows_{self.model_name}_{self.model_idx}.rou.xml"
+                    logging.debug(f"Using pre-generated flow file: {expected_flow_file}")
+                
+                # Start SUMO with appropriate configuration
+                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
+                self.sumo_process = subprocess.Popen([
+                    sumoBinary, "-c",
+                    f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg",
+                    '--start',
+                    "--default.emergencydecel=7",
+                    '--random-depart-offset=3600',
+                    "--remote-port", str(port),
+                    "--step-length=0.1",
+                    "--default.action-step-length=0.2",
+                    f"--end={self.sim_length}",
+                    "--quit-on-end"
+                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                logging.info(f"Connecting to SUMO on port {port} for tuning scenario {self.model_idx}")
+                traci.init(port=port)
+                logging.info(f"Successfully connected to SUMO for {self.sim_length}s tuning simulation")
+                
+                self.is_sumo_initialized = True
+                break
+                
+            except (FatalTraCIError, TraCIException) as e:
+                logging.error(f"Tuning startup attempt {attempt + 1} failed: {e}")
+                self.close_sumo("Failed to start SUMO for tuning")
+                if attempt < self.sumo_max_retries - 1:
+                    sleep(1)  # Shorter retry delay for tuning
+                else:
+                    raise e
+    
+    def step(self, action):
+        """
+        Modified step function optimized for hyperparameter tuning.
+        Maintains all functionality but with optimized logging and faster termination.
+        """
+        # Call parent step method
+        observation, reward, done, truncated, info = super().step(action)
+        
+        # **TUNING OPTIMIZATION**: Early termination for clearly poor performers
+        if hasattr(self, '_tuning_step_count'):
+            self._tuning_step_count += 1
+        else:
+            self._tuning_step_count = 1
+        
+        # Early termination if performance is clearly poor after 50 steps
+        if self._tuning_step_count > 50:
+            if hasattr(self, '_cumulative_reward'):
+                self._cumulative_reward += reward
+            else:
+                self._cumulative_reward = reward
+            
+            # If average reward is very negative, terminate early
+            avg_reward = self._cumulative_reward / self._tuning_step_count
+            if avg_reward < -5:  # Threshold for clearly poor performance
+                logging.debug(f"Early termination for poor performance: avg_reward={avg_reward:.2f}")
+                done = True
+        else:
+            if hasattr(self, '_cumulative_reward'):
+                self._cumulative_reward += reward
+            else:
+                self._cumulative_reward = reward
+        
+        return observation, reward, done, truncated, info
+    
+    def reset(self, seed=None, options=None):
+        """Reset environment and tuning-specific counters."""
+        # Reset tuning counters
+        self._tuning_step_count = 0
+        self._cumulative_reward = 0.0
+        
+        # Call parent reset
+        return super().reset(seed, options)
+    
+    def close_sumo(self, reason):
+        """Modified close method with minimal logging for tuning."""
+        logging.debug(f"Closing SUMO for tuning: {reason}")
+        
+        # Save minimal data for tuning (optional)
+        if hasattr(self, 'logger') and len(self.logger.data) > 0:
+            try:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"tuning_data_{self.model_name}_{self.model_idx}_{timestamp}.csv"
+                # Save only if significant data collected
+                if len(self.logger.data) > 10:
+                    self.logger.save_to_csv(filename, include_summary=False)
+            except Exception as e:
+                logging.debug(f"Could not save tuning data: {e}")
+        
+        # Standard SUMO closing procedure
+        if self.is_sumo_initialized:
+            try:
+                traci.close()
+                logging.debug(f"SUMO closed for tuning: {reason}")
+            except (FatalTraCIError, TraCIException):
+                logging.debug("SUMO was already closed during tuning")
+            finally:
+                self.is_sumo_initialized = False
+                # --- ADD THIS BLOCK ---
+                if self.sumo_process is not None:
+                    try:
+                        self.sumo_process.terminate()
+                        self.sumo_process.wait(timeout=5)
+                        logging.debug("SUMO process terminated and waited for exit.")
+                    except Exception as e:
+                        logging.warning(f"Error terminating SUMO process: {e}")
+                    self.sumo_process = None
+                # --- END BLOCK ---
+    
+    def get_tuning_metrics(self):
+        """
+        Get metrics specifically useful for hyperparameter tuning.
+        
+        Returns:
+            dict: Tuning-relevant metrics
+        """
+        metrics = {
+            'steps_completed': getattr(self, '_tuning_step_count', 0),
+            'cumulative_reward': getattr(self, '_cumulative_reward', 0.0),
+            'avg_reward': getattr(self, '_cumulative_reward', 0.0) / max(getattr(self, '_tuning_step_count', 1), 1),
+            'current_flow': self.flow_downstream,
+            'current_occupancy': self.occupancy_upstream,
+            'queue_length': self.queue_length_upstream,
+            'speed_limit': self.current_speed_limit,
+            'scenario_id': self.model_idx
+        }
+        return metrics
+
+""" Main entry point for running the DRL VSL environment with SUMO. """
 if __name__ == '__main__':
     # Suppress matplotlib debug output
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -1201,24 +1638,43 @@ if __name__ == '__main__':
     option = 3
     algo_used = "DQN"
     reward_used = "balanced"
-    create_sumocfg(algo_used)
+    
+    # Consistent model name for config generation
+    config_model_name = f"{algo_used}_{reward_used}"
 
     if option == 1:
         # Option 1: Use enhanced parameters directly
+        create_sumocfg(config_model_name)
         train_model(algorithm=algo_used, reward_function=reward_used, use_enhanced_params=True)
     elif option == 2:
         # Option 2: Use adaptive parameter selection
         optimal_params = get_optimal_params(algorithm=algo_used, traffic_density="high", episode_length="long")
+        create_sumocfg(config_model_name)
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
                     custom_params=optimal_params)
     elif option == 3:
         # Option 3: Run hyperparameter tuning first
-        best_params = tune_hyperparameters(algorithm=algo_used, reward_function=reward_used, n_trials=30)
+        best_params = tune_hyperparameters(algorithm=algo_used, 
+                                           reward_function=reward_used, 
+                                           n_trials=15)
+        create_sumocfg(config_model_name) # Create configs for the main training after tuning
+        # After Optuna tuning, before train_model
+        if "net_arch_str" in best_params:
+            net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
+            best_params["net_arch"] = net_arch_list
+            del best_params["net_arch_str"]
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
                     custom_params=best_params)
 
+    # Evaluate the trained model
     # test_model(algorithm=algo_used, reward_function=reward_used)
+
+"""
+Limitations and Future Work:
+- Accepted error: "ERROR - Failed to remove ./traffic_environment/sumo\generated_flows_DQN_tune_102.rou.xml after 5 seconds."
+- 
+"""
