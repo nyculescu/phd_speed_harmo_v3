@@ -730,37 +730,50 @@ class TrafficEnv(gym.Env):
         # Options: "all_vehicles", "electric_only", "lane_only"
         self.vsl_enforcement = vsl_enforcement
         
+        # Aattributes for start_sumo customization
+        self._sumo_start_context_prefix = ""  # e.g., "Tuning " for the child class
+        self._default_sumo_binary_for_env = sumoBinary # Default for TrafficEnv
+        self._sumo_retry_sleep_func = lambda attempt, max_retries: max_retries + attempt # Default retry logic
+
+    def _get_sumo_log_identifier(self):
+        """Helper to get a consistent identifier for SUMO instance logging."""
+        # For TrafficEnvForTuning, effective_model_name_for_files includes "_tune_"
+        # and effective_model_idx_for_files is the scenario_id.
+        # For TrafficEnv, these are the main model name and sub-env index.
+        return f"{self._sumo_start_context_prefix}{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}"
+    
     def start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
+        log_id = self._get_sumo_log_identifier()
+
         if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             try:
                 traci.simulation.getTime()
-                logging.debug(f"SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) is already running and responsive.")
+                logging.debug(f"SUMO ({log_id}) is already running and responsive.")
                 return
             except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
-                logging.warning(f"SUMO process ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) exists but not responsive, restarting...")
+                logging.warning(f"SUMO process ({log_id}) exists but not responsive, restarting...")
                 self.is_sumo_initialized = False # Mark for restart
         
         if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            self.close_sumo(f"Restarting SUMO for initialization ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files})")
+            self.close_sumo(f"Restarting SUMO for initialization ({log_id})")
             sleep(3) # Give a bit more time for resources to free up
         elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
-            logging.debug(f"SUMO process handle existed for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files} but PID was not found. Clearing handle.")
+            logging.debug(f"SUMO process handle existed for {log_id} but PID was not found. Clearing handle.")
             self.sumo_process = None # Clear stale handle
 
-        # Ensure TraCI is not connected from a previous attempt or stale state
         if traci.isLoaded():
             try:
                 traci.close(wait=False)
-                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.")
+                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for {log_id}.")
             except Exception as e:
-                logging.warning(f"Error closing previous TraCI connection for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files}: {e}")
+                logging.warning(f"Error closing previous TraCI connection for {log_id}: {e}")
         
         for attempt in range(self.sumo_max_retries):
             try:
                 port = self.port
                 
-                if not self.skip_flow_generation: # skip_flow_generation attribute for TrafficEnvForTuning
+                if not self.skip_flow_generation:
                     if self.gen_car_distrib[0] == 'uniform':
                         flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
                                                     self.gen_car_distrib[1],
@@ -772,7 +785,7 @@ class TrafficEnv(gym.Env):
                         flow_generation(self.effective_model_name_for_files, self.effective_model_idx_for_files,
                                         bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
                 
-                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else sumoBinary
+                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
                 sumo_cmd = [
                     current_sumo_binary, "-c",
@@ -785,27 +798,26 @@ class TrafficEnv(gym.Env):
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
                     "--quit-on-end",
-                    "--no-step-log", # Reduce SUMO verbosity
-                    "--no-warnings"  # Reduce SUMO verbosity
+                    "--no-step-log", 
+                    "--no-warnings"  
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                logging.info(f"Attempting to connect to SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on port {port}")
-                # Add a small delay before traci.init, sometimes helps with rapid restarts
+                logging.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
                 time.sleep(0.5) 
-                traci.init(port=port, numRetries=5, host='127.0.0.1') # Added numRetries and host
-                logging.info(f"Successfully connected to SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on port {port} for {self.sim_length}s simulation")
+                traci.init(port=port, numRetries=5, host='127.0.0.1')
+                logging.info(f"Successfully connected to SUMO ({log_id}) on port {port} for {self.sim_length}s simulation")
                 self.is_sumo_initialized = True
                 break
                 
-            except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e: # Added ConnectionRefusedError
-                logging.error(f"Attempt {attempt + 1} to start/connect SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) failed: {e}")
-                self.close_sumo(f"Failed to start/connect SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on attempt {attempt+1}")
+            except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e:
+                logging.error(f"Attempt {attempt + 1} to start/connect SUMO ({log_id}) failed: {e}")
+                self.close_sumo(f"Failed to start/connect SUMO ({log_id}) on attempt {attempt+1}")
                 if attempt < self.sumo_max_retries - 1:
-                    sleep(self.sumo_max_retries + attempt) # Increase sleep time for subsequent retries
+                    sleep(self._sumo_retry_sleep_func(attempt, self.sumo_max_retries)) # Use customized retry sleep
                 else:
-                    logging.error(f"Max retries reached for starting SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}). Raising exception.")
+                    logging.error(f"Max retries reached for starting SUMO ({log_id}). Raising exception.")
                     raise e
 
     def step(self, action):
@@ -1532,15 +1544,18 @@ class TrafficEnvForTuning(TrafficEnv):
         super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
                         num_of_episodes, reward_fn, vsl_enforcement, sumo_binary_path_override)
         
-        self.skip_flow_generation = skip_flow_generation
+        self.skip_flow_generation = skip_flow_generation # This is the primary flag
         
         if self.operation_mode == "train": # This is "tuning" mode
             self.sim_length = HYPER_PARAM_SIM_LENGTH
 
-        if self.skip_flow_generation:
-            self._verify_flow_files()
+        # Override customization attributes from parent for tuning context
+        self._sumo_start_context_prefix = "Tuning "
+        # If sumo_binary_path_override is provided, it's used. Otherwise, tuning defaults to no-GUI.
+        self._default_sumo_binary_for_env = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
+        # Tuning uses a different (potentially shorter) retry sleep logic
+        self._sumo_retry_sleep_func = lambda attempt, max_retries_param_ignored: 1 + attempt 
 
-        # Verify pre-generated files exist
         if self.skip_flow_generation:
             self._verify_flow_files()
     
@@ -1563,84 +1578,16 @@ class TrafficEnvForTuning(TrafficEnv):
         """
         Modified SUMO startup that optionally skips flow generation.
         Uses pre-generated scenario-specific flow files for consistent tuning.
+        Relies on parent's start_sumo with overridden attributes.
         """
-        if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            try:
-                traci.simulation.getTime()
-                logging.debug(f"SUMO (Tuning {self.model_name}_{self.model_idx}) is already running and responsive.")
-                return
-            except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
-                logging.warning(f"SUMO process (Tuning {self.model_name}_{self.model_idx}) exists but not responsive, restarting...")
-                self.is_sumo_initialized = False
+        if self.skip_flow_generation:
+            # Log specific message for tuning if using pre-generated files
+            logging.debug(f"Using pre-generated flow file for {self._get_sumo_log_identifier()}")
         
-        if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            self.close_sumo(f"Restarting SUMO for tuning initialization ({self.model_name}_{self.model_idx})")
-            sleep(2) # Shorter sleep for tuning, but close_sumo might take time
-        elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
-            logging.debug(f"SUMO process handle existed for Tuning {self.model_name}_{self.model_idx} but PID was not found. Clearing handle.")
-            self.sumo_process = None
-
-
-        if traci.isLoaded():
-            try:
-                traci.close(wait=False)
-                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for Tuning {self.model_name}_{self.model_idx}.")
-            except Exception as e:
-                logging.warning(f"Error closing previous TraCI connection for Tuning {self.model_name}_{self.model_idx}: {e}")
-        
-        for attempt in range(self.sumo_max_retries):
-            try:
-                port = self.port
-                
-                if not self.skip_flow_generation:
-                    if self.gen_car_distrib[0] == 'uniform':
-                        flow_generation_fix_num_veh(self.model_name, self.model_idx,
-                                                  self.gen_car_distrib[1],
-                                                  int(interval_length // 60),
-                                                  self.num_of_episodes,
-                                                  num_of_intervals,
-                                                  self.operation_mode)
-                    elif self.gen_car_distrib[0] == 'bimodal':
-                        flow_generation(self.model_name, self.model_idx,
-                                      bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
-                else:
-                    logging.debug(f"Using pre-generated flow file for Tuning {self.model_name}_{self.model_idx}")
-                
-                # Use sumo_binary_path_override or default to non-GUI for tuning
-                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
-
-                sumo_cmd = [
-                    current_sumo_binary, "-c",
-                    f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg",
-                    '--start',
-                    "--default.emergencydecel=7",
-                    '--random-depart-offset=3600',
-                    "--remote-port", str(port),
-                    "--step-length=0.1",
-                    "--default.action-step-length=0.2",
-                    f"--end={self.sim_length}",
-                    "--quit-on-end",
-                    "--no-step-log",
-                    "--no-warnings"
-                ]
-                self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                logging.info(f"Attempting to connect to SUMO (Tuning {self.model_name}_{self.model_idx}) on port {port}")
-                time.sleep(0.5)
-                traci.init(port=port, numRetries=5, host='127.0.0.1')
-                logging.info(f"Successfully connected to SUMO (Tuning {self.model_name}_{self.model_idx}) for {self.sim_length}s simulation")
-                
-                self.is_sumo_initialized = True
-                break
-                
-            except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e:
-                logging.error(f"Tuning startup attempt {attempt + 1} for {self.model_name}_{self.model_idx} failed: {e}")
-                self.close_sumo(f"Failed to start SUMO for tuning ({self.model_name}_{self.model_idx}) on attempt {attempt+1}")
-                if attempt < self.sumo_max_retries - 1:
-                    sleep(1 + attempt) # Shorter, but increasing, retry delay for tuning
-                else:
-                    logging.error(f"Max retries reached for starting SUMO (Tuning {self.model_name}_{self.model_idx}). Raising exception.")
-                    raise e
+        # All other logic is now handled by the parent's start_sumo
+        # using the overridden attributes (_sumo_start_context_prefix, 
+        # _default_sumo_binary_for_env, _sumo_retry_sleep_func)
+        super().start_sumo()
     
     def step(self, action):
         """
