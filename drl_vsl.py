@@ -24,6 +24,8 @@ import optuna
 import glob
 import time
 import json
+import multiprocessing as mp # Added for parallel processing
+from itertools import product # Added for generating combinations
 
 # Configure logging
 logging.basicConfig(
@@ -69,8 +71,9 @@ num_test_envs_per_model = 1
 num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
-sumoExecutable = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
-sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
+sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
+sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
+sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui) # Default to GUI
 
 HYPER_PARAM_SIM_LENGTH = 1800 # Simulation length for hyperparameter tuning [s]
 HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 60 # seconds for hyperparameter tuning
@@ -80,6 +83,7 @@ MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
 MAX_QUEUE_LENGTH = 500 # vehicles (adjust based on your segment length)
 OBSERVATION_SPACE_SIZE = 7
+PROGRESS_BAR_ENABLED = False  # Enable progress bar for training
 
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
@@ -100,7 +104,7 @@ ENHANCED_HYPERPARAMS = {
     }
 }
 
-def create_sumocfg(model, vsl_enforcement="lane_only"):  # Add vsl_enforcement parameter
+def create_sumocfg(model, vsl_enforcement="lane_only", model_idx_offset=0):
     sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
@@ -122,12 +126,13 @@ def create_sumocfg(model, vsl_enforcement="lane_only"):  # Add vsl_enforcement p
 
     # Generate configuration files
     for i in range(num_envs_per_model):
-        # Create filename based on model and environment index
-        filename = f"3_2_merge_{model}_{i}.sumocfg"
+        # Ensure index is unique even if model_name is the same for SubprocVecEnv instances
+        actual_index = i + model_idx_offset
+        filename = f"3_2_merge_{model}_{actual_index}.sumocfg"
         filepath = os.path.join(output_dir, filename)
         
         # Format the template with current model and index
-        content = sumocfg_template.format(model=model, index=i)
+        content = sumocfg_template.format(model=model, index=actual_index)
         
         # Write the content to the file
         with open(filepath, 'w') as file:
@@ -135,29 +140,39 @@ def create_sumocfg(model, vsl_enforcement="lane_only"):  # Add vsl_enforcement p
         
         logging.debug(f"Created {filepath}")
 
-def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="lane_only"):
+def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
-        env = Monitor(TrafficEnv(port=base_train_sumo_port + idx,
+        # Use provided port or default from global, adjusted by idx
+        port_for_env = sumo_port_to_use if sumo_port_to_use is not None else base_train_sumo_port + idx
+        
+        env = Monitor(TrafficEnv(port=port_for_env,
                                 model_name=model_name,
-                                model_idx=idx,
+                                model_idx=idx, # model_idx is specific to this sub-process env
                                 op_mode="train",
                                 base_gen_car_distrib=["uniform", 2000],
                                 num_of_episodes=num_of_episodes,
                                 reward_fn=reward_fn,
-                                vsl_enforcement=vsl_enforcement))
+                                vsl_enforcement=vsl_enforcement,
+                                sumo_binary_path_override=sumo_binary_to_use))
         return env
     return _init
 
-def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only"):
+def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
-        env = Monitor(TimeLimit(TrafficEnv(port=base_eval_sumo_port,
-                                            model_name=model_name,
-                                            model_idx=num_envs_per_model - 1,
+        # Use provided port or default from global
+        port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else base_eval_sumo_port
+        # model_idx for eval env can be fixed, e.g., num_envs_per_model -1, or a dedicated high number
+        eval_model_idx = num_envs_per_model -1 # Or a distinct ID like 999
+
+        env = Monitor(TimeLimit(TrafficEnv(port=port_for_eval_env,
+                                            model_name=model_name, # model_name is unique per parallel run
+                                            model_idx=eval_model_idx, 
                                             op_mode="eval",
                                             base_gen_car_distrib=["uniform", 3000],
                                             num_of_episodes=1,
                                             reward_fn=reward_fn,
-                                            vsl_enforcement=vsl_enforcement),
+                                            vsl_enforcement=vsl_enforcement,
+                                            sumo_binary_path_override=sumo_binary_to_use),
                                 max_episode_steps=interval_length))
         return env
     return _init
@@ -167,7 +182,10 @@ def train_model(algorithm,
                 num_of_episodes=7,
                 use_enhanced_params=True,
                 custom_params=None,
-                vsl_enforcement="lane_only"):
+                vsl_enforcement="lane_only",
+                process_train_base_port=None,
+                process_eval_base_port=None,
+                sumo_binary_to_use=None):
     """Fixed version with correct SB3 2.6.0 parameter names. DQN only."""
     # Only DQN supported
     params = ENHANCED_HYPERPARAMS["DQN"].copy() if use_enhanced_params else {
@@ -199,11 +217,21 @@ def train_model(algorithm,
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
+    # Determine base ports for SubprocVecEnv if provided
+    # If num_train_envs_per_model > 1, each sub-env needs its own port.
+    # The process_train_base_port is the starting port for this train_model call.
+    current_train_base_port = process_train_base_port if process_train_base_port is not None else base_train_sumo_port
+    current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else base_eval_sumo_port
+
     train_env = SubprocVecEnv([
-        train_env_constructor(i, model_name, num_of_episodes, reward_function, vsl_enforcement)
+        train_env_constructor(i, model_name, num_of_episodes, reward_function, vsl_enforcement,
+                              sumo_port_to_use=current_train_base_port + i, # Each sub-env gets a unique port
+                              sumo_binary_to_use=sumo_binary_to_use)
         for i in range(num_train_envs_per_model)
     ])
-    env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function, vsl_enforcement)])
+    env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function, vsl_enforcement,
+                                                  sumo_port_to_use=current_eval_base_port, # Eval env gets its own port
+                                                  sumo_binary_to_use=sumo_binary_to_use)])
 
     policy_kwargs = dict(
         net_arch=params.pop("net_arch", [256, 256, 128]), # Deeper network for complex traffic patterns
@@ -261,16 +289,17 @@ def train_model(algorithm,
     try:
         model.learn(total_timesteps=total_timesteps,
                     callback=[checkpoint_cb, eval_cb],
-                    progress_bar=True,
+                    progress_bar=PROGRESS_BAR_ENABLED,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
     except KeyboardInterrupt:
-        print("Training interrupted by user.")
+        logging.warning(f"Training for {model_name} interrupted by user.")
     except Exception as e:
-        logging.error(f"Error during training: {e}")
+        logging.error(f"Error during training for {model_name}: {e}")
     finally:
         train_env.close()
         env_eval.close()
+        logging.info(f"Finished training for {model_name}")
 
 def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     """Test a trained DQN model with comprehensive evaluation."""
@@ -311,7 +340,9 @@ def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file=None, vsl_enforcement="lane_only"):
+def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file=None, vsl_enforcement="lane_only",
+                         tuning_process_base_port=None,
+                         sumo_binary_to_use=None):
     """
     Efficient hyperparameter tuning using existing infrastructure. DQN only.
     """
@@ -320,12 +351,12 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
         warm_start_file = f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json"
     
     scenario_configs = [
-        {"id": 100, "demand": 2000, "pattern": "uniform"},
-        {"id": 101, "demand": 2500, "pattern": "uniform"}, 
+        # {"id": 100, "demand": 2000, "pattern": "uniform"},
+        # {"id": 101, "demand": 2500, "pattern": "uniform"}, 
         {"id": 102, "demand": 3000, "pattern": "uniform"},
         {"id": 103, "demand": 3500, "pattern": "uniform"}
     ]
-    model_name = f"{algorithm}_tune_{vsl_enforcement}"  # Updated line
+    model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
     output_dir_sumo = Path("./traffic_environment/sumo")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
 
@@ -379,18 +410,27 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
             "gamma": trial.suggest_float("gamma", 0.95, 0.999),
         }
         total_reward = 0
-        for config in scenario_configs:
+        # Determine base port for TrafficEnvForTuning instances if provided
+        current_tuning_base_port = tuning_process_base_port if tuning_process_base_port is not None else base_train_sumo_port
+
+        for config_item in scenario_configs: # Renamed from config to avoid conflict
             try:
+                # Each tuning trial's environment needs a unique port
+                # trial.number is unique per trial, config_item["id"] is unique per scenario
+                # A large base port for tuning_process_base_port ensures no clashes with other parallel main trainings
+                port_for_tuning_env = current_tuning_base_port + trial.number * len(scenario_configs) + config_item["id"] % len(scenario_configs)
+
                 env = TrafficEnvForTuning(
-                    port=base_train_sumo_port + trial.number + config["id"],
-                    model_name=model_name,
-                    model_idx=config["id"],
+                    port=port_for_tuning_env,
+                    model_name=model_name, # This is the unique tuning model name
+                    model_idx=config_item["id"], # This is the scenario id (100-103)
                     op_mode="train",
-                    base_gen_car_distrib=["uniform", config["demand"]],
+                    base_gen_car_distrib=["uniform", config_item["demand"]],
                     num_of_episodes=1,
                     reward_fn=reward_function,
                     skip_flow_generation=True,
-                    vsl_enforcement=vsl_enforcement  # Add this line
+                    vsl_enforcement=vsl_enforcement,
+                    sumo_binary_path_override=sumo_binary_to_use
                 )
                 model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
                 model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False)
@@ -405,7 +445,10 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
                 env.close()
                 total_reward += episode_reward
             except Exception as e:
-                logging.error(f"Trial {trial.number} scenario {config['id']} failed: {e}")
+                logging.error(f"Trial {trial.number} scenario {config_item['id']} for {model_name} failed: {e}")
+                # Ensure env is closed if it was partially initialized
+                if 'env' in locals() and hasattr(env, 'close'):
+                    env.close()
                 return float('-inf')
         return total_reward / len(scenario_configs)
 
@@ -465,6 +508,151 @@ def get_optimal_params(algorithm, traffic_density, episode_length):
         base_params["gamma"] = 0.95
     return base_params
 
+INITIAL_PARALLEL_PORT_BASE = 9500
+PORTS_PER_PARALLEL_PROCESS = 50
+
+def run_training_for_combination(config_tuple):
+    reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary = config_tuple
+    
+    # Setup unique ports for this process
+    base_port_for_this_process = INITIAL_PARALLEL_PORT_BASE + process_id * PORTS_PER_PARALLEL_PROCESS
+    
+    # Ports for hyperparameter tuning within this process
+    # tuning_hyperparams_base_port needs to be high enough to not clash with other processes' tuning
+    # Each trial and scenario within tuning also increments the port.
+    tuning_base_port = base_port_for_this_process 
+    
+    # Ports for the main training (SubprocVecEnv) within this process
+    # num_train_envs_per_model (e.g., 1) will use ports starting from this base.
+    # num_test_envs_per_model (e.g., 1) for eval_env.
+    # Ensure enough gap from tuning ports. Max tuning offset ~120-150.
+    main_train_base_port = base_port_for_this_process + 150 
+    main_eval_base_port = base_port_for_this_process + 150 + num_train_envs_per_model + 5 # Small gap
+
+    config_model_name = f"{algo_used}_{reward_fn}_{vsl_mode}"
+    
+    logging.info(f"Process {process_id}: Starting combination {config_model_name}. Tuning Port Base: {tuning_base_port}, Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
+
+    try:
+        # 1. Tune Hyperparameters
+        logging.info(f"Process {process_id}: Tuning for {config_model_name}...")
+        best_params = tune_hyperparameters(algorithm=algo_used,
+                                           reward_function=reward_fn,
+                                           vsl_enforcement=vsl_mode,
+                                           n_trials=15, # Or a smaller number for faster parallel runs initially
+                                           tuning_process_base_port=tuning_base_port,
+                                           sumo_binary_to_use=parallel_sumo_binary)
+        
+        # 2. Create SUMO config (using unique config_model_name)
+        # The create_sumocfg and flow_generation inside TrafficEnv use model_name and model_idx.
+        # Since config_model_name is unique for each of the 9 runs, files will be unique.
+        # model_idx_offset for create_sumocfg is 0 here as each parallel run is distinct.
+        # SubprocVecEnv inside train_model will handle its own model_idx offsets from 0.
+        logging.info(f"Process {process_id}: Creating SUMO config for {config_model_name}...")
+        create_sumocfg(config_model_name, vsl_mode) 
+                                           
+        # 3. Train Model
+        if "net_arch_str" in best_params: # From Optuna, convert to list
+            net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
+            best_params["net_arch"] = net_arch_list
+            del best_params["net_arch_str"]
+        
+        logging.info(f"Process {process_id}: Training model {config_model_name} with best_params: {best_params}")
+        train_model(algorithm=algo_used,
+                    reward_function=reward_fn,
+                    use_enhanced_params=False,
+                    custom_params=best_params,
+                    vsl_enforcement=vsl_mode,
+                    process_train_base_port=main_train_base_port,
+                    process_eval_base_port=main_eval_base_port,
+                    sumo_binary_to_use=parallel_sumo_binary)
+        
+        logging.info(f"Process {process_id}: Successfully completed {config_model_name}")
+        return f"Success: {config_model_name}"
+    except Exception as e:
+        logging.error(f"Process {process_id}: FAILED for {config_model_name}. Error: {e}", exc_info=True)
+        return f"Failure: {config_model_name} - {e}"
+
+def _robust_close_sumo(self, reason):
+    # Identify which environment is closing for logging
+    env_id_str = f"({self.effective_model_name_for_files}_{self.effective_model_idx_for_files})" \
+                 if hasattr(self, 'effective_model_name_for_files') \
+                 else f"(Tuning {self.model_name}_{self.model_idx})"
+
+    logging.debug(f"Closing SUMO {env_id_str}: {reason}")
+    
+    # Attempt to save logs before closing SUMO
+    try:
+        if isinstance(self, TrafficEnvForTuning): # Specific logging for tuning
+            if hasattr(self, 'logger') and len(self.logger.data) > 10: # Only save if significant data
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"tuning_data_{self.model_name}_{self.model_idx}_{timestamp}.csv"
+                self.logger.save_to_csv(filename, include_summary=False)
+        elif hasattr(self, 'logger'): # General TrafficEnv logging
+             self.logger.save_to_csv(
+                f"rl_train_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
+            )
+    except Exception as e:
+        logging.warning(f"Could not save logs for {env_id_str} before SUMO close: {e}")
+
+    if traci.isLoaded():
+        try:
+            traci.close(wait=False)
+            logging.debug(f"traci.close() called for {env_id_str}.")
+        except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError, ImportError) as e:
+            logging.debug(f"Exception during traci.close() for {env_id_str} (SUMO likely already gone or traci not available): {e}")
+
+    self.is_sumo_initialized = False
+
+    if self.sumo_process is not None:
+        pid = self.sumo_process.pid
+        logging.debug(f"SUMO process PID {pid} exists for {env_id_str}. Attempting to terminate.")
+        try:
+            if psutil.pid_exists(pid):
+                parent = psutil.Process(pid)
+                # Terminate children first (SUMO sometimes spawns sub-processes)
+                for child in parent.children(recursive=True):
+                    try:
+                        logging.debug(f"Terminating child process {child.pid} of SUMO {pid} for {env_id_str}")
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass # Child already gone
+                    except Exception as e_child_term:
+                        logging.warning(f"Could not terminate child {child.pid} of SUMO {pid} for {env_id_str}: {e_child_term}")
+                
+                # Wait for children to terminate
+                gone, alive = psutil.wait_procs(parent.children(recursive=True), timeout=2)
+                for p_alive in alive:
+                    logging.warning(f"Child process {p_alive.pid} of SUMO {pid} for {env_id_str} did not terminate, killing.")
+                    try: p_alive.kill()
+                    except psutil.NoSuchProcess: pass
+
+                # Terminate parent SUMO process
+                logging.debug(f"Terminating main SUMO process {pid} for {env_id_str}")
+                parent.terminate()
+                try:
+                    parent.wait(timeout=5)
+                    logging.debug(f"SUMO process {pid} terminated gracefully for {env_id_str}.")
+                except psutil.TimeoutExpired:
+                    logging.warning(f"SUMO process {pid} did not terminate in 5s for {env_id_str}. Forcing kill.")
+                    if psutil.pid_exists(pid): # Check again before kill
+                        parent.kill()
+                        parent.wait(timeout=2)
+                        logging.debug(f"SUMO process {pid} killed for {env_id_str}.")
+                except Exception as e_wait:
+                    logging.error(f"Error during SUMO process wait for {pid} ({env_id_str}): {e_wait}")
+            else:
+                logging.debug(f"SUMO process PID {pid} no longer exists for {env_id_str} (checked by psutil).")
+        except psutil.NoSuchProcess:
+            logging.debug(f"SUMO process PID {pid if pid else 'unknown'} (NoSuchProcess) already gone before explicit termination for {env_id_str}.")
+        except Exception as e:
+            logging.error(f"General error terminating SUMO process {pid if pid else 'None'} for {env_id_str}: {e}")
+        finally:
+            self.sumo_process = None
+    else:
+        logging.debug(f"No SUMO process to terminate for {env_id_str}.")
+        
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Classes """
 MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
 MAX_FLOW = 7200.0               # vehicles per hour
@@ -472,12 +660,18 @@ MAX_QUEUE_LENGTH = 500.0        # meters
 SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
 
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, num_of_episodes=0, reward_fn="balanced", vsl_enforcement="lane_only"):
+    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
+                 num_of_episodes=0, reward_fn="balanced", vsl_enforcement="lane_only",
+                 sumo_binary_path_override=None):
         super(TrafficEnv, self).__init__()
         self.default_speed_limit = 130
         self.port = port
         self.model_name = model_name
         self.model_idx = model_idx
+        self.effective_model_name_for_files = model_name
+        self.effective_model_idx_for_files = model_idx
+        self.sumo_binary_path_override = sumo_binary_path_override
+        self.skip_flow_generation = False
         self.aggregation_time = 60  # [s] Data aggregation duration
         self.sumo_process = None
         self.sumo_max_retries = 3
@@ -538,42 +732,51 @@ class TrafficEnv(gym.Env):
         
     def start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
-        # Check if SUMO is already running and responsive
-        if self.is_sumo_initialized and self.sumo_process:
+        if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             try:
-                # Test if SUMO is responsive
                 traci.simulation.getTime()
-                logging.debug("SUMO is already running and responsive")
+                logging.debug(f"SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) is already running and responsive.")
                 return
-            except (FatalTraCIError, TraCIException):
-                logging.warning("SUMO process exists but not responsive, restarting...")
-                self.is_sumo_initialized = False
+            except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
+                logging.warning(f"SUMO process ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) exists but not responsive, restarting...")
+                self.is_sumo_initialized = False # Mark for restart
         
-        # Clean shutdown if needed
         if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            self.close_sumo("Restarting SUMO for initialization")
-            sleep(2)
+            self.close_sumo(f"Restarting SUMO for initialization ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files})")
+            sleep(3) # Give a bit more time for resources to free up
+        elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
+            logging.debug(f"SUMO process handle existed for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files} but PID was not found. Clearing handle.")
+            self.sumo_process = None # Clear stale handle
+
+        # Ensure TraCI is not connected from a previous attempt or stale state
+        if traci.isLoaded():
+            try:
+                traci.close(wait=False)
+                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.")
+            except Exception as e:
+                logging.warning(f"Error closing previous TraCI connection for {self.effective_model_name_for_files}_{self.effective_model_idx_for_files}: {e}")
         
         for attempt in range(self.sumo_max_retries):
             try:
                 port = self.port
                 
-                # Generate traffic flow
-                if self.gen_car_distrib[0] == 'uniform':
-                    flow_generation_fix_num_veh(self.model_name, self.model_idx,
-                                                self.gen_car_distrib[1],
-                                                int(interval_length // 60),
-                                                self.num_of_episodes,
-                                                num_of_intervals,
-                                                self.operation_mode)
-                elif self.gen_car_distrib[0] == 'bimodal':
-                    flow_generation(self.model_name, self.model_idx,
-                                    bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
+                if not self.skip_flow_generation: # skip_flow_generation attribute for TrafficEnvForTuning
+                    if self.gen_car_distrib[0] == 'uniform':
+                        flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
+                                                    self.gen_car_distrib[1],
+                                                    int(interval_length // 60),
+                                                    self.num_of_episodes,
+                                                    num_of_intervals,
+                                                    self.operation_mode)
+                    elif self.gen_car_distrib[0] == 'bimodal':
+                        flow_generation(self.effective_model_name_for_files, self.effective_model_idx_for_files,
+                                        bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
                 
-                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
-                self.sumo_process = subprocess.Popen([
-                    sumoBinary, "-c",
-                    f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg",
+                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else sumoBinary
+                
+                sumo_cmd = [
+                    current_sumo_binary, "-c",
+                    f"./traffic_environment/sumo/3_2_merge_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.sumocfg",
                     '--start',
                     "--default.emergencydecel=7",
                     '--random-depart-offset=3600',
@@ -581,21 +784,28 @@ class TrafficEnv(gym.Env):
                     "--step-length=0.1",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
-                    "--quit-on-end"
-                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    "--quit-on-end",
+                    "--no-step-log", # Reduce SUMO verbosity
+                    "--no-warnings"  # Reduce SUMO verbosity
+                ]
+
+                self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                logging.info(f"Attempting to connect to SUMO on port {port}")
-                traci.init(port=port)
-                logging.info(f"Successfully connected to SUMO on port {port} for {self.sim_length}s simulation")
+                logging.info(f"Attempting to connect to SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on port {port}")
+                # Add a small delay before traci.init, sometimes helps with rapid restarts
+                time.sleep(0.5) 
+                traci.init(port=port, numRetries=5, host='127.0.0.1') # Added numRetries and host
+                logging.info(f"Successfully connected to SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on port {port} for {self.sim_length}s simulation")
                 self.is_sumo_initialized = True
                 break
                 
-            except (FatalTraCIError, TraCIException) as e:
-                logging.error(f"Attempt {attempt + 1} failed: {e}")
-                self.close_sumo("Failed to start SUMO")
+            except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e: # Added ConnectionRefusedError
+                logging.error(f"Attempt {attempt + 1} to start/connect SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) failed: {e}")
+                self.close_sumo(f"Failed to start/connect SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}) on attempt {attempt+1}")
                 if attempt < self.sumo_max_retries - 1:
-                    sleep(2)
+                    sleep(self.sumo_max_retries + attempt) # Increase sleep time for subsequent retries
                 else:
+                    logging.error(f"Max retries reached for starting SUMO ({self.effective_model_name_for_files}_{self.effective_model_idx_for_files}). Raising exception.")
                     raise e
 
     def step(self, action):
@@ -783,28 +993,7 @@ class TrafficEnv(gym.Env):
         return observation, info
 
     def close_sumo(self, reason):
-        """Properly close SUMO simulation."""
-        logging.debug(f"Closing SUMO: {reason}")
-        self.logger.save_to_csv(
-            f"rl_train_{self.model_name}_{self.model_idx}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
-        )
-        
-        if self.is_sumo_initialized:
-            try:
-                traci.close()
-                logging.debug(f"SUMO closed: {reason}")
-            except (FatalTraCIError, TraCIException):
-                logging.debug("SUMO was already closed")
-            finally:
-                self.is_sumo_initialized = False
-                if self.sumo_process is not None:
-                    try:
-                        self.sumo_process.terminate()
-                        self.sumo_process.wait(timeout=5)
-                        logging.debug("SUMO process terminated and waited for exit.")
-                    except Exception as e:
-                        logging.warning(f"Error terminating SUMO process: {e}")
-                    self.sumo_process = None
+        pass
 
     def _calculate_reward(self, invalid_action_penalty):
         """
@@ -1338,17 +1527,18 @@ class TrafficEnvForTuning(TrafficEnv):
     """
     
     def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="lane_only"):
-        # Initialize parent class with VSL enforcement mode
+                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="lane_only",
+                 sumo_binary_path_override=None):
         super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                        num_of_episodes, reward_fn, vsl_enforcement)
+                        num_of_episodes, reward_fn, vsl_enforcement, sumo_binary_path_override)
         
         self.skip_flow_generation = skip_flow_generation
         
-        # Override simulation length for faster tuning
-        if self.operation_mode == "train":
-            # Shorter episodes for hyperparameter tuning (5 minutes instead of full simulation)
+        if self.operation_mode == "train": # This is "tuning" mode
             self.sim_length = HYPER_PARAM_SIM_LENGTH
+
+        if self.skip_flow_generation:
+            self._verify_flow_files()
 
         # Verify pre-generated files exist
         if self.skip_flow_generation:
@@ -1374,36 +1564,35 @@ class TrafficEnvForTuning(TrafficEnv):
         Modified SUMO startup that optionally skips flow generation.
         Uses pre-generated scenario-specific flow files for consistent tuning.
         """
-        # Check if SUMO is already running and responsive
-        if self.is_sumo_initialized and self.sumo_process:
+        if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             try:
                 traci.simulation.getTime()
-                logging.debug("SUMO is already running and responsive")
+                logging.debug(f"SUMO (Tuning {self.model_name}_{self.model_idx}) is already running and responsive.")
                 return
-            except (FatalTraCIError, TraCIException):
-                logging.warning("SUMO process exists but not responsive, restarting...")
+            except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
+                logging.warning(f"SUMO process (Tuning {self.model_name}_{self.model_idx}) exists but not responsive, restarting...")
                 self.is_sumo_initialized = False
         
-        # Clean shutdown if needed
         if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            self.close_sumo("Restarting SUMO for tuning initialization")
-            sleep(1)  # Shorter sleep for faster tuning
+            self.close_sumo(f"Restarting SUMO for tuning initialization ({self.model_name}_{self.model_idx})")
+            sleep(2) # Shorter sleep for tuning, but close_sumo might take time
+        elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
+            logging.debug(f"SUMO process handle existed for Tuning {self.model_name}_{self.model_idx} but PID was not found. Clearing handle.")
+            self.sumo_process = None
+
+
+        if traci.isLoaded():
+            try:
+                traci.close(wait=False)
+                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for Tuning {self.model_name}_{self.model_idx}.")
+            except Exception as e:
+                logging.warning(f"Error closing previous TraCI connection for Tuning {self.model_name}_{self.model_idx}: {e}")
         
         for attempt in range(self.sumo_max_retries):
             try:
                 port = self.port
                 
-                # Always close any TraCI connection before starting a new one
-                if traci.isLoaded():
-                    try:
-                        traci.close()
-                        logging.debug("Closed existing TraCI connection before starting new SUMO instance.")
-                    except Exception as e:
-                        logging.warning(f"Error closing previous TraCI connection: {e}")
-
-                # **KEY MODIFICATION**: Conditional flow generation
                 if not self.skip_flow_generation:
-                    # Generate traffic flow (original behavior)
                     if self.gen_car_distrib[0] == 'uniform':
                         flow_generation_fix_num_veh(self.model_name, self.model_idx,
                                                   self.gen_car_distrib[1],
@@ -1415,14 +1604,13 @@ class TrafficEnvForTuning(TrafficEnv):
                         flow_generation(self.model_name, self.model_idx,
                                       bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
                 else:
-                    # Use pre-generated files (tuning mode)
-                    expected_flow_file = f"generated_flows_{self.model_name}_{self.model_idx}.rou.xml"
-                    logging.debug(f"Using pre-generated flow file: {expected_flow_file}")
+                    logging.debug(f"Using pre-generated flow file for Tuning {self.model_name}_{self.model_idx}")
                 
-                # Start SUMO with appropriate configuration
-                sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable)
-                self.sumo_process = subprocess.Popen([
-                    sumoBinary, "-c",
+                # Use sumo_binary_path_override or default to non-GUI for tuning
+                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
+
+                sumo_cmd = [
+                    current_sumo_binary, "-c",
                     f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg",
                     '--start',
                     "--default.emergencydecel=7",
@@ -1431,22 +1619,27 @@ class TrafficEnvForTuning(TrafficEnv):
                     "--step-length=0.1",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
-                    "--quit-on-end"
-                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    "--quit-on-end",
+                    "--no-step-log",
+                    "--no-warnings"
+                ]
+                self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                logging.info(f"Connecting to SUMO on port {port} for tuning scenario {self.model_idx}")
-                traci.init(port=port)
-                logging.info(f"Successfully connected to SUMO for {self.sim_length}s tuning simulation")
+                logging.info(f"Attempting to connect to SUMO (Tuning {self.model_name}_{self.model_idx}) on port {port}")
+                time.sleep(0.5)
+                traci.init(port=port, numRetries=5, host='127.0.0.1')
+                logging.info(f"Successfully connected to SUMO (Tuning {self.model_name}_{self.model_idx}) for {self.sim_length}s simulation")
                 
                 self.is_sumo_initialized = True
                 break
                 
-            except (FatalTraCIError, TraCIException) as e:
-                logging.error(f"Tuning startup attempt {attempt + 1} failed: {e}")
-                self.close_sumo("Failed to start SUMO for tuning")
+            except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e:
+                logging.error(f"Tuning startup attempt {attempt + 1} for {self.model_name}_{self.model_idx} failed: {e}")
+                self.close_sumo(f"Failed to start SUMO for tuning ({self.model_name}_{self.model_idx}) on attempt {attempt+1}")
                 if attempt < self.sumo_max_retries - 1:
-                    sleep(1)  # Shorter retry delay for tuning
+                    sleep(1 + attempt) # Shorter, but increasing, retry delay for tuning
                 else:
+                    logging.error(f"Max retries reached for starting SUMO (Tuning {self.model_name}_{self.model_idx}). Raising exception.")
                     raise e
     
     def step(self, action):
@@ -1493,39 +1686,7 @@ class TrafficEnvForTuning(TrafficEnv):
         return super().reset(seed, options)
     
     def close_sumo(self, reason):
-        """Modified close method with minimal logging for tuning."""
-        logging.debug(f"Closing SUMO for tuning: {reason}")
-        
-        # Save minimal data for tuning (optional)
-        if hasattr(self, 'logger') and len(self.logger.data) > 0:
-            try:
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                filename = f"tuning_data_{self.model_name}_{self.model_idx}_{timestamp}.csv"
-                # Save only if significant data collected
-                if len(self.logger.data) > 10:
-                    self.logger.save_to_csv(filename, include_summary=False)
-            except Exception as e:
-                logging.debug(f"Could not save tuning data: {e}")
-        
-        # Standard SUMO closing procedure
-        if self.is_sumo_initialized:
-            try:
-                traci.close()
-                logging.debug(f"SUMO closed for tuning: {reason}")
-            except (FatalTraCIError, TraCIException):
-                logging.debug("SUMO was already closed during tuning")
-            finally:
-                self.is_sumo_initialized = False
-                # --- ADD THIS BLOCK ---
-                if self.sumo_process is not None:
-                    try:
-                        self.sumo_process.terminate()
-                        self.sumo_process.wait(timeout=5)
-                        logging.debug("SUMO process terminated and waited for exit.")
-                    except Exception as e:
-                        logging.warning(f"Error terminating SUMO process: {e}")
-                    self.sumo_process = None
-                # --- END BLOCK ---
+        pass
     
     def get_tuning_metrics(self):
         """
@@ -1546,11 +1707,20 @@ class TrafficEnvForTuning(TrafficEnv):
         }
         return metrics
 
+""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Main entry point for running the DRL VSL environment with SUMO. """
+
+def worker(args, results_list):
+    res = run_training_for_combination(args)
+    results_list.append(res)
+
 if __name__ == '__main__':
     # Suppress matplotlib debug output
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
     logging.getLogger('PIL').setLevel(logging.WARNING)
+
+    TrafficEnv.close_sumo = _robust_close_sumo
+    TrafficEnvForTuning.close_sumo = _robust_close_sumo
 
     # from https://sumo.dlr.de/docs/TraCI/Interfacing_TraCI_from_Python.html
     if 'SUMO_HOME' in os.environ:
@@ -1563,7 +1733,7 @@ if __name__ == '__main__':
     # Options: "all_vehicles", "electric_only", "lane_only"
     vsl_mode = "electric_only"  # Change this to test different modes
     
-    option = 3
+    option = 4
     algo_used = "DQN"
     reward_used = "balanced"
     
@@ -1594,12 +1764,54 @@ if __name__ == '__main__':
             net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
             best_params["net_arch"] = net_arch_list
             del best_params["net_arch_str"]
+
         train_model(algorithm=algo_used, 
                     reward_function=reward_used,
                     use_enhanced_params=False,
                     custom_params=best_params,
                     vsl_enforcement=vsl_mode)
+    elif option == 4: 
+        # Run all 9 combinations in parallel
+        logging.info("Starting parallel training for 9 combinations.")
+        
+        # Use non-GUI SUMO for parallel runs
+        parallel_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui)
 
+        reward_functions = ["mobility", "safety", "balanced"]
+        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
+        algo_to_use = "DQN" # Fixed as per current structure
+
+        all_combinations_params = []
+        process_counter = 0
+        for r_fn in reward_functions:
+            for vsl_m in vsl_enforcements:
+                all_combinations_params.append((r_fn, vsl_m, process_counter, algo_to_use, parallel_sumo_binary))
+                process_counter += 1
+        
+        # Determine number of parallel processes
+        # User mentioned HW ability for 9, but let's be safe or allow configuration
+        num_parallel_processes = min(9, mp.cpu_count() -1 if mp.cpu_count() > 1 else 1) 
+        # num_parallel_processes = 3 # Or set to a fixed number like 3 if 9 is too much
+        logging.info(f"Running {len(all_combinations_params)} combinations using {num_parallel_processes} parallel processes.")
+
+        # Important for CUDA and multiprocessing on some OS
+        if sys.platform.startswith("win") or sys.platform.startswith("darwin"): # Windows or macOS
+             mp.set_start_method('spawn', force=True)
+
+        processes = []
+        results = mp.Manager().list()
+
+        for args in all_combinations_params:
+            p = mp.Process(target=worker, args=(args, results))
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        logging.info("Parallel training run finished. Results:")
+        for res in results:
+            logging.info(res)
     # Evaluate the trained model
     # test_model(algorithm=algo_used, reward_function=reward_used, vsl_enforcement=vsl_mode)  # Add vsl_mode parameter
 """
