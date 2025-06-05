@@ -9,6 +9,7 @@ from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
 import os
+logging.info(f"Current working directory: {os.getcwd()}")
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from datetime import datetime 
 import psutil
@@ -72,18 +73,23 @@ num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
-sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
+sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo' # This doesn't work
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui) # Default to GUI
 
-HYPER_PARAM_SIM_LENGTH = 1800 # Simulation length for hyperparameter tuning [s]
-HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 60 # seconds for hyperparameter tuning
-HYPER_PARAM_MODEL_STEPS = 100
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
 MAX_QUEUE_LENGTH = 500 # vehicles (adjust based on your segment length)
 OBSERVATION_SPACE_SIZE = 7
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
+
+INITIAL_PARALLEL_TUNING_PORT_BASE = 10000
+PORTS_PER_TUNING_PROCESS = 100 # Max trials * num_scenarios_per_trial + buffer
+
+HYPER_PARAM_SIM_LENGTH = 3600
+HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 3600
+HYPER_PARAM_MODEL_STEPS = 100 # Steps per scenario in a trial
+N_OPTUNA_TRIALS = 9 # Number of trials for Optuna study
 
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
@@ -340,24 +346,32 @@ def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_file=None, vsl_enforcement="lane_only",
+def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="lane_only",
                          tuning_process_base_port=None,
                          sumo_binary_to_use=None):
     """
-    Efficient hyperparameter tuning using existing infrastructure. DQN only.
+    Efficient hyperparameter tuning for a specific combination.
+    Saves results to the file specified by specific_params_file_path.
     """
-    # Generate unique warm start file name if not provided
-    if warm_start_file is None:
+    if specific_params_file_path is None:
+        # This should ideally always be provided by the caller for specific saving
         os.makedirs("rl_models/optuna_params", exist_ok=True)
-        warm_start_file = os.path.join("rl_models", "optuna_params", f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json")
-    
+        specific_params_file_path = os.path.join("rl_models", "optuna_params", f"default_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json")
+        logging.warning(f"specific_params_file_path not provided, defaulting to {specific_params_file_path}")
+
+    # Ensure the directory for the specific params file exists
+    os.makedirs(os.path.dirname(specific_params_file_path), exist_ok=True)
+
     scenario_configs = [
         {"id": 100, "demand": 2000, "pattern": "uniform"},
         {"id": 101, "demand": 2500, "pattern": "uniform"}, 
         {"id": 102, "demand": 3000, "pattern": "uniform"},
         {"id": 103, "demand": 3500, "pattern": "uniform"}
     ]
-    model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
+    # Model name for tuning files (rou, sumocfg) should be unique per tuning process
+    # This model_name is for the .rou.xml and .sumocfg files generated for the tuning scenarios
+    tuning_files_model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
+    
     output_dir_sumo = Path("./traffic_environment/sumo")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
 
@@ -377,17 +391,17 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
 
     for config in scenario_configs:
         flow_generation_fix_num_veh(
-            model_name, 
+            tuning_files_model_name, 
             config["id"],
             config["demand"], 
-            num_of_hrs=1,
+            num_of_hrs=1, # For HYPER_PARAM_SIM_LENGTH
             num_of_episodes=1, 
             num_of_intervals=1, 
-            op_mode="train"
+            op_mode="train" # op_mode for flow_gen, env will use its own
         )
-        cfg_filename = f"3_2_merge_{model_name}_{config['id']}.sumocfg"
+        cfg_filename = f"3_2_merge_{tuning_files_model_name}_{config['id']}.sumocfg"
         cfg_filepath = output_dir_sumo / cfg_filename
-        cfg_content = sumocfg_template.format(model=model_name, index=config['id'])
+        cfg_content = sumocfg_template.format(model=tuning_files_model_name, index=config['id'])
         with open(cfg_filepath, 'w') as file:
             file.write(cfg_content)
         logging.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
@@ -406,111 +420,116 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
             "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
             "learning_starts": trial.suggest_categorical("learning_starts", [1000, 5000]),
             "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]),
-            "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]),
+            "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]), # -1 means as many as train_freq
             "tau": trial.suggest_float("tau", 0.5, 1.0),
             "gamma": trial.suggest_float("gamma", 0.95, 0.999),
         }
-        total_reward = 0
-        current_tuning_base_port = tuning_process_base_port if tuning_process_base_port is not None else base_train_sumo_port
+        total_reward_for_trial = 0.0
+        # Use the base port assigned to this specific tuning process
+        current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else base_train_sumo_port
 
+        trial_summary = {
+            "trial_number": trial.number,
+            "params": params,
+            "scenarios": []
+        }
+        
         for config_item in scenario_configs:
-            env = None  # Initialize env to None
+            env = None 
             try:
-                port_for_tuning_env = current_tuning_base_port + trial.number * len(scenario_configs) + config_item["id"] % len(scenario_configs)
+                # Ensure unique port for each scenario within a trial for this tuning process
+                port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % n_trials) * len(scenario_configs) + (config_item["id"] % len(scenario_configs))
+                
                 env = TrafficEnvForTuning(
-                    port=port_for_tuning_env, model_name=model_name, model_idx=config_item["id"],
-                    op_mode="train", base_gen_car_distrib=["uniform", config_item["demand"]],
+                    port=port_for_tuning_env, 
+                    model_name=tuning_files_model_name, # Use the unique name for tuning files
+                    model_idx=config_item["id"], # This is the scenario_id
+                    op_mode="train", # op_mode for TrafficEnvForTuning
+                    base_gen_car_distrib=["uniform", config_item["demand"]],
                     num_of_episodes=1, reward_fn=reward_function, skip_flow_generation=True,
                     vsl_enforcement=vsl_enforcement, sumo_binary_path_override=sumo_binary_to_use
                 )
+                # The actual model name for SB3 is not critical here as we don't save the SB3 model itself from tuning
                 model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
-                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR_ENABLED)
-                obs, _ = env.reset() # Reset for evaluation if needed by your logic
+                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR_ENABLED) # Short learning for each scenario
+                
+                obs, _ = env.reset() 
                 episode_reward = 0
-                for step_eval in range(HYPER_PARAM_MODEL_STEPS): # Or a different number of eval steps
+                for _ in range(HYPER_PARAM_MODEL_STEPS): # Evaluate for the same number of steps
                     action_eval, _ = model.predict(obs, deterministic=True)
                     obs, reward_eval, done_eval, truncated_eval, _ = env.step(action_eval)
                     episode_reward += reward_eval
                     if done_eval or truncated_eval:
                         break
-                total_reward += episode_reward
+                total_reward_for_trial += episode_reward
+
+                scenario_summary = {
+                    "scenario_id": config_item["id"],
+                    "total_vehicles_before": getattr(env, "total_vehicles_before", None),
+                    "total_vehicles_after": getattr(env, "total_vehicles_after", None),
+                    "episode_reward": episode_reward
+                }
+                trial_summary["scenarios"].append(scenario_summary)
             except Exception as e:
-                logging.error(f"Trial {trial.number} scenario {config_item['id']} for {model_name} failed: {e}")
-                return float('-inf')
+                logging.error(f"Trial {trial.number} scenario {config_item['id']} for {tuning_files_model_name} failed: {e}", exc_info=True)
+                # Ensure env is closed if it was created, even on error
+                if env is not None:
+                    try:
+                        env.close()
+                    except Exception as close_e:
+                        logging.error(f"Error closing env in exception for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
+                return float('-inf') # Prune this trial
             finally:
-                if env is not None: # Check if env was successfully created
+                if env is not None: 
                     try:
                         logging.debug(f"Closing env for trial {trial.number}, scenario {config_item['id']} in finally block.")
                         env.close()
                     except Exception as close_e:
                         logging.error(f"Error during env.close() in finally for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
-                    # del env # Optional: Python's GC should handle it, but can be explicit
-        if not scenario_configs: # Avoid division by zero if scenario_configs is empty
+        
+        summary_dir = os.path.dirname("logs/optuna_summaries/")
+        summary_filename = f"summary_{tuning_files_model_name}_trial_{trial.number}.json"
+        summary_path = os.path.join(summary_dir, summary_filename)
+        with open(summary_path, "w") as f:
+            json.dump(trial_summary, f, indent=2)
+
+        if not scenario_configs: 
             return 0.0
-        return total_reward / len(scenario_configs)
+        return total_reward_for_trial / len(scenario_configs) # Average reward over scenarios for this trial
 
     study = optuna.create_study(direction='maximize')
-    try:
-        with open(warm_start_file, "r") as f:
-            prev_best_params = json.load(f)
-        study.enqueue_trial(prev_best_params)
-        logging.info(f"Enqueued previous best parameters for warm start: {prev_best_params}")
-    except Exception as e:
-        logging.info(f"No previous Optuna params for warm start: {e}")
-
-    study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
-
-    # Path for the single, shared Optuna params file (used for warm start if it exists)
-    shared_optuna_params_filename = "best_optuna_params.json"
-    shared_optuna_params_path = os.path.join("rl_models", "optuna_params", "best_optuna_params.json")
     
-    # Warm start from the SHARED file if it exists
-    if os.path.exists(shared_optuna_params_path):
+    # Try to load from the specific params file for warm start
+    if os.path.exists(specific_params_file_path):
         try:
-            with open(shared_optuna_params_path, "r") as f:
+            with open(specific_params_file_path, "r") as f:
                 prev_best_params = json.load(f)
             study.enqueue_trial(prev_best_params)
-            logging.info(f"Enqueued previous best parameters from SHARED {shared_optuna_params_path} for warm start.")
+            logging.info(f"Enqueued previous best parameters from {specific_params_file_path} for warm start of {tuning_files_model_name}.")
         except Exception as e:
-            logging.info(f"No previous Optuna params for warm start from SHARED {shared_optuna_params_path}: {e}")
+            logging.info(f"Could not load or enqueue previous Optuna params from {specific_params_file_path} for {tuning_files_model_name}: {e}")
     else:
-        logging.info(f"SHARED Optuna params file {shared_optuna_params_path} not found. Starting fresh study.")
-
+        logging.info(f"Specific Optuna params file {specific_params_file_path} not found for {tuning_files_model_name}. Starting fresh study.")
 
     study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
 
-    logging.info(f"Optuna study for {model_name} completed. Best params: {study.best_params}")
+    logging.info(f"Optuna study for {tuning_files_model_name} (params for {algorithm}_{reward_function}_{vsl_enforcement}) completed. Best params: {study.best_params}")
 
-    # Save to the SHARED generic file path
-    os.makedirs(os.path.dirname(shared_optuna_params_path), exist_ok=True)
-    with open(shared_optuna_params_path, "w") as f:
+    # Save to the SPECIFIC file path
+    with open(specific_params_file_path, "w") as f:
         json.dump(study.best_params, f)
-    logging.info(f"Saved best Optuna params to SHARED location: {shared_optuna_params_path}")
-
-    # Optional: Save to a specific file as well if needed for other purposes or detailed tracking
-    if warm_start_file: # This was the originally passed or generated specific filename
-        specific_params_dir = os.path.dirname(warm_start_file)
-        if specific_params_dir and not os.path.exists(specific_params_dir):
-            os.makedirs(specific_params_dir, exist_ok=True)
-        try:
-            with open(warm_start_file, "w") as f:
-                json.dump(study.best_params, f)
-            logging.info(f"Saved best Optuna params also to specific file: {warm_start_file}")
-        except Exception as e_specific_save:
-            logging.error(f"Could not save to specific warm_start_file {warm_start_file}: {e_specific_save}")
-
-
-    # --- CRITICAL DELAY BEFORE FILE CLEANUP ---
-    delay_before_cleanup = 10 # seconds
-    logging.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {model_name} to ensure SUMO processes are closed...")
+    logging.info(f"Saved best Optuna params for {tuning_files_model_name} to: {specific_params_file_path}")
+    
+    delay_before_cleanup = 10 
+    logging.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {tuning_files_model_name}...")
     time.sleep(delay_before_cleanup)
-    # --- END CRITICAL DELAY ---
 
     patterns_to_clean = [
-        f"generated_flows_{model_name}_*.rou.xml",
-        f"3_2_merge_{model_name}_*.sumocfg"
+        f"generated_flows_{tuning_files_model_name}_*.rou.xml", # Use tuning_files_model_name
+        f"3_2_merge_{tuning_files_model_name}_*.sumocfg"    # Use tuning_files_model_name
     ]
 
+    # ... (wait_for_file_release function remains the same) ...
     def wait_for_file_release(filepath_to_clean, timeout=10): # Increased default timeout
         start_time_fr = time.time()
         file_path_obj_fr = Path(filepath_to_clean)
@@ -545,13 +564,13 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=20, warm_start_fil
             except (psutil.Error) as e_psutil: # Catch all psutil errors
                  logging.error(f"Could not list processes due to psutil error: {e_psutil}")
         return False
-
+        
     for pattern in patterns_to_clean:
-        for filepath_to_clean_glob in glob.glob(os.path.join("./traffic_environment/sumo/", pattern)):
-            # Ensure we only clean files related to the current tuning scenarios
-            if any(f"_{config['id']}." in filepath_to_clean_glob or f"_{config['id']}.sumocfg" in filepath_to_clean_glob for config in scenario_configs):
-                 logging.debug(f"Targeting specific tuning file for cleanup: {filepath_to_clean_glob}")
-                 wait_for_file_release(filepath_to_clean_glob)
+        # Glob directly in the sumo directory
+        for filepath_to_clean_glob in glob.glob(str(output_dir_sumo / pattern)):
+            # The pattern already includes tuning_files_model_name, so it's specific enough
+            logging.debug(f"Targeting specific tuning file for cleanup: {filepath_to_clean_glob}")
+            wait_for_file_release(filepath_to_clean_glob)
     
     return study.best_params
 
@@ -573,69 +592,80 @@ def get_optimal_params(algorithm, traffic_density, episode_length):
         base_params["gamma"] = 0.95
     return base_params
 
-INITIAL_PARALLEL_PORT_BASE = 9500
-PORTS_PER_PARALLEL_PROCESS = 50
-
 def run_training_for_combination(config_tuple):
     reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary = config_tuple
     
-    base_port_for_this_process = INITIAL_PARALLEL_PORT_BASE + process_id * PORTS_PER_PARALLEL_PROCESS
-    main_train_base_port = base_port_for_this_process + 150 
-    main_eval_base_port = base_port_for_this_process + 150 + num_train_envs_per_model + 5
+    base_port_for_this_process = 8000 + process_id * 10
+    main_train_base_port = base_port_for_this_process # Adjusted, train_model will add its own offsets if num_train_envs > 1
+    main_eval_base_port = base_port_for_this_process + num_train_envs_per_model + 5 # Ensure eval port is separate
 
-    config_model_name = f"{algo_used}_{reward_fn}_{vsl_mode}"
+    # This is the actual model name for saving SB3 models and logs
+    config_model_name_for_training = f"{algo_used}_{reward_fn}_{vsl_mode}"
     
-    logging.info(f"Process {process_id}: Starting combination {config_model_name}. Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
+    logging.info(f"Process {process_id}: Starting combination {config_model_name_for_training}. Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
 
     best_params = None
-    shared_optuna_params_filename = "best_optuna_params.json"
-    shared_optuna_params_path = os.path.join("traffic_environment", shared_optuna_params_filename)
+    # Load specific Optuna params file for this combination
+    optuna_params_dir = os.path.join("rl_models", "optuna_params")
+    specific_optuna_params_filename = f"best_optuna_params_{algo_used}_{reward_fn}_{vsl_mode}.json"
+    specific_optuna_params_path = os.path.join(optuna_params_dir, specific_optuna_params_filename)
 
-    if os.path.exists(shared_optuna_params_path):
+    if os.path.exists(specific_optuna_params_path):
         try:
-            with open(shared_optuna_params_path, "r") as f:
+            with open(specific_optuna_params_path, "r") as f:
                 best_params = json.load(f)
-            logging.info(f"Process {process_id}: Loaded shared best Optuna params from {shared_optuna_params_path} for {config_model_name}")
+            logging.info(f"Process {process_id}: Loaded specific Optuna params from {specific_optuna_params_path} for {config_model_name_for_training}")
         except Exception as e:
-            logging.warning(f"Process {process_id}: Could not load shared Optuna params from {shared_optuna_params_path}: {e}. Using default ENHANCED_HYPERPARAMS.")
-            best_params = None # Fallthrough to default
+            logging.warning(f"Process {process_id}: Could not load specific Optuna params from {specific_optuna_params_path}: {e}. Using default ENHANCED_HYPERPARAMS.")
+            best_params = None 
+    else:
+        logging.warning(f"Process {process_id}: Specific Optuna params file not found at {specific_optuna_params_path}. Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
     
     if not best_params:
-        logging.info(f"Process {process_id}: Shared Optuna params file not found or failed to load from {shared_optuna_params_path}. Using default ENHANCED_HYPERPARAMS for {config_model_name}.")
-        best_params = ENHANCED_HYPERPARAMS["DQN"].copy()
-        # Ensure net_arch is a list if it was somehow a string in defaults (should not be)
-        if "net_arch_str" in best_params:
-             del best_params["net_arch_str"] # ENHANCED_HYPERPARAMS should have 'net_arch' as list
+        best_params = ENHANCED_HYPERPARAMS.get(algo_used, {}).copy()
+        if not best_params: # Fallback if algo_used not in ENHANCED_HYPERPARAMS
+            logging.error(f"Default ENHANCED_HYPERPARAMS for {algo_used} not found. Using basic DQN defaults.")
+            best_params = { # Basic DQN defaults
+                "learning_rate": 1e-4, "buffer_size": 100000, "batch_size": 128,
+                "target_update_interval": 1000, "exploration_fraction": 0.1,
+                "exploration_initial_eps": 1.0, "exploration_final_eps": 0.01,
+                "learning_starts": 1000, "train_freq": 4, "gradient_steps": 1,
+                "tau": 1.0, "gamma": 0.99, "net_arch": [256, 256, 128]
+            }
+        else:
+            logging.info(f"Process {process_id}: Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
 
-    if best_params and "net_arch_str" in best_params: # If loaded from JSON where it was saved as str
+
+    if "net_arch_str" in best_params: 
         net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
         best_params["net_arch"] = net_arch_list
         del best_params["net_arch_str"]
-    elif not best_params:
-        logging.error(f"Process {process_id}: best_params is None for {config_model_name} even after fallback. Critical error.")
-        return f"Failure: {config_model_name} - best_params is None"
+    
+    # Ensure 'net_arch' key exists, even if loaded from defaults that might not have it explicitly if "net_arch_str" wasn't processed
+    if "net_arch" not in best_params:
+        best_params["net_arch"] = [256, 256, 128] # Default fallback
 
     try:
-        # Create SUMO config
-        logging.info(f"Process {process_id}: Creating SUMO config for {config_model_name}...")
-        create_sumocfg(config_model_name, vsl_mode) 
+        # Create SUMO config using the training model name
+        logging.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
+        create_sumocfg(config_model_name_for_training, vsl_mode) 
                                            
         # Train Model
-        logging.info(f"Process {process_id}: Training model {config_model_name} with params: {best_params}")
+        logging.info(f"Process {process_id}: Training model {config_model_name_for_training} with params: {best_params}")
         train_model(algorithm=algo_used,
-                    reward_function=reward_fn,
-                    use_enhanced_params=False, # We are using loaded/default params
+                    reward_function=reward_fn, # Pass the specific reward_fn
+                    use_enhanced_params=False, 
                     custom_params=best_params,
-                    vsl_enforcement=vsl_mode,
+                    vsl_enforcement=vsl_mode, # Pass the specific vsl_mode
                     process_train_base_port=main_train_base_port,
                     process_eval_base_port=main_eval_base_port,
                     sumo_binary_to_use=parallel_sumo_binary)
         
-        logging.info(f"Process {process_id}: Successfully completed {config_model_name}")
-        return f"Success: {config_model_name}"
+        logging.info(f"Process {process_id}: Successfully completed {config_model_name_for_training}")
+        return f"Success: {config_model_name_for_training}"
     except Exception as e:
-        logging.error(f"Process {process_id}: FAILED for {config_model_name}. Error: {e}", exc_info=True)
-        return f"Failure: {config_model_name} - {e}"
+        logging.error(f"Process {process_id}: FAILED for {config_model_name_for_training}. Error: {e}", exc_info=True)
+        return f"Failure: {config_model_name_for_training} - {e}"
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Classes """
@@ -758,6 +788,10 @@ class TrafficEnv(gym.Env):
             try:
                 port = self.port
                 
+                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
+                if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
+                    logging.error(f"Route file missing or empty: {route_file}")
+
                 if not self.skip_flow_generation:
                     if self.gen_car_distrib[0] == 'uniform':
                         flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
@@ -784,14 +818,20 @@ class TrafficEnv(gym.Env):
                     f"--end={self.sim_length}",
                     "--quit-on-end",
                     "--no-step-log", 
-                    "--no-warnings"  
+                    "--no-warnings"
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
                 logging.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
                 time.sleep(0.5) 
-                traci.init(port=port, numRetries=5, host='127.0.0.1')
+                try:
+                    traci.init(port=port, numRetries=5, host='127.0.0.1')
+                except Exception as e:
+                    if self.sumo_process:
+                        out, err = self.sumo_process.communicate(timeout=2)
+                        logging.error(f"SUMO stderr: {err.decode()}")
+                    raise e
                 logging.info(f"Successfully connected to SUMO ({log_id}) on port {port} for {self.sim_length}s simulation")
                 self.is_sumo_initialized = True
                 break
@@ -1546,6 +1586,9 @@ class TrafficEnvForTuning(TrafficEnv):
 
         if self.skip_flow_generation:
             self._verify_flow_files()
+        
+        self.total_vehicles_before = 0
+        self.total_vehicles_after = 0
     
     def _verify_flow_files(self):
         """Verify that required pre-generated flow files exist."""
@@ -1561,6 +1604,12 @@ class TrafficEnvForTuning(TrafficEnv):
             raise FileNotFoundError(f"Pre-generated config file not found: {expected_config_file}")
         
         logging.debug(f"Verified pre-generated files for scenario {self.model_idx}")
+    
+    def get_simulation_summary(self):
+        return {
+            "total_vehicles_before": self.total_vehicles_before,
+            "total_vehicles_after": self.total_vehicles_after
+        }
     
     def start_sumo(self):
         """
@@ -1584,6 +1633,13 @@ class TrafficEnvForTuning(TrafficEnv):
         """
         # Call parent step method
         observation, reward, done, truncated, info = super().step(action)
+
+        # Accumulate vehicle counts for verification
+        try:
+            self.total_vehicles_before += traci.edge.getLastStepVehicleNumber("seg_0_before")
+            self.total_vehicles_after += traci.edge.getLastStepVehicleNumber("seg_0_after")
+        except Exception as e:
+            logging.warning(f"Could not get vehicle numbers for verification: {e}")
                 
         # **TUNING OPTIMIZATION**: Early termination for clearly poor performers
         if hasattr(self, '_tuning_step_count'):
@@ -1647,6 +1703,22 @@ class TrafficEnvForTuning(TrafficEnv):
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Main entry point for running the DRL VSL environment with SUMO. """
+
+# Wrapper function for parallel execution of tune_hyperparameters
+def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_port_tune, binary_tune):
+    logging.info(f"Starting tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune} with params file {specific_file} on base port {base_port_tune}")
+    try:
+        tune_hyperparameters(algorithm=algo_tune,
+                             reward_function=r_fn_tune,
+                             specific_params_file_path=specific_file,
+                             vsl_enforcement=vsl_m_tune,
+                             tuning_process_base_port=base_port_tune,
+                             sumo_binary_to_use=binary_tune,
+                             n_trials=N_OPTUNA_TRIALS) # Use defined N_OPTUNA_TRIALS
+        logging.info(f"Finished tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune}")
+    except Exception as e_tune_wrapper:
+         logging.error(f"Error in tuning wrapper for {algo_tune}_{r_fn_tune}_{vsl_m_tune}: {e_tune_wrapper}", exc_info=True)
+
 if __name__ == '__main__':
     # Suppress matplotlib debug output
     logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -1663,7 +1735,7 @@ if __name__ == '__main__':
     # Options: "all_vehicles", "electric_only", "lane_only"
     vsl_enforce_mode = "electric_only" 
     
-    option = 4
+    option = 3
     algo_to_use = "DQN"
     reward_used = "balanced"
     
@@ -1675,6 +1747,7 @@ if __name__ == '__main__':
                     reward_function=reward_used, 
                     use_enhanced_params=True,
                     vsl_enforcement=vsl_enforce_mode)
+    
     elif option == 2:
         optimal_params = get_optimal_params(algorithm=algo_to_use, traffic_density="high", episode_length="long")
         create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
@@ -1683,72 +1756,107 @@ if __name__ == '__main__':
                     use_enhanced_params=False,
                     custom_params=optimal_params,
                     vsl_enforcement=vsl_enforce_mode)
+    
     elif option == 3:
-        # Update tuning function to also support VSL enforcement
-        best_params = tune_hyperparameters(algorithm=algo_to_use, 
-                                           reward_function=reward_used, 
-                                           n_trials=15,
-                                           vsl_enforcement=vsl_enforce_mode)
-        create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
-        if "net_arch_str" in best_params:
-            net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
-            best_params["net_arch"] = net_arch_list
-            del best_params["net_arch_str"]
-
-        train_model(algorithm=algo_to_use, 
-                    reward_function=reward_used,
-                    use_enhanced_params=False,
-                    custom_params=best_params,
-                    vsl_enforcement=vsl_enforce_mode)
-    elif option == 4:
-        # Run all 9 combinations in parallel
-        logging.info("Starting parallel training for 9 combinations.")
+        logging.info("Starting parallel hyperparameter tuning for all combinations.")
         
-        # Use non-GUI SUMO for parallel runs
-        parallel_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui)
-
-        # reward_functions = ["mobility", "safety", "balanced"]
-        reward_functions = ["mobility", "safety"]
-        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
-
-        all_combinations_params = []
-        process_counter = 0
-        for r_fn in reward_functions:
-            for vsl_m in vsl_enforcements:
-                all_combinations_params.append((r_fn, vsl_m, process_counter, algo_to_use, parallel_sumo_binary))
-                process_counter += 1
+        tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
         
-        # Determine number of parallel processes
-        num_parallel_processes = min(9, mp.cpu_count() -1 if mp.cpu_count() > 1 else 1) 
-        logging.info(f"Running {len(all_combinations_params)} combinations using {num_parallel_processes} parallel processes.")
+        reward_functions_to_tune = ["mobility", "safety", "balanced"]
+        vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "lane_only"]
+        
+        tuning_combinations = list(product(reward_functions_to_tune, vsl_enforcements_to_tune))
+        
+        num_parallel_tuning_processes = min(len(tuning_combinations), mp.cpu_count() - 1 if mp.cpu_count() > 1 else 1)
+        logging.info(f"Running {len(tuning_combinations)} tuning combinations using up to {num_parallel_tuning_processes} parallel processes.")
 
-        # Important for CUDA and multiprocessing on some OS
-        if sys.platform.startswith("win") or sys.platform.startswith("darwin"): # Windows or macOS
+        if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
              mp.set_start_method('spawn', force=True)
 
-        processes = []
-        results = mp.Manager().list()
+        tuning_processes = []
 
-        def worker(args, results_list):
-            res = run_training_for_combination(args)
-            results_list.append(res)
+        for i, (r_fn, vsl_m) in enumerate(tuning_combinations):
+            params_dir = os.path.join("rl_models", "optuna_params")
+            os.makedirs(params_dir, exist_ok=True)
+            # Unique filename for this combination's Optuna params
+            specific_params_filename = f"best_optuna_params_{algo_to_use}_{r_fn}_{vsl_m}.json"
+            specific_params_file = os.path.join(params_dir, specific_params_filename)
+            
+            # Assign a unique base port for this tuning process
+            current_tuning_base_port = INITIAL_PARALLEL_TUNING_PORT_BASE + i * PORTS_PER_TUNING_PROCESS
+            
+            p_tune = mp.Process(target=run_tuning_wrapper, args=(
+                r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary
+            ))
+            tuning_processes.append(p_tune)
+            p_tune.start()
+            
+            # Limit concurrent processes if num_parallel_tuning_processes is less than total combinations
+            if len(tuning_processes) >= num_parallel_tuning_processes:
+                for proc_to_join in tuning_processes:
+                    proc_to_join.join()
+                tuning_processes = [] # Reset for next batch
 
-        for args in all_combinations_params:
-            p = mp.Process(target=worker, args=(args, results))
-            p.start()
-            processes.append(p)
+        # Join any remaining processes
+        for p_tune in tuning_processes:
+            p_tune.join()
+            
+        logging.info("Parallel hyperparameter tuning finished for all combinations.")
+    
+    elif option == 4:
+        logging.info("Starting parallel training for all combinations using tuned or default parameters.")
+        
+        parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui)
 
-        for p in processes:
-            p.join()
+        # Use the same lists as for tuning, or define them if option 3 wasn't run
+        # reward_functions = ["mobility", "safety", "balanced"] # Original selection
+        reward_functions = ["mobility", "safety"] # As per user's active selection in prompt
+        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
 
-        logging.info("Parallel training run finished. Results:")
-        for res in results:
-            logging.info(res)
+        all_combinations_params_for_training = []
+        process_counter = 0
+        for r_fn_train in reward_functions:
+            for vsl_m_train in vsl_enforcements:
+                all_combinations_params_for_training.append((r_fn_train, vsl_m_train, process_counter, algo_to_use, parallel_training_sumo_binary))
+                process_counter += 1
+        
+        num_parallel_training_processes = min(len(all_combinations_params_for_training), mp.cpu_count() - 1 if mp.cpu_count() > 1 else 1) 
+        logging.info(f"Running {len(all_combinations_params_for_training)} training combinations using up to {num_parallel_training_processes} parallel processes.")
+
+        if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
+             mp.set_start_method('spawn', force=True)
+
+        training_processes = []
+        # Results list for training processes (if needed, currently run_training_for_combination logs its own success/failure)
+        # training_results = mp.Manager().list() 
+
+        # Re-define worker for option 4 if it was defined inside option 3 before, or ensure it's top-level
+        # For simplicity, assuming worker is defined at top level or run_training_for_combination is directly callable
+        
+        active_training_processes = []
+        for i, args_train in enumerate(all_combinations_params_for_training):
+            p_train = mp.Process(target=run_training_for_combination, args=(args_train,))
+            p_train.start()
+            active_training_processes.append(p_train)
+            
+            if len(active_training_processes) >= num_parallel_training_processes:
+                for proc_to_join in active_training_processes:
+                    proc_to_join.join()
+                active_training_processes = []
+
+        for p_train in active_training_processes: # Join any remaining
+            p_train.join()
+
+        logging.info("Parallel training run finished for all combinations.")
+        # for res_train in training_results: # If using a results list
+        #     logging.info(res_train)
+    
     elif option == 5:
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 
 """
 Accepted limitations and Future Work:
-- N/A
+- ❌ [Works now] SUMO withough GUI is not supported in this environment, so GUI-based SUMO binary is used.
+- 
 """
