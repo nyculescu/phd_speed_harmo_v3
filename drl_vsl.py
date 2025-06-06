@@ -788,10 +788,6 @@ class TrafficEnv(gym.Env):
             try:
                 port = self.port
                 
-                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
-                if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
-                    logging.error(f"Route file missing or empty: {route_file}")
-
                 if not self.skip_flow_generation:
                     if self.gen_car_distrib[0] == 'uniform':
                         flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
@@ -804,6 +800,10 @@ class TrafficEnv(gym.Env):
                         flow_generation(self.effective_model_name_for_files, self.effective_model_idx_for_files,
                                         bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
                 
+                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
+                if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
+                    logging.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
+
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
                 sumo_cmd = [
@@ -1731,13 +1731,13 @@ if __name__ == '__main__':
     else:
         logging.info("SUMO environment is not set up correctly.")
 
-    # VSL Enforcement Mode Selection
-    # Options: "all_vehicles", "electric_only", "lane_only"
-    vsl_enforce_mode = "electric_only" 
-    
-    option = 3
+    reward_functions_to_tune = ["mobility", "safety", "balanced"]
+    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "lane_only"]
+
+    option = 4
     algo_to_use = "DQN"
-    reward_used = "balanced"
+    vsl_enforce_mode = "electric_only" 
+    reward_used = "mobility"
     
     config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"  # Updated line
 
@@ -1761,9 +1761,6 @@ if __name__ == '__main__':
         logging.info("Starting parallel hyperparameter tuning for all combinations.")
         
         tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
-        
-        reward_functions_to_tune = ["mobility", "safety", "balanced"]
-        vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "lane_only"]
         
         tuning_combinations = list(product(reward_functions_to_tune, vsl_enforcements_to_tune))
         
@@ -1810,8 +1807,9 @@ if __name__ == '__main__':
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         # reward_functions = ["mobility", "safety", "balanced"] # Original selection
-        reward_functions = ["mobility", "safety"] # As per user's active selection in prompt
-        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
+        reward_functions = ["mobility"] # As per user's active selection in prompt
+        # vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
+        vsl_enforcements = ["all_vehicles"]
 
         all_combinations_params_for_training = []
         process_counter = 0
@@ -1829,9 +1827,6 @@ if __name__ == '__main__':
         training_processes = []
         # Results list for training processes (if needed, currently run_training_for_combination logs its own success/failure)
         # training_results = mp.Manager().list() 
-
-        # Re-define worker for option 4 if it was defined inside option 3 before, or ensure it's top-level
-        # For simplicity, assuming worker is defined at top level or run_training_for_combination is directly callable
         
         active_training_processes = []
         for i, args_train in enumerate(all_combinations_params_for_training):
@@ -1857,6 +1852,6 @@ if __name__ == '__main__':
 
 """
 Accepted limitations and Future Work:
-- ❌ [Works now] SUMO withough GUI is not supported in this environment, so GUI-based SUMO binary is used.
+- ✔️ [Works now] SUMO withough GUI is not supported in this environment, so GUI-based SUMO binary is used.
 - 
 """
