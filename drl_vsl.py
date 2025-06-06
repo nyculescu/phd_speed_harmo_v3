@@ -1,10 +1,18 @@
 import logging
+import os
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
 logging.basicConfig(
-    level=logging.WARN,  # Set the log level | DEBUG, INFO, WARNING, ERROR, CRITICAL
-    format='%(asctime)s - %(levelname)s - %(message)s',  # Log format
-    handlers=[logging.StreamHandler()]  # Output logs to stderr (default)
+    level=getattr(logging, LOG_LEVEL, logging.WARN),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
 )
+logger = logging.getLogger(__name__)
+logger.info(f"Current working directory: {os.getcwd()}")
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+logging.getLogger('matplotlib').setLevel(logging.WARN) # Suppress matplotlib debug output
+logging.getLogger('PIL').setLevel(logging.WARN) # Suppress PIL debug output
 from stable_baselines3 import DQN
+from typing import Optional
 import torch.nn as nn
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
@@ -13,9 +21,6 @@ from stable_baselines3.common.logger import configure
 from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
-import os
-logging.info(f"Current working directory: {os.getcwd()}")
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 from datetime import datetime 
 import psutil
 from time import sleep
@@ -59,8 +64,8 @@ detectors_before = ["detector_seg_0_before_2", "detector_seg_0_before_1", "detec
 loops_after = ["loop_seg_0_after_1", "loop_seg_0_after_0"]
 detectors_after = ["detector_seg_0_after_1", "detector_seg_0_after_0"]
 detector_length = 50 # meters
-base_train_sumo_port = 8000
-base_eval_sumo_port = 9000
+BASE_TRAIN_SUMO_PORT = 8000
+BASE_EVAL_SUMO_PORT = 9000
 """ Curriculum learning for the DQN agent, which means gradually increasing the difficulty of the training scenarios. """
 interval_length_h = 2 # hours
 num_of_intervals = 10
@@ -79,7 +84,6 @@ MAX_QUEUE_LENGTH = 500 # vehicles (adjust based on your segment length)
 OBSERVATION_SPACE_SIZE = 7
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
 
-INITIAL_PARALLEL_TUNING_PORT_BASE = 10000
 PORTS_PER_TUNING_PROCESS = 100 # Max trials * num_scenarios_per_trial + buffer
 
 HYPER_PARAM_SIM_LENGTH = 3600
@@ -140,12 +144,12 @@ def create_sumocfg(model, vsl_enforcement="lane_only", model_idx_offset=0):
         with open(filepath, 'w') as file:
              file.write(content)
         
-        logging.debug(f"Created {filepath}")
+        logger.debug(f"Created {filepath}")
 
 def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         # Use provided port or default from global, adjusted by idx
-        port_for_env = sumo_port_to_use if sumo_port_to_use is not None else base_train_sumo_port + idx
+        port_for_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_TRAIN_SUMO_PORT + idx
         
         env = Monitor(TrafficEnv(port=port_for_env,
                                 model_name=model_name,
@@ -162,7 +166,7 @@ def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enfor
 def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         # Use provided port or default from global
-        port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else base_eval_sumo_port
+        port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
         # model_idx for eval env can be fixed, e.g., num_envs_per_model -1, or a dedicated high number
         eval_model_idx = num_envs_per_model -1 # Or a distinct ID like 999
 
@@ -179,16 +183,16 @@ def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only", sum
         return env
     return _init
 
-def train_model(algorithm,
-                reward_function="balanced", 
-                num_of_episodes=7,
-                use_enhanced_params=True,
-                custom_params=None,
-                vsl_enforcement="lane_only",
-                process_train_base_port=None,
-                process_eval_base_port=None,
-                sumo_binary_to_use=None):
-    """Fixed version with correct SB3 2.6.0 parameter names. DQN only."""
+def train_model(algorithm: str,
+                reward_function: str = "balanced",
+                num_of_episodes: int = 7, # Total episodes for the training run
+                use_enhanced_params: bool = True,
+                custom_params: Optional[dict] = None,
+                vsl_enforcement: str = "lane_only",
+                process_train_base_port: Optional[int] = None,
+                process_eval_base_port: Optional[int] = None,
+                sumo_binary_to_use: Optional[str] = None):
+    """Trains a model using the specified algorithm and parameters."""
     # Only DQN supported
     params = ENHANCED_HYPERPARAMS["DQN"].copy() if use_enhanced_params else {
         "learning_rate": 1e-4,
@@ -207,7 +211,7 @@ def train_model(algorithm,
     }
     if custom_params:
         params.update(custom_params)
-        logging.info(f"Applied custom parameter overrides: {custom_params}")
+        logger.info(f"Applied custom parameter overrides: {custom_params}")
 
     steps_per_episode = 504000 // 60  
     total_timesteps = steps_per_episode * num_of_episodes
@@ -222,8 +226,8 @@ def train_model(algorithm,
     # Determine base ports for SubprocVecEnv if provided
     # If num_train_envs_per_model > 1, each sub-env needs its own port.
     # The process_train_base_port is the starting port for this train_model call.
-    current_train_base_port = process_train_base_port if process_train_base_port is not None else base_train_sumo_port
-    current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else base_eval_sumo_port
+    current_train_base_port = process_train_base_port if process_train_base_port is not None else BASE_TRAIN_SUMO_PORT
+    current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else BASE_EVAL_SUMO_PORT
 
     train_env = SubprocVecEnv([
         train_env_constructor(i, model_name, num_of_episodes, reward_function, vsl_enforcement,
@@ -256,7 +260,7 @@ def train_model(algorithm,
                policy_kwargs=policy_kwargs,
                verbose=1, tensorboard_log=log_dir, device='cuda')
 
-    logging.info(f"Training DQN with parameters: {params}")
+    logger.info(f"Training DQN with parameters: {params}")
 
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
@@ -295,13 +299,13 @@ def train_model(algorithm,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
     except KeyboardInterrupt:
-        logging.warning(f"Training for {model_name} interrupted by user.")
+        logger.warning(f"Training for {model_name} interrupted by user.")
     except Exception as e:
-        logging.error(f"Error during training for {model_name}: {e}")
+        logger.error(f"Error during training for {model_name}: {e}")
     finally:
         train_env.close()
         env_eval.close()
-        logging.info(f"Finished training for {model_name}")
+        logger.info(f"Finished training for {model_name}")
 
 def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     """Test a trained DQN model with comprehensive evaluation."""
@@ -310,11 +314,11 @@ def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
         model_path = f"rl_models/{model_name}/best_model"
         model = DQN.load(model_path)
     except FileNotFoundError:
-        logging.warning(f"Best model not found, loading checkpoint...")
+        logger.warning(f"Best model not found, loading checkpoint...")
         checkpoint_path = f"rl_models/{model_name}/rl_model_{model_name}_final.zip"
         model = DQN.load(checkpoint_path)
 
-    env = TrafficEnv(port=base_eval_sumo_port,
+    env = TrafficEnv(port=BASE_EVAL_SUMO_PORT,
                      model_name=model_name,
                      model_idx=0,
                      op_mode="test",
@@ -353,7 +357,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
         # This should ideally always be provided by the caller for specific saving
         os.makedirs("rl_models/optuna_params", exist_ok=True)
         specific_params_file_path = os.path.join("rl_models", "optuna_params", f"default_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json")
-        logging.warning(f"specific_params_file_path not provided, defaulting to {specific_params_file_path}")
+        logger.warning(f"specific_params_file_path not provided, defaulting to {specific_params_file_path}")
 
     # Ensure the directory for the specific params file exists
     os.makedirs(os.path.dirname(specific_params_file_path), exist_ok=True)
@@ -400,7 +404,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
         cfg_content = sumocfg_template.format(model=tuning_files_model_name, index=config['id'])
         with open(cfg_filepath, 'w') as file:
             file.write(cfg_content)
-        logging.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
+        logger.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
 
     def objective(trial):
         net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["256,256", "512,256", "256,128,64"])
@@ -422,7 +426,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
         }
         total_reward_for_trial = 0.0
         # Use the base port assigned to this specific tuning process
-        current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else base_train_sumo_port
+        current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else BASE_TRAIN_SUMO_PORT
 
         trial_summary = {
             "trial_number": trial.number,
@@ -467,21 +471,21 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
                 }
                 trial_summary["scenarios"].append(scenario_summary)
             except Exception as e:
-                logging.error(f"Trial {trial.number} scenario {config_item['id']} for {tuning_files_model_name} failed: {e}", exc_info=True)
+                logger.error(f"Trial {trial.number} scenario {config_item['id']} for {tuning_files_model_name} failed: {e}", exc_info=True)
                 # Ensure env is closed if it was created, even on error
                 if env is not None:
                     try:
                         env.close()
                     except Exception as close_e:
-                        logging.error(f"Error closing env in exception for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
+                        logger.error(f"Error closing env in exception for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
                 return float('-inf') # Prune this trial
             finally:
                 if env is not None: 
                     try:
-                        logging.debug(f"Closing env for trial {trial.number}, scenario {config_item['id']} in finally block.")
+                        logger.debug(f"Closing env for trial {trial.number}, scenario {config_item['id']} in finally block.")
                         env.close()
                     except Exception as close_e:
-                        logging.error(f"Error during env.close() in finally for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
+                        logger.error(f"Error during env.close() in finally for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
         
         summary_dir = os.path.dirname("logs/optuna_summaries/")
         summary_filename = f"summary_{tuning_files_model_name}_trial_{trial.number}.json"
@@ -501,23 +505,23 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
             with open(specific_params_file_path, "r") as f:
                 prev_best_params = json.load(f)
             study.enqueue_trial(prev_best_params)
-            logging.info(f"Enqueued previous best parameters from {specific_params_file_path} for warm start of {tuning_files_model_name}.")
+            logger.info(f"Enqueued previous best parameters from {specific_params_file_path} for warm start of {tuning_files_model_name}.")
         except Exception as e:
-            logging.info(f"Could not load or enqueue previous Optuna params from {specific_params_file_path} for {tuning_files_model_name}: {e}")
+            logger.info(f"Could not load or enqueue previous Optuna params from {specific_params_file_path} for {tuning_files_model_name}: {e}")
     else:
-        logging.info(f"Specific Optuna params file {specific_params_file_path} not found for {tuning_files_model_name}. Starting fresh study.")
+        logger.info(f"Specific Optuna params file {specific_params_file_path} not found for {tuning_files_model_name}. Starting fresh study.")
 
     study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
 
-    logging.info(f"Optuna study for {tuning_files_model_name} (params for {algorithm}_{reward_function}_{vsl_enforcement}) completed. Best params: {study.best_params}")
+    logger.info(f"Optuna study for {tuning_files_model_name} (params for {algorithm}_{reward_function}_{vsl_enforcement}) completed. Best params: {study.best_params}")
 
     # Save to the SPECIFIC file path
     with open(specific_params_file_path, "w") as f:
         json.dump(study.best_params, f)
-    logging.info(f"Saved best Optuna params for {tuning_files_model_name} to: {specific_params_file_path}")
+    logger.info(f"Saved best Optuna params for {tuning_files_model_name} to: {specific_params_file_path}")
     
     delay_before_cleanup = 10 
-    logging.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {tuning_files_model_name}...")
+    logger.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {tuning_files_model_name}...")
     time.sleep(delay_before_cleanup)
 
     patterns_to_clean = [
@@ -531,41 +535,41 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
         file_path_obj_fr = Path(filepath_to_clean)
 
         if not file_path_obj_fr.exists():
-            logging.debug(f"File {filepath_to_clean} does not exist. No need to remove.")
+            logger.debug(f"File {filepath_to_clean} does not exist. No need to remove.")
             return True
 
-        logging.debug(f"Attempting to remove {filepath_to_clean}...")
+        logger.debug(f"Attempting to remove {filepath_to_clean}...")
         while time.time() - start_time_fr < timeout:
             try:
                 os.remove(filepath_to_clean)
-                logging.debug(f"Successfully removed: {filepath_to_clean}")
+                logger.debug(f"Successfully removed: {filepath_to_clean}")
                 return True
             except FileNotFoundError: # If removed by another process or in a previous attempt
-                logging.debug(f"File {filepath_to_clean} already gone (FileNotFoundError during retry).")
+                logger.debug(f"File {filepath_to_clean} already gone (FileNotFoundError during retry).")
                 return True
             except PermissionError as e_perm_fr: # Specifically catch PermissionError (WinError 32)
-                logging.warning(f"Could not remove {filepath_to_clean} due to PermissionError (likely in use): {e_perm_fr}. Retrying in 1s...")
+                logger.warning(f"Could not remove {filepath_to_clean} due to PermissionError (likely in use): {e_perm_fr}. Retrying in 1s...")
                 time.sleep(1)
             except Exception as e_fr: # Catch other potential OS errors
-                logging.warning(f"Could not remove {filepath_to_clean} due to OS error: {e_fr}. Retrying in 1s...")
+                logger.warning(f"Could not remove {filepath_to_clean} due to OS error: {e_fr}. Retrying in 1s...")
                 time.sleep(1)
         
-        logging.error(f"Failed to remove {filepath_to_clean} after {timeout} seconds. It might still be in use.")
+        logger.error(f"Failed to remove {filepath_to_clean} after {timeout} seconds. It might still be in use.")
         if file_path_obj_fr.exists(): # Check one last time
-            logging.error(f"File {filepath_to_clean} STILL EXISTS. Listing active SUMO processes:")
+            logger.error(f"File {filepath_to_clean} STILL EXISTS. Listing active SUMO processes:")
             try:
                 for proc in psutil.process_iter(['pid', 'name']): # Removed 'username' for brevity/permission
                     if 'sumo' in proc.info['name'].lower():
-                        logging.error(f"  Potential SUMO culprit: PID {proc.info['pid']}, Name {proc.info['name']}")
+                        logger.error(f"  Potential SUMO culprit: PID {proc.info['pid']}, Name {proc.info['name']}")
             except (psutil.Error) as e_psutil: # Catch all psutil errors
-                 logging.error(f"Could not list processes due to psutil error: {e_psutil}")
+                 logger.error(f"Could not list processes due to psutil error: {e_psutil}")
         return False
         
     for pattern in patterns_to_clean:
         # Glob directly in the sumo directory
         for filepath_to_clean_glob in glob.glob(str(output_dir_sumo / pattern)):
             # The pattern already includes tuning_files_model_name, so it's specific enough
-            logging.debug(f"Targeting specific tuning file for cleanup: {filepath_to_clean_glob}")
+            logger.debug(f"Targeting specific tuning file for cleanup: {filepath_to_clean_glob}")
             wait_for_file_release(filepath_to_clean_glob)
     
     return study.best_params
@@ -598,7 +602,7 @@ def run_training_for_combination(config_tuple):
     # This is the actual model name for saving SB3 models and logs
     config_model_name_for_training = f"{algo_used}_{reward_fn}_{vsl_mode}"
     
-    logging.info(f"Process {process_id}: Starting combination {config_model_name_for_training}. Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
+    logger.info(f"Process {process_id}: Starting combination {config_model_name_for_training}. Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
 
     best_params = None
     # Load specific Optuna params file for this combination
@@ -610,17 +614,17 @@ def run_training_for_combination(config_tuple):
         try:
             with open(specific_optuna_params_path, "r") as f:
                 best_params = json.load(f)
-            logging.info(f"Process {process_id}: Loaded specific Optuna params from {specific_optuna_params_path} for {config_model_name_for_training}")
+            logger.info(f"Process {process_id}: Loaded specific Optuna params from {specific_optuna_params_path} for {config_model_name_for_training}")
         except Exception as e:
-            logging.warning(f"Process {process_id}: Could not load specific Optuna params from {specific_optuna_params_path}: {e}. Using default ENHANCED_HYPERPARAMS.")
+            logger.warning(f"Process {process_id}: Could not load specific Optuna params from {specific_optuna_params_path}: {e}. Using default ENHANCED_HYPERPARAMS.")
             best_params = None 
     else:
-        logging.warning(f"Process {process_id}: Specific Optuna params file not found at {specific_optuna_params_path}. Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
+        logger.warning(f"Process {process_id}: Specific Optuna params file not found at {specific_optuna_params_path}. Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
     
     if not best_params:
         best_params = ENHANCED_HYPERPARAMS.get(algo_used, {}).copy()
         if not best_params: # Fallback if algo_used not in ENHANCED_HYPERPARAMS
-            logging.error(f"Default ENHANCED_HYPERPARAMS for {algo_used} not found. Using basic DQN defaults.")
+            logger.error(f"Default ENHANCED_HYPERPARAMS for {algo_used} not found. Using basic DQN defaults.")
             best_params = { # Basic DQN defaults
                 "learning_rate": 1e-4, "buffer_size": 100000, "batch_size": 128,
                 "target_update_interval": 1000, "exploration_fraction": 0.1,
@@ -629,7 +633,7 @@ def run_training_for_combination(config_tuple):
                 "tau": 1.0, "gamma": 0.99, "net_arch": [256, 256, 128]
             }
         else:
-            logging.info(f"Process {process_id}: Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
+            logger.info(f"Process {process_id}: Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
 
 
     if "net_arch_str" in best_params: 
@@ -643,11 +647,11 @@ def run_training_for_combination(config_tuple):
 
     try:
         # Create SUMO config using the training model name
-        logging.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
+        logger.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
         create_sumocfg(config_model_name_for_training, vsl_mode) 
                                            
         # Train Model
-        logging.info(f"Process {process_id}: Training model {config_model_name_for_training} with params: {best_params}")
+        logger.info(f"Process {process_id}: Training model {config_model_name_for_training} with params: {best_params}")
         train_model(algorithm=algo_used,
                     reward_function=reward_fn, # Pass the specific reward_fn
                     use_enhanced_params=False, 
@@ -657,10 +661,10 @@ def run_training_for_combination(config_tuple):
                     process_eval_base_port=main_eval_base_port,
                     sumo_binary_to_use=parallel_sumo_binary)
         
-        logging.info(f"Process {process_id}: Successfully completed {config_model_name_for_training}")
+        logger.info(f"Process {process_id}: Successfully completed {config_model_name_for_training}")
         return f"Success: {config_model_name_for_training}"
     except Exception as e:
-        logging.error(f"Process {process_id}: FAILED for {config_model_name_for_training}. Error: {e}", exc_info=True)
+        logger.error(f"Process {process_id}: FAILED for {config_model_name_for_training}. Error: {e}", exc_info=True)
         return f"Failure: {config_model_name_for_training} - {e}"
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
@@ -762,25 +766,25 @@ class TrafficEnv(gym.Env):
         if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             try:
                 traci.simulation.getTime()
-                logging.debug(f"SUMO ({log_id}) is already running and responsive.")
+                logger.debug(f"SUMO ({log_id}) is already running and responsive.")
                 return
             except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
-                logging.warning(f"SUMO process ({log_id}) exists but not responsive, restarting...")
+                logger.warning(f"SUMO process ({log_id}) exists but not responsive, restarting...")
                 self.is_sumo_initialized = False # Mark for restart
         
         if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             self.close_sumo(f"Restarting SUMO for initialization ({log_id})")
             sleep(3) # Give a bit more time for resources to free up
         elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
-            logging.debug(f"SUMO process handle existed for {log_id} but PID was not found. Clearing handle.")
+            logger.debug(f"SUMO process handle existed for {log_id} but PID was not found. Clearing handle.")
             self.sumo_process = None # Clear stale handle
 
         if traci.isLoaded():
             try:
                 traci.close(wait=False)
-                logging.debug(f"Closed existing TraCI connection before starting new SUMO instance for {log_id}.")
+                logger.debug(f"Closed existing TraCI connection before starting new SUMO instance for {log_id}.")
             except Exception as e:
-                logging.warning(f"Error closing previous TraCI connection for {log_id}: {e}")
+                logger.warning(f"Error closing previous TraCI connection for {log_id}: {e}")
         
         for attempt in range(self.sumo_max_retries):
             try:
@@ -800,7 +804,7 @@ class TrafficEnv(gym.Env):
                 
                 route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
-                    logging.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
+                    logger.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
@@ -821,26 +825,26 @@ class TrafficEnv(gym.Env):
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
-                logging.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
+                logger.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
                 time.sleep(0.5) 
                 try:
                     traci.init(port=port, numRetries=5, host='127.0.0.1')
                 except Exception as e:
                     if self.sumo_process:
                         out, err = self.sumo_process.communicate(timeout=2)
-                        logging.error(f"SUMO stderr: {err.decode()}")
+                        logger.error(f"SUMO stderr: {err.decode()}")
                     raise e
-                logging.info(f"Successfully connected to SUMO ({log_id}) on port {port} for {self.sim_length}s simulation")
+                logger.info(f"Successfully connected to SUMO ({log_id}) on port {port} for {self.sim_length}s simulation")
                 self.is_sumo_initialized = True
                 break
                 
             except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e:
-                logging.error(f"Attempt {attempt + 1} to start/connect SUMO ({log_id}) failed: {e}")
+                logger.error(f"Attempt {attempt + 1} to start/connect SUMO ({log_id}) failed: {e}")
                 self.close_sumo(f"Failed to start/connect SUMO ({log_id}) on attempt {attempt+1}")
                 if attempt < self.sumo_max_retries - 1:
                     sleep(self._sumo_retry_sleep_func(attempt, self.sumo_max_retries)) # Use customized retry sleep
                 else:
-                    logging.error(f"Max retries reached for starting SUMO ({log_id}). Raising exception.")
+                    logger.error(f"Max retries reached for starting SUMO ({log_id}). Raising exception.")
                     raise e
 
     def step(self, action):
@@ -853,7 +857,7 @@ class TrafficEnv(gym.Env):
         try:
             current_time = traci.simulation.getTime()
         except (FatalTraCIError, TraCIException):
-            logging.error("Lost connection to SUMO, restarting...")
+            logger.error("Lost connection to SUMO, restarting...")
             self.is_sumo_initialized = False
             self.start_sumo()
             current_time = traci.simulation.getTime()
@@ -888,7 +892,7 @@ class TrafficEnv(gym.Env):
                 current_time = traci.simulation.getTime()
                 self.simulation_step += 1
             except (FatalTraCIError, TraCIException):
-                logging.error("Lost connection during simulation steps")
+                logger.error("Lost connection during simulation steps")
                 # Reset environment instead of crashing
                 return self.reset()
             
@@ -982,7 +986,7 @@ class TrafficEnv(gym.Env):
         }
         
         self.veh_passed_downstream += flow_downstream_temp # FIXME: Temp debug
-        logging.debug(f"No. of vehicles arrived: {self.veh_passed_downstream}") # FIXME: Temp debug
+        logger.debug(f"No. of vehicles arrived: {self.veh_passed_downstream}") # FIXME: Temp debug
 
         return observation, reward, done, False, info
 
@@ -1031,9 +1035,6 @@ class TrafficEnv(gym.Env):
         }
         
         return observation, info
-
-    def close_sumo(self, reason):
-        pass
 
     def _calculate_reward(self, invalid_action_penalty):
         """
@@ -1195,7 +1196,7 @@ class TrafficEnv(gym.Env):
             # Option 3: Only set maximum allowed speed for the lane
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
-            logging.debug(f"VSL Mode 3: Set lane max speed to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode 3: Set lane max speed to {speed_limit_kmh} km/h")
             
         elif self.vsl_enforcement == "all_vehicles":
             # Option 1: Force all vehicles to obey speed limit immediately
@@ -1210,9 +1211,9 @@ class TrafficEnv(gym.Env):
                         # Set vehicle speed to the new speed limit
                         traci.vehicle.setSpeed(veh_id, speed_limit_ms)
                     except Exception as e:
-                        logging.debug(f"Could not set speed for vehicle {veh_id}: {e}")
+                        logger.debug(f"Could not set speed for vehicle {veh_id}: {e}")
             
-            logging.debug(f"VSL Mode 1: Forced all vehicles to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode 1: Forced all vehicles to {speed_limit_kmh} km/h")
             
         elif self.vsl_enforcement == "electric_only":
             # Option 2: Force only electric_passenger vehicles to obey speed limit
@@ -1229,18 +1230,51 @@ class TrafficEnv(gym.Env):
                         if veh_type == "electric_passenger":
                             traci.vehicle.setSpeed(veh_id, speed_limit_ms)
                     except Exception as e:
-                        logging.debug(f"Could not check/set speed for vehicle {veh_id}: {e}")
+                        logger.debug(f"Could not check/set speed for vehicle {veh_id}: {e}")
             
-            logging.debug(f"VSL Mode 2: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode 2: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
             
         else:
-            logging.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using lane_only.")
+            logger.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using lane_only.")
             # Fallback to lane_only
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
 
+    def close_sumo(self, reason: str):
+        """Safely closes the TraCI connection and terminates the SUMO process."""
+        log_id = self._get_sumo_log_identifier()
+        logger.debug(f"Closing SUMO for {log_id} due to: {reason}")
+        
+        if traci.isLoaded():
+            try:
+                traci.close(wait=False) # wait=False to prevent blocking if SUMO already crashed
+                logger.debug(f"TraCI connection closed for {log_id}.")
+            except Exception as e:
+                logger.warning(f"Exception during traci.close() for {log_id}: {e}")
+        
+        if self.sumo_process:
+            if psutil.pid_exists(self.sumo_process.pid):
+                try:
+                    logger.debug(f"Terminating SUMO process PID {self.sumo_process.pid} for {log_id}.")
+                    self.sumo_process.terminate()
+                    self.sumo_process.wait(timeout=5) # Wait for a few seconds
+                    logger.debug(f"SUMO process PID {self.sumo_process.pid} terminated for {log_id}.")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"SUMO process PID {self.sumo_process.pid} did not terminate in time, attempting kill for {log_id}.")
+                    self.sumo_process.kill()
+                    self.sumo_process.wait(timeout=2)
+                except Exception as e:
+                    logger.error(f"Exception during SUMO process termination for {log_id}: {e}")
+            else:
+                logger.debug(f"SUMO process PID {self.sumo_process.pid} for {log_id} did not exist when trying to close.")
+            self.sumo_process = None
+        self.is_sumo_initialized = False
+
     def close(self):
-        self.close_sumo("env.close()")
+        """Closes the environment and its SUMO instance."""
+        self.close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
+        if hasattr(self.logger, 'save_to_csv') and isinstance(self.logger, TrafficDataLogger): # If using TrafficDataLogger per env
+             self.logger.save_to_csv(filename=f"traffic_log_{self._get_sumo_log_identifier()}.csv")
 
 class TrafficDataLogger:
     """
@@ -1279,7 +1313,7 @@ class TrafficDataLogger:
         self.output_dir = Path("./logs/traffic_data")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        logging.info(f"TrafficDataLogger initialized with default speed limit: {default_speed_limit} km/h")
+        logger.info(f"TrafficDataLogger initialized with default speed limit: {default_speed_limit} km/h")
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
                      flow_downstream, occupancy, queue_length, reward, action):
@@ -1341,10 +1375,10 @@ class TrafficDataLogger:
         
         # Log significant events
         if abs(speed_change) > 0:
-            logging.debug(f"Speed limit changed by {speed_change} km/h to {current_speed_limit} km/h at step {self.step_count}")
+            logger.debug(f"Speed limit changed by {speed_change} km/h to {current_speed_limit} km/h at step {self.step_count}")
         
         if reward < -10:
-            logging.warning(f"Large negative reward ({reward:.2f}) at step {self.step_count}")
+            logger.warning(f"Large negative reward ({reward:.2f}) at step {self.step_count}")
 
     def log_episode_end(self, episode_reward, episode_length, final_metrics=None):
         """
@@ -1360,7 +1394,7 @@ class TrafficDataLogger:
         
         if episode_reward > self.best_reward:
             self.best_reward = episode_reward
-            logging.info(f"New best episode reward: {episode_reward:.2f}")
+            logger.info(f"New best episode reward: {episode_reward:.2f}")
         
         episode_data = {
             'episode': self.episode_count,
@@ -1377,7 +1411,7 @@ class TrafficDataLogger:
         if final_metrics:
             episode_data.update(final_metrics)
         
-        logging.info(f"Episode {self.episode_count} completed: "
+        logger.info(f"Episode {self.episode_count} completed: "
                     f"Reward={episode_reward:.2f}, Length={episode_length}, "
                     f"Avg Flow={self.avg_flow_rate:.1f} veh/h")
         
@@ -1409,7 +1443,7 @@ class TrafficDataLogger:
             include_summary (bool): Whether to include summary statistics
         """
         if not self.data:
-            logging.warning("No data to save")
+            logger.warning("No data to save")
             return
         
         if filename is None:
@@ -1428,11 +1462,11 @@ class TrafficDataLogger:
                 summary_filepath = filepath.with_suffix('.summary.csv')
                 self._save_summary_statistics(summary_filepath)
             
-            logging.info(f"Traffic data saved to {filepath}")
-            logging.info(f"Total steps logged: {len(self.data)}")
+            logger.info(f"Traffic data saved to {filepath}")
+            logger.info(f"Total steps logged: {len(self.data)}")
             
         except Exception as e:
-            logging.error(f"Error saving data to {filepath}: {e}")
+            logger.error(f"Error saving data to {filepath}: {e}")
 
     def _save_summary_statistics(self, filepath):
         """Save summary statistics to separate file."""
@@ -1475,7 +1509,7 @@ class TrafficDataLogger:
         summary_df = pd.DataFrame([summary_stats])
         summary_df.to_csv(filepath, index=False)
         
-        logging.info(f"Summary statistics saved to {filepath}")
+        logger.info(f"Summary statistics saved to {filepath}")
 
     def get_performance_metrics(self):
         """
@@ -1599,14 +1633,14 @@ class TrafficEnvForTuning(TrafficEnv):
         expected_config_file = f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg"
         
         if not os.path.exists(expected_flow_file):
-            logging.error(f"Missing pre-generated flow file: {expected_flow_file}")
+            logger.error(f"Missing pre-generated flow file: {expected_flow_file}")
             raise FileNotFoundError(f"Pre-generated flow file not found: {expected_flow_file}")
         
         if not os.path.exists(expected_config_file):
-            logging.error(f"Missing pre-generated config file: {expected_config_file}")
+            logger.error(f"Missing pre-generated config file: {expected_config_file}")
             raise FileNotFoundError(f"Pre-generated config file not found: {expected_config_file}")
         
-        logging.debug(f"Verified pre-generated files for scenario {self.model_idx}")
+        logger.debug(f"Verified pre-generated files for scenario {self.model_idx}")
     
     def get_simulation_summary(self):
         return {
@@ -1622,7 +1656,7 @@ class TrafficEnvForTuning(TrafficEnv):
         """
         if self.skip_flow_generation:
             # Log specific message for tuning if using pre-generated files
-            logging.debug(f"Using pre-generated flow file for {self._get_sumo_log_identifier()}")
+            logger.debug(f"Using pre-generated flow file for {self._get_sumo_log_identifier()}")
         
         # All other logic is now handled by the parent's start_sumo
         # using the overridden attributes (_sumo_start_context_prefix, 
@@ -1642,7 +1676,7 @@ class TrafficEnvForTuning(TrafficEnv):
             self.total_vehicles_before += traci.edge.getLastStepVehicleNumber("seg_0_before")
             self.total_vehicles_after += traci.edge.getLastStepVehicleNumber("seg_0_after")
         except Exception as e:
-            logging.warning(f"Could not get vehicle numbers for verification: {e}")
+            logger.warning(f"Could not get vehicle numbers for verification: {e}")
                 
         # **TUNING OPTIMIZATION**: Early termination for clearly poor performers
         if hasattr(self, '_tuning_step_count'):
@@ -1660,7 +1694,7 @@ class TrafficEnvForTuning(TrafficEnv):
             # If average reward is very negative, terminate early
             avg_reward = self._cumulative_reward / self._tuning_step_count
             if avg_reward < -5:  # Threshold for clearly poor performance
-                logging.debug(f"Early termination for poor performance: avg_reward={avg_reward:.2f}")
+                logger.debug(f"Early termination for poor performance: avg_reward={avg_reward:.2f}")
                 done = True
         else:
             if hasattr(self, '_cumulative_reward'):
@@ -1709,7 +1743,7 @@ class TrafficEnvForTuning(TrafficEnv):
 
 # Wrapper function for parallel execution of tune_hyperparameters
 def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_port_tune, binary_tune):
-    logging.info(f"Starting tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune} with params file {specific_file} on base port {base_port_tune}")
+    logger.info(f"Starting tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune} with params file {specific_file} on base port {base_port_tune}")
     try:
         tune_hyperparameters(algorithm=algo_tune,
                              reward_function=r_fn_tune,
@@ -1718,21 +1752,17 @@ def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_por
                              tuning_process_base_port=base_port_tune,
                              sumo_binary_to_use=binary_tune,
                              n_trials=N_OPTUNA_TRIALS) # Use defined N_OPTUNA_TRIALS
-        logging.info(f"Finished tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune}")
+        logger.info(f"Finished tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune}")
     except Exception as e_tune_wrapper:
-         logging.error(f"Error in tuning wrapper for {algo_tune}_{r_fn_tune}_{vsl_m_tune}: {e_tune_wrapper}", exc_info=True)
+         logger.error(f"Error in tuning wrapper for {algo_tune}_{r_fn_tune}_{vsl_m_tune}: {e_tune_wrapper}", exc_info=True)
 
 if __name__ == '__main__':
-    # Suppress matplotlib debug output
-    logging.getLogger('matplotlib').setLevel(logging.WARNING)
-    logging.getLogger('PIL').setLevel(logging.WARNING)
-
     # from https://sumo.dlr.de/docs/TraCI/Interfacing_TraCI_from_Python.html
     if 'SUMO_HOME' in os.environ:
         tools = os.path.join(os.environ['SUMO_HOME'], 'tools')
         sys.path.append(tools)
     else:
-        logging.info("SUMO environment is not set up correctly.")
+        logger.info("SUMO environment is not set up correctly.")
 
     reward_functions_to_tune = ["mobility", "safety", "balanced"]
     vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "lane_only"]
@@ -1761,14 +1791,14 @@ if __name__ == '__main__':
                     vsl_enforcement=vsl_enforce_mode)
     
     elif option == 3:
-        logging.info("Starting parallel hyperparameter tuning for all combinations.")
+        logger.info("Starting parallel hyperparameter tuning for all combinations.")
         
         tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
         
         tuning_combinations = list(product(reward_functions_to_tune, vsl_enforcements_to_tune))
         
         num_parallel_tuning_processes = min(len(tuning_combinations), mp.cpu_count() - 1 if mp.cpu_count() > 1 else 1)
-        logging.info(f"Running {len(tuning_combinations)} tuning combinations using up to {num_parallel_tuning_processes} parallel processes.")
+        logger.info(f"Running {len(tuning_combinations)} tuning combinations using up to {num_parallel_tuning_processes} parallel processes.")
 
         if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
              mp.set_start_method('spawn', force=True)
@@ -1783,7 +1813,7 @@ if __name__ == '__main__':
             specific_params_file = os.path.join(params_dir, specific_params_filename)
             
             # Assign a unique base port for this tuning process
-            current_tuning_base_port = INITIAL_PARALLEL_TUNING_PORT_BASE + i * PORTS_PER_TUNING_PROCESS
+            current_tuning_base_port = BASE_EVAL_SUMO_PORT + i * PORTS_PER_TUNING_PROCESS
             
             p_tune = mp.Process(target=run_tuning_wrapper, args=(
                 r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary
@@ -1801,10 +1831,10 @@ if __name__ == '__main__':
         for p_tune in tuning_processes:
             p_tune.join()
             
-        logging.info("Parallel hyperparameter tuning finished for all combinations.")
+        logger.info("Parallel hyperparameter tuning finished for all combinations.")
     
     elif option == 4:
-        logging.info("Starting parallel training for all combinations using tuned or default parameters.")
+        logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
         parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
 
@@ -1822,7 +1852,7 @@ if __name__ == '__main__':
                 process_counter += 1
         
         num_parallel_training_processes = min(len(all_combinations_params_for_training), mp.cpu_count() - 1 if mp.cpu_count() > 1 else 1) 
-        logging.info(f"Running {len(all_combinations_params_for_training)} training combinations using up to {num_parallel_training_processes} parallel processes.")
+        logger.info(f"Running {len(all_combinations_params_for_training)} training combinations using up to {num_parallel_training_processes} parallel processes.")
 
         if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
              mp.set_start_method('spawn', force=True)
@@ -1845,9 +1875,9 @@ if __name__ == '__main__':
         for p_train in active_training_processes: # Join any remaining
             p_train.join()
 
-        logging.info("Parallel training run finished for all combinations.")
+        logger.info("Parallel training run finished for all combinations.")
         # for res_train in training_results: # If using a results list
-        #     logging.info(res_train)
+        #     logger.info(res_train)
     
     elif option == 5:
         # Evaluate the trained model
