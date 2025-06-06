@@ -1,4 +1,9 @@
 import logging
+logging.basicConfig(
+    level=logging.WARN,  # Set the log level | DEBUG, INFO, WARNING, ERROR, CRITICAL
+    format='%(asctime)s - %(levelname)s - %(message)s',  # Log format
+    handlers=[logging.StreamHandler()]  # Output logs to stderr (default)
+)
 from stable_baselines3 import DQN
 import torch.nn as nn
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, CheckpointCallback, BaseCallback
@@ -27,15 +32,6 @@ import time
 import json
 import multiprocessing as mp # Added for parallel processing
 from itertools import product # Added for generating combinations
-
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Set the log level to DEBUG
-    format='%(asctime)s - %(levelname)s - %(message)s',  # Log format
-    handlers=[  # Handlers determine where logs are sent
-        logging.StreamHandler()  # Output logs to stderr (default)
-    ]
-)
 
 """ SUMO configuration """
 edges = ["seg_10_before","seg_9_before","seg_8_before","seg_7_before","seg_6_before","seg_5_before","seg_4_before","seg_3_before","seg_2_before","seg_1_before","seg_0_before","seg_0_after","seg_1_after"]
@@ -72,9 +68,9 @@ num_test_envs_per_model = 1
 num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
-sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
+# sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo' # This doesn't work
-sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui) # Default to GUI
+sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui) # Default to GUI
 
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
@@ -750,6 +746,8 @@ class TrafficEnv(gym.Env):
         self._default_sumo_binary_for_env = sumoBinary # Default for TrafficEnv
         self._sumo_retry_sleep_func = lambda attempt, max_retries: max_retries + attempt # Default retry logic
 
+        self.veh_passed_downstream = 0  # FIXME: Temp debug
+
     def _get_sumo_log_identifier(self):
         """Helper to get a consistent identifier for SUMO instance logging."""
         # For TrafficEnvForTuning, effective_model_name_for_files includes "_tune_"
@@ -926,7 +924,7 @@ class TrafficEnv(gym.Env):
         self.flow_downstream = (flow_downstream_temp / self.aggregation_time) * 3600
         self.queue_length_upstream = queue_length_temp / self.aggregation_time
         self.occupancy_upstream = min(occupancy_upstream_temp / self.aggregation_time, 100.0)
-        
+
         # Update historical data for smoothing
         self.flow_downstream_history.append(self.flow_downstream)
         self.occupancy_downstream_history.append(self.occupancy_upstream)
@@ -983,6 +981,9 @@ class TrafficEnv(gym.Env):
             'simulation_step': self.simulation_step
         }
         
+        self.veh_passed_downstream += flow_downstream_temp # FIXME: Temp debug
+        logging.debug(f"No. of vehicles arrived: {self.veh_passed_downstream}") # FIXME: Temp debug
+
         return observation, reward, done, False, info
 
     def reset(self, seed=None, options=None):
@@ -1018,6 +1019,8 @@ class TrafficEnv(gym.Env):
             0.0, 0.0, 0.0, 0.0, 0.0,
             self.default_speed_limit
         ], dtype=np.float64)
+
+        self.veh_passed_downstream = 0  # FIXME: Temp debug
 
         observation = self.preprocess_state(raw_observation)
 
@@ -1803,13 +1806,13 @@ if __name__ == '__main__':
     elif option == 4:
         logging.info("Starting parallel training for all combinations using tuned or default parameters.")
         
-        parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_gui)
+        parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         # reward_functions = ["mobility", "safety", "balanced"] # Original selection
-        reward_functions = ["mobility"] # As per user's active selection in prompt
+        reward_functions = ["mobility", "safety"] # As per user's active selection in prompt
         # vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
-        vsl_enforcements = ["all_vehicles"]
+        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
 
         all_combinations_params_for_training = []
         process_counter = 0
