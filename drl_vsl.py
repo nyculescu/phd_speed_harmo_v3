@@ -1544,47 +1544,108 @@ class TrafficDataLogger:
             logger.error(f"Error saving data to {filepath}: {e}")
 
     def _save_summary_statistics(self, filepath):
-        """Save summary statistics to separate file."""
+        """
+        Save enhanced, literature-standard summary statistics to a separate CSV file.
+        This provides a comprehensive overview of the agent's performance for academic papers.
+        """
         if not self.data or not self.episode_rewards:
+            logger.warning("No data available to generate summary statistics.")
             return
         
         df = pd.DataFrame(self.data)
         
+        # --- Foundational Metrics ---
+        total_steps = len(df)
+        total_episodes = self.episode_count
+        simulation_duration_hours = df['simulation_time'].iloc[-1] / 3600 if total_steps > 0 else 0
+        
+        # --- 1. Safety Metrics ---
+        # Significance: Directly measures traffic harmonization and risk. Lower variance and fewer collisions are key VSL goals.
+        
+        # Speed Variance: A primary indicator of traffic smoothness. Lower is better.
+        speed_history_ms = df['flow_downstream'] / (df['occupancy'] * 3.6 / 100) if 'occupancy' in df.columns else pd.Series([0])
+        speed_variance = np.var(speed_history_ms.dropna().replace([np.inf, -np.inf], 0))
+        
+        # Collision Rate: The most direct measure of safety. Standardized per hour.
+        total_collisions = self.collision_count # Assuming you update self.collision_count
+        collision_rate_per_hour = total_collisions / simulation_duration_hours if simulation_duration_hours > 0 else 0
+
+        # --- 2. Mobility and Efficiency Metrics ---
+        # Significance: Quantifies the VSL system's ability to maximize throughput and prevent congestion.
+        
+        # Average Throughput (Flow): The number of vehicles processed. Higher is better.
+        avg_flow_downstream = df['flow_downstream'].mean()
+        
+        # Capacity Utilization: How effectively the road's theoretical capacity is used.
+        # Assumes MAX_FLOW is defined globally, e.g., 7200 veh/h for 2 lanes.
+        capacity_utilization_pct = (avg_flow_downstream / MAX_FLOW) * 100
+        
+        # Flow Breakdown Probability: Percentage of time the system is in a congested state.
+        # Define breakdown: occupancy > 30% and flow < 1500 veh/h/lane (3000 total).
+        breakdown_conditions = (df['occupancy'] > 30) & (df['flow_downstream'] < 3000)
+        flow_breakdown_probability_pct = (breakdown_conditions.sum() / total_steps) * 100 if total_steps > 0 else 0
+
+        # --- 3. Control Stability Metrics ---
+        # Significance: Evaluates the practicality and smoothness of the VSL agent's actions. Erratic control is undesirable.
+        
+        # Control Action Frequency: How often the agent changes the speed limit. Lower is generally better for driver comfort.
+        total_speed_limit_changes = df['speed_limit_changes_total'].iloc[-1] if total_steps > 0 else 0
+        control_actions_per_hour = total_speed_limit_changes / simulation_duration_hours if simulation_duration_hours > 0 else 0
+        
+        # Control Action Magnitude & Stability: The average size and consistency of speed changes.
+        speed_changes_abs = df['speed_change'].abs()
+        avg_control_magnitude = speed_changes_abs[speed_changes_abs > 0].mean() # Avg magnitude of actual changes
+        std_control_magnitude = speed_changes_abs[speed_changes_abs > 0].std()
+
+        # --- 4. Composite (Multi-Objective) Indices ---
+        # Significance: Provides single scores to easily compare overall performance across different models, balancing competing objectives.
+        
+        # Safety Index (0 to 1): Higher is safer. Based on normalized speed variance.
+        max_reasonable_variance = 400.0  # Corresponds to a std dev of 20 m/s
+        safety_index = max(0.0, 1.0 - (speed_variance / max_reasonable_variance))
+        
+        # Mobility Index (0 to 1): Higher is more efficient. Based on capacity utilization.
+        mobility_index = capacity_utilization_pct / 100.0
+        
+        # Overall Performance Score (Weighted sum, customizable for your paper's focus)
+        # Example: 60% weight on safety, 40% on mobility.
+        performance_score = (0.6 * safety_index) + (0.4 * mobility_index)
+
+        # --- Assemble Summary Dictionary ---
         summary_stats = {
             'training_duration_minutes': (datetime.now() - self.start_time).total_seconds() / 60,
-            'total_episodes': self.episode_count,
-            'total_steps': len(self.data),
-            'avg_episode_length': len(self.data) / max(self.episode_count, 1),
+            'total_episodes': total_episodes,
+            'total_steps': total_steps,
             'best_episode_reward': self.best_reward,
             'avg_episode_reward': np.mean(self.episode_rewards),
-            'std_episode_reward': np.std(self.episode_rewards),
-            'total_speed_limit_changes': df['speed_limit_changes_total'].iloc[-1] if len(df) > 0 else 0,
-            'avg_flow_downstream': df['flow_downstream'].mean(),
-            'max_flow_downstream': df['flow_downstream'].max(),
-            'avg_occupancy': df['occupancy'].mean(),
-            'max_queue_length': df['queue_length'].max(),
-            'avg_reward_per_step': df['reward'].mean(),
-            'min_reward': df['reward'].min(),
-            'max_reward': df['reward'].max(),
-            'action_distribution_decrease': (df['action'] == 0).sum(),
-            'action_distribution_maintain': (df['action'] == 1).sum(),
-            'action_distribution_increase': (df['action'] == 2).sum(),
-            'default_speed_limit': self.default_speed_limit
+            
+            # Safety
+            'safety_index': safety_index,
+            'speed_variance_ms2': speed_variance,
+            'total_collisions': total_collisions,
+            'collision_rate_per_hour': collision_rate_per_hour,
+            
+            # Mobility
+            'mobility_index': mobility_index,
+            'avg_flow_downstream_veh_h': avg_flow_downstream,
+            'capacity_utilization_pct': capacity_utilization_pct,
+            'flow_breakdown_probability_pct': flow_breakdown_probability_pct,
+            'max_queue_length_m': df['queue_length'].max(),
+
+            # Control Stability
+            'control_actions_per_hour': control_actions_per_hour,
+            'avg_control_magnitude_kmh': avg_control_magnitude,
+            'std_control_magnitude_kmh': std_control_magnitude,
+            
+            # Overall Score
+            'performance_score': performance_score
         }
-        
-        # Calculate control smoothness metrics
-        speed_changes = df['speed_change'].abs()
-        summary_stats.update({
-            'control_smoothness_avg_change': speed_changes.mean(),
-            'control_smoothness_max_change': speed_changes.max(),
-            'control_smoothness_std': speed_changes.std()
-        })
         
         # Save summary
         summary_df = pd.DataFrame([summary_stats])
         summary_df.to_csv(filepath, index=False)
         
-        logger.info(f"Summary statistics saved to {filepath}")
+        logger.info(f"Enhanced summary statistics saved to {filepath}")
 
     def get_performance_metrics(self):
         """
