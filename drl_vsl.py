@@ -18,6 +18,7 @@ from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoMod
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
+# from sb3_contrib import QRDQN
 from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
@@ -94,28 +95,36 @@ N_OPTUNA_TRIALS = 9 # Number of trials for Optuna study
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
     "DQN": {
-        "learning_rate": 0.0001,
-        "buffer_size": 100000,
-        "batch_size": 32,
-        "target_update_interval": 5000,
-        "exploration_fraction": 0.15,
-        "exploration_initial_eps": 1.0,
-        "exploration_final_eps": 0.02,
-        "learning_starts": 10000,
-        "train_freq": 4,
-        "gradient_steps": 1,
-        "tau": 1.0,
-        "gamma": 0.995,
-        "net_arch": [512, 256, 128]
+        # --- Q-Network Architecture ---
+        "policy_kwargs": {
+            "net_arch": [512, 256, 128], # Deeper network for complex traffic patterns
+            "activation_fn": nn.ReLU
+        },
+        
+        # --- Learning and Optimization ---
+        "learning_rate": 1e-4,              # Slower, more stable learning rate
+        "gamma": 0.995,                     # High discount factor for farsightedness
+        "batch_size": 64,                   # Larger batch size for stable gradients
+        "train_freq": (4, "step"),          # Update every 4 environment steps
+        "gradient_steps": 1,                # 1 gradient step per update
+        "tau": 1.0,                         # Hard target network update
+        
+        # --- Experience Replay and Exploration ---
+        "buffer_size": 250000,              # Larger buffer for diverse traffic states
+        "learning_starts": 10000,           # Delayed start for a quality initial buffer
+        "exploration_fraction": 0.20,       # Longer exploration phase for traffic dynamics
+        "exploration_initial_eps": 1.0,     # Start with full exploration
+        "exploration_final_eps": 0.01,      # Lower final epsilon for more exploitation
+        "target_update_interval": 10000     # Standard periodic target network updates
     }
 }
 
-def create_sumocfg(model, vsl_enforcement="lane_only", model_idx_offset=0):
+def create_sumocfg(file_postfix, vsl_enforcement="recommend", model_idx_offset=0):
     sumocfg_template = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
             <net-file value="3_2_merge.net.xml"/>
-            <route-files value="generated_flows_{model}_{index}.rou.xml"/>
+            <route-files value="generated_flows_{file_postfix}_{index}.rou.xml"/>
             <additional-files value="loops_detectors.add.xml"/>
             <gui-settings-file value="colored.view.xml"/>
         </input>
@@ -134,11 +143,11 @@ def create_sumocfg(model, vsl_enforcement="lane_only", model_idx_offset=0):
     for i in range(num_envs_per_model):
         # Ensure index is unique even if model_name is the same for SubprocVecEnv instances
         actual_index = i + model_idx_offset
-        filename = f"3_2_merge_{model}_{actual_index}.sumocfg"
+        filename = f"3_2_merge_{file_postfix}_{actual_index}.sumocfg"
         filepath = os.path.join(output_dir, filename)
         
         # Format the template with current model and index
-        content = sumocfg_template.format(model=model, index=actual_index)
+        content = sumocfg_template.format(file_postfix=file_postfix, index=actual_index)
         
         # Write the content to the file
         with open(filepath, 'w') as file:
@@ -146,7 +155,7 @@ def create_sumocfg(model, vsl_enforcement="lane_only", model_idx_offset=0):
         
         logger.debug(f"Created {filepath}")
 
-def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
+def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         # Use provided port or default from global, adjusted by idx
         port_for_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_TRAIN_SUMO_PORT + idx
@@ -163,7 +172,7 @@ def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enfor
         return env
     return _init
 
-def eval_env_constructor(model_name, reward_fn, vsl_enforcement="lane_only", sumo_port_to_use=None, sumo_binary_to_use=None):
+def eval_env_constructor(model_name, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         # Use provided port or default from global
         port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
@@ -188,27 +197,37 @@ def train_model(algorithm: str,
                 num_of_episodes: int = 7, # Total episodes for the training run
                 use_enhanced_params: bool = True,
                 custom_params: Optional[dict] = None,
-                vsl_enforcement: str = "lane_only",
+                vsl_enforcement: str = "recommend",
                 process_train_base_port: Optional[int] = None,
                 process_eval_base_port: Optional[int] = None,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
-    # Only DQN supported
-    params = ENHANCED_HYPERPARAMS["DQN"].copy() if use_enhanced_params else {
-        "learning_rate": 1e-4,
-        "buffer_size": 100000,
-        "batch_size": 128,
-        "target_update_interval": 1000,
-        "exploration_fraction": 0.1,
-        "exploration_initial_eps": 1.0,
-        "exploration_final_eps": 0.01,
-        "learning_starts": 1000,
-        "train_freq": 4,
-        "gradient_steps": 1,
-        "tau": 1.0,
-        "gamma": 0.99,
-        "net_arch": [256, 256, 128]
-    }
+    
+    # Initialize params based on use_enhanced_params
+    if use_enhanced_params:
+        # ENHANCED_HYPERPARAMS["DQN"] includes a 'policy_kwargs' dictionary
+        # which in turn contains 'net_arch' and 'activation_fn'.
+        params_source = ENHANCED_HYPERPARAMS["DQN"]
+    else:
+        # Default parameters include 'net_arch' as a top-level key.
+        params_source = {
+            "learning_rate": 1e-4,
+            "buffer_size": 100000,
+            "batch_size": 128,
+            "target_update_interval": 1000,
+            "exploration_fraction": 0.1,
+            "exploration_initial_eps": 1.0,
+            "exploration_final_eps": 0.01,
+            "learning_starts": 1000,
+            "train_freq": 4,
+            "gradient_steps": 1,
+            "tau": 1.0,
+            "gamma": 0.99,
+            "net_arch": [256, 256, 128] # net_arch is a list here
+        }
+    
+    params = params_source.copy() # Work with a copy
+
     if custom_params:
         params.update(custom_params)
         logger.info(f"Applied custom parameter overrides: {custom_params}")
@@ -239,10 +258,35 @@ def train_model(algorithm: str,
                                                   sumo_port_to_use=current_eval_base_port, # Eval env gets its own port
                                                   sumo_binary_to_use=sumo_binary_to_use)])
 
-    policy_kwargs = dict(
-        net_arch=params.pop("net_arch", [256, 256, 128]), # Deeper network for complex traffic patterns
-        activation_fn=nn.ReLU
-    )
+    # Default values for policy_kwargs
+    final_net_arch = [256, 256, 128] # Default architecture
+    final_activation_fn = nn.ReLU    # Default activation function
+    # Check if 'policy_kwargs' is in params (e.g., from ENHANCED_HYPERPARAMS or custom_params)
+    if 'policy_kwargs' in params and isinstance(params['policy_kwargs'], dict):
+        policy_kwargs_from_params = params['policy_kwargs']
+        if 'net_arch' in policy_kwargs_from_params:
+            final_net_arch = policy_kwargs_from_params['net_arch']
+        if 'activation_fn' in policy_kwargs_from_params:
+            final_activation_fn = policy_kwargs_from_params['activation_fn']
+
+    if 'net_arch' in params:
+        final_net_arch = params['net_arch']
+    
+    # Top-level 'activation_fn' in params overrides
+    if 'activation_fn' in params:
+        final_activation_fn = params['activation_fn']
+
+    # Create the policy_kwargs dictionary to be passed to the model
+    policy_kwargs_for_model_constructor = {
+        "net_arch": final_net_arch,
+        "activation_fn": final_activation_fn
+    }
+
+    # Remove these keys from the main params dict to avoid passing them twice
+    # (once explicitly via policy_kwargs, and again if they were top-level in **params)
+    params.pop('policy_kwargs', None) # Remove the entire 'policy_kwargs' dict if it existed
+    params.pop('net_arch', None)      # Remove top-level 'net_arch' if it existed
+    params.pop('activation_fn', None) # Remove top-level 'activation_fn' if it existed
 
     model = DQN("MlpPolicy", train_env, 
                learning_rate=params["learning_rate"],
@@ -257,7 +301,7 @@ def train_model(algorithm: str,
                gradient_steps=params["gradient_steps"],
                tau=params["tau"],
                gamma=params["gamma"],
-               policy_kwargs=policy_kwargs,
+               policy_kwargs=policy_kwargs_for_model_constructor,
                verbose=1, tensorboard_log=log_dir, device='cuda')
 
     logger.info(f"Training DQN with parameters: {params}")
@@ -307,7 +351,7 @@ def train_model(algorithm: str,
         env_eval.close()
         logger.info(f"Finished training for {model_name}")
 
-def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
+def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     """Test a trained DQN model with comprehensive evaluation."""
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     try:
@@ -346,7 +390,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="lane_only"):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="lane_only",
+def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="recommend",
                          tuning_process_base_port=None,
                          sumo_binary_to_use=None):
     """
@@ -676,7 +720,7 @@ SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
 
 class TrafficEnv(gym.Env):
     def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", vsl_enforcement="lane_only",
+                 num_of_episodes=0, reward_fn="balanced", vsl_enforcement="recommend",
                  sumo_binary_path_override=None):
         super(TrafficEnv, self).__init__()
         self.default_speed_limit = 130
@@ -742,7 +786,7 @@ class TrafficEnv(gym.Env):
         self.reward_threshold = -5 # Threshold for early termination in tuning
 
         # VSL Enforcement Mode Configuration
-        # Options: "all_vehicles", "electric_only", "lane_only"
+        # Options: "all_vehicles", "electric_only", "recommend"
         self.vsl_enforcement = vsl_enforcement
         
         # Aattributes for start_sumo customization
@@ -1192,7 +1236,7 @@ class TrafficEnv(gym.Env):
         """
         speed_limit_ms = speed_limit_kmh / 3.6  # Convert to m/s
         
-        if self.vsl_enforcement == "lane_only":
+        if self.vsl_enforcement == "recommend":
             # Option 3: Only set maximum allowed speed for the lane
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
@@ -1235,8 +1279,8 @@ class TrafficEnv(gym.Env):
             logger.debug(f"VSL Mode 2: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
             
         else:
-            logger.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using lane_only.")
-            # Fallback to lane_only
+            logger.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using recommend.")
+            # Fallback to recommend
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
 
@@ -1419,6 +1463,14 @@ class TrafficDataLogger:
         self.speed_limit_changes = 0
         self.last_speed_limit = self.default_speed_limit
 
+    def save(self):
+        import csv
+        filename = f"traffic_log_{self._get_sumo_log_identifier()}.csv"
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(self.header)
+            writer.writerows(self.data)
+
     def _update_running_averages(self, flow_downstream, occupancy, queue_length):
         """Update running averages for key traffic metrics."""
         alpha = 0.1  # Exponential moving average factor
@@ -1581,21 +1633,12 @@ class TensorboardCallback(BaseCallback):
         self.model = model  # Store the model
 
     def _on_step(self) -> bool:
-        # Access metrics from the environment
-        reward = self.locals.get('rewards', 0)  # Safeguard against missing keys
-        # Assuming emissions_over_time, mean_speed_over_time, and flows are maintained in TrafficEnv
-        # You might need to adjust based on actual implementation
-        emissions = getattr(self.env, 'emissions_over_time', [0])[-1]
-        mean_speed = getattr(self.env, 'mean_speed_over_time', [0])[-1]
-        flow = getattr(self.env, 'flows', [0])[-1]
-        
-        # Record these values in TensorBoard using SB3's built-in logger
-        self.logger.record('test/reward', reward)
-        self.logger.record('test/emissions', emissions)
-        self.logger.record('test/mean_speed', mean_speed)
-        self.logger.record('test/flow', flow)
-        
-        return True  # Continue running the environment
+        if self.n_calls % 100 == 0:
+            env = self.training_env.envs[0]  # assuming single env or first env
+            if hasattr(env, "speed_history") and env.speed_history:
+                mean_speed = env.speed_history[-1]
+                self.logger.record("env/mean_speed", mean_speed)
+        return True
 
 class TrafficEnvForTuning(TrafficEnv):
     """
@@ -1604,7 +1647,7 @@ class TrafficEnvForTuning(TrafficEnv):
     """
     
     def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="lane_only",
+                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="recommend",
                  sumo_binary_path_override=None):
         super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
                         num_of_episodes, reward_fn, vsl_enforcement, sumo_binary_path_override)
@@ -1714,7 +1757,7 @@ class TrafficEnvForTuning(TrafficEnv):
         return super().reset(seed, options)
     
     def close_sumo(self, reason):
-        pass
+        super().close_sumo(reason)
     
     def get_tuning_metrics(self):
         """
@@ -1764,10 +1807,10 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    reward_functions_to_tune = ["mobility", "safety", "balanced"]
-    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "lane_only"]
+    reward_functions_to_tune = ["mobility", "safety"] # List of options: "mobility", "safety", "balanced"
+    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
 
-    option = 4
+    option = 2
     algo_to_use = "DQN"
     vsl_enforce_mode = "electric_only" 
     reward_used = "mobility"
@@ -1840,9 +1883,9 @@ if __name__ == '__main__':
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         # reward_functions = ["mobility", "safety", "balanced"] # Original selection
-        reward_functions = ["mobility", "safety"] # As per user's active selection in prompt
-        # vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
-        vsl_enforcements = ["all_vehicles", "electric_only", "lane_only"]
+        reward_functions = ["mobility"] # As per user's active selection in prompt
+        # vsl_enforcements = ["all_vehicles", "electric_only", "recommend"]
+        vsl_enforcements = ["electric_only"]
 
         all_combinations_params_for_training = []
         process_counter = 0
