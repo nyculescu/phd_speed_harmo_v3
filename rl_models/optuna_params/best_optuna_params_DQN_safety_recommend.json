@@ -1,0 +1,26 @@
+{
+    "DQN": {
+        "policy_kwargs": {
+            "net_arch": [
+                256,
+                256
+            ],
+            "activation_fn": "nn.ReLU"
+        },
+        "learning_rate": 4.450541843416603e-05,
+        "gamma": 0.9747865430253265,
+        "batch_size": 64,
+        "train_freq": [
+            4,
+            "step"
+        ],
+        "gradient_steps": 1,
+        "tau": 0.7209378719856353,
+        "buffer_size": 50000,
+        "learning_starts": 1000,
+        "exploration_fraction": 0.24884983705135283,
+        "exploration_initial_eps": 0.6568356959000261,
+        "exploration_final_eps": 0.03286215263172946,
+        "target_update_interval": 1981
+    }
+}

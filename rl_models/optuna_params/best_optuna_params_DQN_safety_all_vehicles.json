@@ -1,1 +1,26 @@
-{"net_arch_str": "256,128,64", "learning_rate": 4.841539483927721e-05, "buffer_size": 200000, "batch_size": 128, "target_update_interval": 9379, "exploration_fraction": 0.17500637061319574, "exploration_initial_eps": 0.731507788644843, "exploration_final_eps": 0.03865489176057265, "learning_starts": 5000, "train_freq": 4, "gradient_steps": -1, "tau": 0.894044132076744, "gamma": 0.987405115201905}
+{
+    "DQN": {
+        "policy_kwargs": {
+            "net_arch": [
+                512,
+                256
+            ],
+            "activation_fn": "nn.ReLU"
+        },
+        "learning_rate": 2.1328856721689853e-05,
+        "gamma": 0.9973639054061788,
+        "batch_size": 128,
+        "train_freq": [
+            4,
+            "step"
+        ],
+        "gradient_steps": -1,
+        "tau": 0.8383845893478383,
+        "buffer_size": 50000,
+        "learning_starts": 5000,
+        "exploration_fraction": 0.12325148131872425,
+        "exploration_initial_eps": 0.6218164507247905,
+        "exploration_final_eps": 0.034298248797560486,
+        "target_update_interval": 5143
+    }
+}
