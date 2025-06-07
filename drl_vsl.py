@@ -907,16 +907,33 @@ class TrafficEnv(gym.Env):
             current_time = traci.simulation.getTime()
         
         # Apply action: gradual speed limit changes
-        speed_changes = [-5, 0, +5]
+        speed_changes = [-10, -5, 0, +5, +10]  # Larger action space
         previous_speed_limit = self.current_speed_limit
-        self.current_speed_limit += speed_changes[action]
+        proposed_speed_limit = self.current_speed_limit + speed_changes[action]
         
         # Invalid action penalty and clamping
         invalid_action_penalty = 0
-        if (previous_speed_limit <= 50 and action == 0) or (previous_speed_limit >= 130 and action == 2):
-            invalid_action_penalty = -1
         
-        self.current_speed_limit = max(50, min(130, self.current_speed_limit))
+        # Safety constraint: limit consecutive changes
+        if hasattr(self, 'recent_changes') and len(self.recent_changes) >= 3:
+            if all(abs(change) >= 5 for change in list(self.recent_changes)[-3:]):
+                # Prevent excessive consecutive changes
+                proposed_speed_limit = previous_speed_limit
+                invalid_action_penalty = -2.0
+        
+        # Comfort constraint: maximum 20 km/h change as per literature
+        max_change = 20
+        if abs(proposed_speed_limit - previous_speed_limit) > max_change:
+            proposed_speed_limit = previous_speed_limit + np.sign(proposed_speed_limit - previous_speed_limit) * max_change
+            invalid_action_penalty = -1.0
+        
+        # Apply bounds
+        self.current_speed_limit = max(50, min(130, proposed_speed_limit))
+        
+        # Track recent changes
+        if not hasattr(self, 'recent_changes'):
+            self.recent_changes = deque(maxlen=5)
+        self.recent_changes.append(self.current_speed_limit - previous_speed_limit)
         
         # Apply VSL enforcement using the new method
         self.apply_vsl_enforcement(self.current_speed_limit)
@@ -1131,9 +1148,7 @@ class TrafficEnv(gym.Env):
         reward = R_smooth + avg_speed_reward + R_flow + collision_penalty + invalid_action_penalty
         return float(reward)
 
-    def _reward_balanced(self, invalid_action_penalty):
-        """Enhanced balanced reward incorporating latest research findings."""
-    
+    def _reward_balanced(self, invalid_action_penalty):   
         # Base components (your existing approach)
         R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.25
         
