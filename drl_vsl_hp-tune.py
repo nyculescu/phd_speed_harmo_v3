@@ -328,10 +328,48 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
 
     logger.info(f"Optuna study for {tuning_files_model_name} (params for {algorithm}_{reward_function}_{vsl_enforcement}) completed. Best params: {study.best_params}")
 
-    # Save to the SPECIFIC file path
-    with open(specific_params_file_path, "w") as f:
-        json.dump(study.best_params, f)
-    logger.info(f"Saved best Optuna params for {tuning_files_model_name} to: {specific_params_file_path}")
+    best_optuna_params = study.best_params
+    # Convert net_arch_str to list of ints if it exists
+    if "net_arch_str" in best_optuna_params:
+        net_arch_list = [int(x.strip()) for x in best_optuna_params["net_arch_str"].split(',')]
+    else:
+        # Fallback if net_arch_str was not tuned or not found in best_params
+        net_arch_list = [512, 256, 128] # Default or from your ENHANCED_HYPERPARAMS
+        logger.warning(f"net_arch_str not found in Optuna best_params, using default: {net_arch_list}")
+
+    # Construct the dictionary in the desired format
+    formatted_hyperparams = {
+        "DQN": {
+            "policy_kwargs": {
+                "net_arch": net_arch_list,
+                "activation_fn": "nn.ReLU"  # Placeholder, will be replaced with actual object
+            },
+            "learning_rate": best_optuna_params.get("learning_rate", 1e-4),
+            "gamma": best_optuna_params.get("gamma", 0.995),
+            "batch_size": best_optuna_params.get("batch_size", 64),
+            "train_freq": (best_optuna_params.get("train_freq", 4), "step"), # Ensure tuple format
+            "gradient_steps": best_optuna_params.get("gradient_steps", 1),
+            "tau": best_optuna_params.get("tau", 1.0),
+            "buffer_size": best_optuna_params.get("buffer_size", 250000),
+            "learning_starts": best_optuna_params.get("learning_starts", 10000),
+            "exploration_fraction": best_optuna_params.get("exploration_fraction", 0.20),
+            "exploration_initial_eps": best_optuna_params.get("exploration_initial_eps", 1.0),
+            "exploration_final_eps": best_optuna_params.get("exploration_final_eps", 0.01),
+            "target_update_interval": best_optuna_params.get("target_update_interval", 10000)
+        }
+    }
+
+    py_file_path = specific_params_file_path.replace(".json", ".py")
+
+    try:
+        with open(specific_params_file_path, "w") as f_json:
+            # Convert activation_fn to string for JSON compatibility
+            formatted_hyperparams_json = formatted_hyperparams.copy()
+            formatted_hyperparams_json["DQN"]["policy_kwargs"]["activation_fn"] = "nn.ReLU"
+            json.dump(formatted_hyperparams_json, f_json, indent=4)
+        logger.info(f"Saved best Optuna params in ENHANCED_HYPERPARAMS JSON format to: {specific_params_file_path}")
+    except Exception as e_save_py:
+        logger.error(f"Failed to save formatted hyperparameters to {py_file_path}: {e_save_py}")
     
     delay_before_cleanup = 10 
     logger.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {tuning_files_model_name}...")

@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.WARN),
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -34,8 +34,9 @@ from collections import deque
 import pandas as pd
 import time
 import json
+import copy
 import multiprocessing as mp # Added for parallel processing
-from itertools import product # Added for generating combinations
+# from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
 edges = ["seg_10_before","seg_9_before","seg_8_before","seg_7_before","seg_6_before","seg_5_before","seg_4_before","seg_3_before","seg_2_before","seg_1_before","seg_0_before","seg_0_after","seg_1_after"]
@@ -191,42 +192,12 @@ def eval_env_constructor(model_name, reward_fn, vsl_enforcement="recommend", sum
 def train_model(algorithm: str,
                 reward_function: str = "balanced",
                 num_of_episodes: int = 7, # Total episodes for the training run
-                use_enhanced_params: bool = True,
-                custom_params: Optional[dict] = None,
+                hyperparams: Optional[dict] = None,
                 vsl_enforcement: str = "recommend",
                 process_train_base_port: Optional[int] = None,
                 process_eval_base_port: Optional[int] = None,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
-    
-    # Initialize params based on use_enhanced_params
-    if use_enhanced_params:
-        # ENHANCED_HYPERPARAMS["DQN"] includes a 'policy_kwargs' dictionary
-        # which in turn contains 'net_arch' and 'activation_fn'.
-        params_source = ENHANCED_HYPERPARAMS["DQN"]
-    else:
-        # Default parameters include 'net_arch' as a top-level key.
-        params_source = {
-            "learning_rate": 1e-4,
-            "buffer_size": 100000,
-            "batch_size": 128,
-            "target_update_interval": 1000,
-            "exploration_fraction": 0.1,
-            "exploration_initial_eps": 1.0,
-            "exploration_final_eps": 0.01,
-            "learning_starts": 1000,
-            "train_freq": 4,
-            "gradient_steps": 1,
-            "tau": 1.0,
-            "gamma": 0.99,
-            "net_arch": [256, 256, 128] # net_arch is a list here
-        }
-    
-    params = params_source.copy() # Work with a copy
-
-    if custom_params:
-        params.update(custom_params)
-        logger.info(f"Applied custom parameter overrides: {custom_params}")
 
     steps_per_episode = 504000 // 60  
     total_timesteps = steps_per_episode * num_of_episodes
@@ -254,53 +225,23 @@ def train_model(algorithm: str,
                                                   sumo_port_to_use=current_eval_base_port, # Eval env gets its own port
                                                   sumo_binary_to_use=sumo_binary_to_use)])
 
-    # Default values for policy_kwargs
-    final_net_arch = [256, 256, 128] # Default architecture
-    final_activation_fn = nn.ReLU    # Default activation function
-    # Check if 'policy_kwargs' is in params (e.g., from ENHANCED_HYPERPARAMS or custom_params)
-    if 'policy_kwargs' in params and isinstance(params['policy_kwargs'], dict):
-        policy_kwargs_from_params = params['policy_kwargs']
-        if 'net_arch' in policy_kwargs_from_params:
-            final_net_arch = policy_kwargs_from_params['net_arch']
-        if 'activation_fn' in policy_kwargs_from_params:
-            final_activation_fn = policy_kwargs_from_params['activation_fn']
-
-    if 'net_arch' in params:
-        final_net_arch = params['net_arch']
-    
-    # Top-level 'activation_fn' in params overrides
-    if 'activation_fn' in params:
-        final_activation_fn = params['activation_fn']
-
-    # Create the policy_kwargs dictionary to be passed to the model
-    policy_kwargs_for_model_constructor = {
-        "net_arch": final_net_arch,
-        "activation_fn": final_activation_fn
-    }
-
-    # Remove these keys from the main params dict to avoid passing them twice
-    # (once explicitly via policy_kwargs, and again if they were top-level in **params)
-    params.pop('policy_kwargs', None) # Remove the entire 'policy_kwargs' dict if it existed
-    params.pop('net_arch', None)      # Remove top-level 'net_arch' if it existed
-    params.pop('activation_fn', None) # Remove top-level 'activation_fn' if it existed
-
     model = DQN("MlpPolicy", train_env, 
-               learning_rate=params["learning_rate"],
-               buffer_size=params["buffer_size"],
-               batch_size=params["batch_size"],
-               target_update_interval=params["target_update_interval"],
-               exploration_fraction=params["exploration_fraction"],
-               exploration_initial_eps=params["exploration_initial_eps"],
-               exploration_final_eps=params["exploration_final_eps"],
-               learning_starts=params["learning_starts"],
-               train_freq=params["train_freq"],
-               gradient_steps=params["gradient_steps"],
-               tau=params["tau"],
-               gamma=params["gamma"],
-               policy_kwargs=policy_kwargs_for_model_constructor,
+               learning_rate=hyperparams["learning_rate"],
+               buffer_size=hyperparams["buffer_size"],
+               batch_size=hyperparams["batch_size"],
+               target_update_interval=hyperparams["target_update_interval"],
+               exploration_fraction=hyperparams["exploration_fraction"],
+               exploration_initial_eps=hyperparams["exploration_initial_eps"],
+               exploration_final_eps=hyperparams["exploration_final_eps"],
+               learning_starts=hyperparams["learning_starts"],
+               train_freq=hyperparams["train_freq"],
+               gradient_steps=hyperparams["gradient_steps"],
+               tau=hyperparams["tau"],
+               gamma=hyperparams["gamma"],
+               policy_kwargs=hyperparams["policy_kwargs"],
                verbose=1, tensorboard_log=log_dir, device='cuda')
 
-    logger.info(f"Training DQN with parameters: {params}")
+    logger.info(f"Training DQN with parameters: {hyperparams}")
 
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
@@ -387,75 +328,130 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
 def run_training_for_combination(config_tuple):
-    reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary = config_tuple
+    reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary, use_hyperparams_by_optuna = config_tuple
     
     base_port_for_this_process = BASE_TRAIN_SUMO_PORT + process_id * 10
-    main_train_base_port = base_port_for_this_process # Adjusted, train_model will add its own offsets if num_train_envs > 1
-    main_eval_base_port = base_port_for_this_process + num_train_envs_per_model + 5 # Ensure eval port is separate
+    main_train_base_port = base_port_for_this_process
+    main_eval_base_port = base_port_for_this_process + num_train_envs_per_model + 5
 
-    # This is the actual model name for saving SB3 models and logs
     config_model_name_for_training = f"{algo_used}_{reward_fn}_{vsl_mode}"
-    
     logger.info(f"Process {process_id}: Starting combination {config_model_name_for_training}. Train Port Base: {main_train_base_port}, Eval Port Base: {main_eval_base_port}")
 
-    best_params = None
-    # Load specific Optuna params file for this combination
-    optuna_params_dir = os.path.join("rl_models", "optuna_params")
-    specific_optuna_params_filename = f"best_optuna_params_{algo_used}_{reward_fn}_{vsl_mode}.json"
-    specific_optuna_params_path = os.path.join(optuna_params_dir, specific_optuna_params_filename)
-
-    if os.path.exists(specific_optuna_params_path):
-        try:
-            with open(specific_optuna_params_path, "r") as f:
-                best_params = json.load(f)
-            logger.info(f"Process {process_id}: Loaded specific Optuna params from {specific_optuna_params_path} for {config_model_name_for_training}")
-        except Exception as e:
-            logger.warning(f"Process {process_id}: Could not load specific Optuna params from {specific_optuna_params_path}: {e}. Using default ENHANCED_HYPERPARAMS.")
-            best_params = None 
+    # --- Hyperparameter Loading and Processing ---
+    # 1. Start with a base: deep copy of ENHANCED_HYPERPARAMS or a basic default
+    final_hyperparams = None
+    if algo_used in ENHANCED_HYPERPARAMS:
+        final_hyperparams = copy.deepcopy(ENHANCED_HYPERPARAMS[algo_used])
+        logger.debug(f"Process {process_id}: Initialized with ENHANCED_HYPERPARAMS for {algo_used}.")
     else:
-        logger.warning(f"Process {process_id}: Specific Optuna params file not found at {specific_optuna_params_path}. Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
-    
-    if not best_params:
-        best_params = ENHANCED_HYPERPARAMS.get(algo_used, {}).copy()
-        if not best_params: # Fallback if algo_used not in ENHANCED_HYPERPARAMS
-            logger.error(f"Default ENHANCED_HYPERPARAMS for {algo_used} not found. Using basic DQN defaults.")
-            best_params = { # Basic DQN defaults
-                "learning_rate": 1e-4, "buffer_size": 100000, "batch_size": 128,
-                "target_update_interval": 1000, "exploration_fraction": 0.1,
-                "exploration_initial_eps": 1.0, "exploration_final_eps": 0.01,
-                "learning_starts": 1000, "train_freq": 4, "gradient_steps": 1,
-                "tau": 1.0, "gamma": 0.99, "net_arch": [256, 256, 128]
-            }
+        logger.error(f"Process {process_id}: Algorithm {algo_used} not found in ENHANCED_HYPERPARAMS. Using basic DQN defaults.")
+        final_hyperparams = {
+            "learning_rate": 1e-4, "buffer_size": 100000, "batch_size": 128,
+            "target_update_interval": 1000, "exploration_fraction": 0.1,
+            "exploration_initial_eps": 1.0, "exploration_final_eps": 0.01,
+            "learning_starts": 1000, "train_freq": (4, "step"), "gradient_steps": 1,
+            "tau": 1.0, "gamma": 0.99,
+            "policy_kwargs": {"net_arch": [256, 256, 128], "activation_fn": nn.ReLU}
+        }
+
+    if use_hyperparams_by_optuna:
+        optuna_params_dir = os.path.join("rl_models", "optuna_params")
+        specific_optuna_params_filename = f"best_optuna_params_{algo_used}_{reward_fn}_{vsl_mode}.json"
+        specific_optuna_params_path = os.path.join(optuna_params_dir, specific_optuna_params_filename)
+
+        if os.path.exists(specific_optuna_params_path):
+            try:
+                with open(specific_optuna_params_path, "r") as f:
+                    loaded_json_params = json.load(f)
+                logger.info(f"Process {process_id}: Successfully loaded Optuna params from {specific_optuna_params_path}")
+
+                # Determine if the loaded params are nested (e.g., {"DQN": {...}}) or flat
+                optuna_params_to_merge = {}
+                if algo_used in loaded_json_params and isinstance(loaded_json_params[algo_used], dict):
+                    optuna_params_to_merge = loaded_json_params[algo_used]
+                else: # Assume it's a flat dictionary of parameters
+                    optuna_params_to_merge = loaded_json_params
+                
+                # Merge Optuna params into final_hyperparams. Optuna values will override base/enhanced values.
+                for key, value in optuna_params_to_merge.items():
+                    if key == "policy_kwargs" and isinstance(value, dict) and \
+                       "policy_kwargs" in final_hyperparams and isinstance(final_hyperparams["policy_kwargs"], dict):
+                        # Deep merge for policy_kwargs
+                        for pk_key, pk_value in value.items():
+                            final_hyperparams["policy_kwargs"][pk_key] = pk_value
+                    else:
+                        final_hyperparams[key] = value
+                
+                logger.info(f"Process {process_id}: Merged Optuna params into the hyperparameter set.")
+
+            except Exception as e:
+                logger.warning(f"Process {process_id}: Could not load/parse Optuna params from {specific_optuna_params_path}: {e}. Will use base/enhanced defaults.")
         else:
-            logger.info(f"Process {process_id}: Using default ENHANCED_HYPERPARAMS for {config_model_name_for_training}.")
+            logger.warning(f"Process {process_id}: Optuna params file not found at {specific_optuna_params_path}. Will use base/enhanced defaults.")
+    else:
+        logger.info(f"Process {process_id}: Not configured to use Optuna params. Will use base/enhanced defaults.")
 
+    # --- Post-merge/Post-load Processing for final_hyperparams ---
+    # Ensure policy_kwargs dictionary exists
+    if "policy_kwargs" not in final_hyperparams or not isinstance(final_hyperparams["policy_kwargs"], dict):
+        final_hyperparams["policy_kwargs"] = {}
 
-    if "net_arch_str" in best_params: 
-        net_arch_list = [int(x) for x in best_params["net_arch_str"].split(",")]
-        best_params["net_arch"] = net_arch_list
-        del best_params["net_arch_str"]
+    # Handle "net_arch_str" (could be at top level from flat Optuna file or inside policy_kwargs)
+    net_arch_source_str = None
+    if "net_arch_str" in final_hyperparams:
+        net_arch_source_str = final_hyperparams.pop("net_arch_str")
+    elif "net_arch_str" in final_hyperparams["policy_kwargs"]:
+        net_arch_source_str = final_hyperparams["policy_kwargs"].pop("net_arch_str")
     
-    # Ensure 'net_arch' key exists, even if loaded from defaults that might not have it explicitly if "net_arch_str" wasn't processed
-    if "net_arch" not in best_params:
-        best_params["net_arch"] = [256, 256, 128] # Default fallback
+    if net_arch_source_str:
+        try:
+            final_hyperparams["policy_kwargs"]["net_arch"] = [int(x.strip()) for x in net_arch_source_str.split(',')]
+            logger.debug(f"Process {process_id}: Parsed net_arch_str '{net_arch_source_str}' to {final_hyperparams['policy_kwargs']['net_arch']}")
+        except ValueError as e:
+            logger.warning(f"Process {process_id}: Could not parse net_arch_str '{net_arch_source_str}': {e}. Ensuring default net_arch.")
+            if "net_arch" not in final_hyperparams["policy_kwargs"]: # If parsing failed and no net_arch exists
+                 final_hyperparams["policy_kwargs"]["net_arch"] = [256, 256, 128] # Fallback
+
+    # Ensure 'net_arch' and 'activation_fn' are in policy_kwargs with correct types
+    if "net_arch" not in final_hyperparams["policy_kwargs"]:
+        final_hyperparams["policy_kwargs"]["net_arch"] = [256, 256, 128] # Default
+        logger.debug(f"Process {process_id}: 'net_arch' not found in policy_kwargs, set to default.")
+        
+    if isinstance(final_hyperparams["policy_kwargs"].get("activation_fn"), str):
+        if final_hyperparams["policy_kwargs"]["activation_fn"] == "nn.ReLU":
+            final_hyperparams["policy_kwargs"]["activation_fn"] = nn.ReLU
+            logger.debug(f"Process {process_id}: Converted 'activation_fn' string to nn.ReLU object.")
+        else: # Unknown string, fallback or log error
+            logger.warning(f"Process {process_id}: Unknown string for activation_fn: {final_hyperparams['policy_kwargs']['activation_fn']}. Setting to nn.ReLU.")
+            final_hyperparams["policy_kwargs"]["activation_fn"] = nn.ReLU
+    elif "activation_fn" not in final_hyperparams["policy_kwargs"]:
+        final_hyperparams["policy_kwargs"]["activation_fn"] = nn.ReLU # Default
+        logger.debug(f"Process {process_id}: 'activation_fn' not found in policy_kwargs, set to nn.ReLU default.")
+
+    # Convert "train_freq" list/int to tuple
+    if "train_freq" in final_hyperparams:
+        if isinstance(final_hyperparams["train_freq"], list):
+            final_hyperparams["train_freq"] = tuple(final_hyperparams["train_freq"])
+            logger.debug(f"Process {process_id}: Converted 'train_freq' list to tuple: {final_hyperparams['train_freq']}")
+        elif isinstance(final_hyperparams["train_freq"], int):
+            final_hyperparams["train_freq"] = (final_hyperparams["train_freq"], "step")
+            logger.debug(f"Process {process_id}: Converted 'train_freq' int to tuple: {final_hyperparams['train_freq']}")
+    # --- End Hyperparameter Loading and Processing ---
 
     try:
-        # Create SUMO config using the training model name
         logger.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
         create_sumocfg(config_model_name_for_training, vsl_mode) 
                                            
-        # Train Model
-        logger.info(f"Process {process_id}: Training model {config_model_name_for_training} with params: {best_params}")
+        logger.info(f"Process {process_id}: Training model {config_model_name_for_training} with final hyperparams: {final_hyperparams}")
         train_model(algorithm=algo_used,
-                    reward_function=reward_fn, # Pass the specific reward_fn
-                    use_enhanced_params=False, 
-                    custom_params=best_params,
-                    vsl_enforcement=vsl_mode, # Pass the specific vsl_mode
+                    reward_function=reward_fn,
+                    hyperparams=final_hyperparams, # Pass the processed hyperparams
+                    vsl_enforcement=vsl_mode,
                     process_train_base_port=main_train_base_port,
                     process_eval_base_port=main_eval_base_port,
                     sumo_binary_to_use=parallel_sumo_binary)
         
-        logger.info(f"Process {process_id}: Successfully completed {config_model_name_for_training}")
+        logger.info(f"Process {process_id}: Successfully completed training for {config_model_name_for_training}")
         return f"Success: {config_model_name_for_training}"
     except Exception as e:
         logger.error(f"Process {process_id}: FAILED for {config_model_name_for_training}. Error: {e}", exc_info=True)
@@ -1490,19 +1486,8 @@ if __name__ == '__main__':
     vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
 
     option = 2
-
-    if option == 1:
-        algo_to_use = "DQN"
-        vsl_enforce_mode = "electric_only" 
-        reward_used = "balanced"
-        config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
-        create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
-        train_model(algorithm=algo_to_use, 
-                    reward_function=reward_used, 
-                    use_enhanced_params=True,
-                    vsl_enforcement=vsl_enforce_mode)
     
-    elif option == 2:
+    if option == 1:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
@@ -1514,11 +1499,10 @@ if __name__ == '__main__':
         create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
                     reward_function=reward_used,
-                    use_enhanced_params=False,
-                    custom_params=optimal_params,
+                    hyperparams=optimal_params,
                     vsl_enforcement=vsl_enforce_mode)
 
-    elif option == 3:
+    elif option == 2:
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
@@ -1528,13 +1512,14 @@ if __name__ == '__main__':
         # reward_functions = ["mobility", "safety", "balanced"] # Original selection
         reward_functions = ["mobility"] # As per user's active selection in prompt
         # vsl_enforcements = ["all_vehicles", "electric_only", "recommend"]
-        vsl_enforcements = ["electric_only"]
+        vsl_enforcements = ["electric_only", "recommend"]
 
+        use_hyperparams_by_optuna = True
         all_combinations_params_for_training = []
         process_counter = 0
         for r_fn_train in reward_functions:
             for vsl_m_train in vsl_enforcements:
-                all_combinations_params_for_training.append((r_fn_train, vsl_m_train, process_counter, algo_to_use, parallel_training_sumo_binary))
+                all_combinations_params_for_training.append((r_fn_train, vsl_m_train, process_counter, algo_to_use, parallel_training_sumo_binary, use_hyperparams_by_optuna))
                 process_counter += 1
         
         num_parallel_training_processes = min(len(all_combinations_params_for_training), mp.cpu_count() - 1 if mp.cpu_count() > 1 else 1) 
@@ -1565,7 +1550,7 @@ if __name__ == '__main__':
         # for res_train in training_results: # If using a results list
         #     logger.info(res_train)
     
-    elif option == 4:
+    elif option == 3:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
