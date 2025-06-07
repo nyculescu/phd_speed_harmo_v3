@@ -386,24 +386,6 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     print(f"Average Reward: {total_reward/step_count:.3f}")
     print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
 
-def get_optimal_params(algorithm, traffic_density, episode_length):
-    """
-    Select optimal parameters based on traffic conditions and training requirements. DQN only.
-    """
-    base_params = ENHANCED_HYPERPARAMS["DQN"].copy()
-    if traffic_density == "high":
-        base_params["exploration_fraction"] = 0.2
-        base_params["exploration_final_eps"] = 0.05
-        base_params["learning_rate"] *= 0.5
-    elif traffic_density == "low":
-        base_params["learning_rate"] *= 1.5
-        base_params["exploration_fraction"] = 0.1
-    if episode_length == "long":
-        base_params["gamma"] = 0.999
-    elif episode_length == "short":
-        base_params["gamma"] = 0.95
-    return base_params
-
 def run_training_for_combination(config_tuple):
     reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary = config_tuple
     
@@ -1525,7 +1507,10 @@ if __name__ == '__main__':
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
         config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
-        optimal_params = get_optimal_params(algorithm=algo_to_use, traffic_density="high", episode_length="long")
+
+        optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
+        # optimal_params["gamma"] = 0.95 # Override gamma to 0.95 for this run FIXME: Temp debug, remove later
+
         create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
                     reward_function=reward_used,
@@ -1533,7 +1518,7 @@ if __name__ == '__main__':
                     custom_params=optimal_params,
                     vsl_enforcement=vsl_enforce_mode)
 
-    elif option == 4:
+    elif option == 3:
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
@@ -1580,7 +1565,7 @@ if __name__ == '__main__':
         # for res_train in training_results: # If using a results list
         #     logger.info(res_train)
     
-    elif option == 5:
+    elif option == 4:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
