@@ -37,6 +37,7 @@ import json
 import copy
 import multiprocessing as mp # Added for parallel processing
 import csv
+from tqdm import tqdm
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -292,13 +293,19 @@ def train_model(algorithm: str,
 def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     """Test a trained DQN model with comprehensive evaluation."""
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
+    model_load_path = Path(f"rl_models/{model_name}/best_model.zip")
+    if not model_load_path.exists():
+        model_load_path = Path(f"rl_models/{model_name}/{model_name}.zip") # Try the final saved model
+        if not model_load_path.exists():
+            logger.error(f"Could not find model for {model_name} at {model_load_path} or best_model.zip. Exiting test.")
+            return
+    
     try:
-        model_path = f"rl_models/{model_name}/best_model"
-        model = DQN.load(model_path)
-    except FileNotFoundError:
-        logger.warning(f"Best model not found, loading checkpoint...")
-        checkpoint_path = f"rl_models/{model_name}/rl_model_{model_name}_final.zip"
-        model = DQN.load(checkpoint_path)
+        model = DQN.load(str(model_load_path))
+        logger.info(f"Loaded model from {model_load_path} for testing.")
+    except Exception as e:
+        logger.error(f"Error loading model from {model_load_path}: {e}. Exiting test.")
+        return
 
     env = TrafficEnv(port=BASE_EVAL_SUMO_PORT,
                      model_name=model_name,
@@ -306,27 +313,50 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
                      op_mode="test",
                      base_gen_car_distrib=["bimodal", 3],
                      reward_fn=reward_function,
-                     vsl_enforcement=vsl_enforcement)  # Add VSL enforcement parameter
+                     vsl_enforcement=vsl_enforcement,
+                     sumo_binary_path_override=sumoBinary) # Use the globally defined sumoBinary
 
-    obs, _ = env.reset()
+    obs, info = env.reset()
     total_reward = 0
     step_count = 0
 
-    while True:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, done, truncated, info = env.step(action)
-        total_reward += reward
-        step_count += 1
-        if done or truncated:
-            break
+    # Calculate expected number of steps for the progress bar
+    # sim_length for "test" mode is 24 * 3600 seconds
+    # aggregation_time is 60 seconds
+    expected_test_steps = env.sim_length // env.aggregation_time
 
+    logger.info(f"Starting test for {model_name}. Expected steps: {expected_test_steps}")
+
+    with tqdm(total=expected_test_steps, desc=f"Testing {model_name}", unit="step") as pbar:
+        while True:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = env.step(action)
+            total_reward += reward
+            step_count += 1
+            pbar.update(1)
+            pbar.set_postfix_str(f"Reward: {reward:.2f}, Total: {total_reward:.2f}")
+            if done or truncated:
+                logger.info(f"Test episode finished. Done: {done}, Truncated: {truncated}")
+                break
+    
+    pbar.close() # Ensure progress bar is closed
     env.close()
 
-    print(f"Test Results for {model_name}:")
+    print(f"\nTest Results for {model_name}:")
     print(f"Total Steps: {step_count}")
     print(f"Total Reward: {total_reward:.2f}")
-    print(f"Average Reward: {total_reward/step_count:.3f}")
-    print(f"Final Flow Rate: {info.get('flow_downstream', 0):.1f} veh/h")
+    if step_count > 0:
+        print(f"Average Reward per Step: {total_reward/step_count:.3f}")
+    
+    # Attempt to get more detailed final metrics if available in info
+    final_flow_downstream = info.get('flow_downstream', 'N/A')
+    final_avg_speed = info.get('avg_speed_before', 'N/A') # Assuming avg_speed_before is relevant
+    final_collisions = info.get('collisions', 'N/A')
+    
+    print(f"Final Flow Rate (Downstream): {final_flow_downstream} veh/h")
+    print(f"Final Average Speed (Upstream of VSL): {final_avg_speed} m/s")
+    print(f"Total Collisions during test: {final_collisions}")
+    logger.info(f"Test for {model_name} complete. Total steps: {step_count}, Total reward: {total_reward:.2f}")
 
 def run_training_for_combination(config_tuple):
     reward_fn, vsl_mode, process_id, algo_used, parallel_sumo_binary, use_hyperparams_by_optuna = config_tuple
@@ -1492,7 +1522,7 @@ if __name__ == '__main__':
     reward_functions_to_tune = ["mobility", "safety"] # List of options: "mobility", "safety", "balanced"
     vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
 
-    option = 2
+    option = 3
     
     if option == 1:
         algo_to_use = "DQN"
