@@ -498,7 +498,7 @@ class TrafficEnv(gym.Env):
         self.occupancy_smoothed = 0.0
         
         # Action and observation spaces
-        self.action_space = gym.spaces.Discrete(3)
+        self.action_space = gym.spaces.Discrete(5)
         self.current_speed_limit = self.default_speed_limit
         
         self.observation_space = gym.spaces.Box(
@@ -700,9 +700,17 @@ class TrafficEnv(gym.Env):
                 current_time = traci.simulation.getTime()
                 self.simulation_step += 1
             except (FatalTraCIError, TraCIException):
-                logger.error("Lost connection during simulation steps")
-                # Reset environment instead of crashing
-                return self.reset()
+                logger.error("Lost connection during simulation steps. Terminating episode.")
+                # Return a valid 5-tuple to signal a terminal state
+                # Get the last valid observation before the crash
+                last_observation = self.preprocess_state(np.array([
+                    self.avg_speed_before, self.flow_upstream, self.flow_smoothed,
+                    self.queue_length_upstream, self._calculate_speed_trend(),
+                    self.occupancy_smoothed / 100.0, self.current_speed_limit
+                ], dtype=np.float64))
+                
+                # Return a terminal observation with a large negative reward
+                return last_observation, -10.0, True, False, {} 
             
             # Collect traffic measurements
             flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
@@ -1446,7 +1454,6 @@ class TrafficDataLogger:
         """Resets the logger for a new episode or evaluation run."""
         self.start_time = time.time()
         
-        # --- THIS IS THE FIX ---
         # Ensure step_data is re-initialized as an empty list every time.
         self.data = []
         self.last_speed_limit = self.default_speed_limit
@@ -1470,7 +1477,6 @@ class TensorboardCallback(BaseCallback):
                 mean_speed = env.speed_history[-1]
                 self.logger.record("env/mean_speed", mean_speed)
         return True
-
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Main entry point for running the DRL VSL environment with SUMO. """
