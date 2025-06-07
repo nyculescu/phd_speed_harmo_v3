@@ -334,7 +334,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
             total_reward += reward
             step_count += 1
             pbar.update(1)
-            pbar.set_postfix_str(f"Reward: {reward:.2f}, Total: {total_reward:.2f}")
+            pbar.set_postfix_str(f"Reward: {reward:.2f}, Total Reward: {total_reward:.2f}")
             if done or truncated:
                 logger.info(f"Test episode finished. Done: {done}, Truncated: {truncated}")
                 break
