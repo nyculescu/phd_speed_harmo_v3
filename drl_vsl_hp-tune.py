@@ -10,6 +10,7 @@ import optuna
 from stable_baselines3 import DQN
 import torch.nn as nn
 import traci
+import torch as th
 
 # Import your TrafficEnv and any other shared code from drl_vsl.py
 from drl_vsl import (
@@ -219,96 +220,93 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
             file.write(cfg_content)
         logger.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
 
-    def objective(trial):
-        net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["256,256", "512,256", "256,128,64"])
+    def objective(trial: optuna.Trial) -> float:
+        net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64, 64", # Small
+                                                                             "128,128", # Medium
+                                                                             "256,256", # Large
+                                                                             "512,256" # Asymmetrical, deeper network
+                                                                             ])
         net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
-        policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+        # activation_fn_name = trial.suggest_categorical("activation_fn", ["tanh", "relu"])
+        # activation_fn = {"tanh": th.nn.Tanh, "relu": th.nn.ReLU}[activation_fn_name]
+        policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU) # Use nn.ReLU directly isntead of activation_fn
         params = {
-            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True),
-            "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 200000]),
-            "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
-            "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000),
-            "exploration_fraction": trial.suggest_float("exploration_fraction", 0.05, 0.3),
-            "exploration_initial_eps": trial.suggest_float("exploration_initial_eps", 0.5, 1.0),
-            "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.1),
-            "learning_starts": trial.suggest_categorical("learning_starts", [1000, 5000]),
-            "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]),
-            "gradient_steps": trial.suggest_categorical("gradient_steps", [1, -1]), # -1 means as many as train_freq
-            "tau": trial.suggest_float("tau", 0.5, 1.0),
-            "gamma": trial.suggest_float("gamma", 0.95, 0.999),
+            "learning_rate": trial.suggest_float("learning_rate", 5e-5, 5e-4, log=True), # Rates > 1e-3 are often unstable with Adam.
+            "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 150000]), # A buffer of 50k-100k is often sufficient for learning key dynamics in shorter runs.
+            "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]), # Larger batches provide more stable gradients.
+            "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000), # A wider log search is good
+            "exploration_fraction": trial.suggest_float("exploration_fraction", 0.1, 0.4), # For short tuning runs, exploration needs to be significant.
+            "exploration_initial_eps": 1.0, ## Start with full exploration
+            "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.05),
+            "learning_starts": 1000, # A fixed, reasonable value
+            "train_freq": 4, # A common and effective value
+            "gradient_steps": 1, # Corresponds to train_freq=4
+            "tau": 1, # Hard updates are standard
+            "gamma": trial.suggest_float("gamma", 0.95, 0.999), # A log scale to focus the search on values close to 1.0 is used
         }
-        total_reward_for_trial = 0.0
-        # Use the base port assigned to this specific tuning process
+        total_performance_score = 0.0
         current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else BASE_TRAIN_SUMO_PORT
 
-        trial_summary = {
-            "trial_number": trial.number,
-            "params": params,
-            "scenarios": []
-        }
-        
-        for config_item in scenario_configs:
-            env = None 
+        for i, config_item in enumerate(scenario_configs):
+            env = None
             try:
-                # Ensure unique port for each scenario within a trial for this tuning process
-                port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % n_trials) * len(scenario_configs) + (config_item["id"] % len(scenario_configs))
+                port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % N_OPTUNA_TRIALS) * len(scenario_configs) + i
                 
+                # Use the specialized environment for tuning
                 env = TrafficEnvForTuning(
-                    port=port_for_tuning_env, 
-                    model_name=tuning_files_model_name, # Use the unique name for tuning files
-                    model_idx=config_item["id"], # This is the scenario_id
-                    op_mode="train", # op_mode for TrafficEnvForTuning
+                    port=port_for_tuning_env,
+                    model_name=tuning_files_model_name,
+                    model_idx=config_item["id"],
+                    op_mode="train",
                     base_gen_car_distrib=["uniform", config_item["demand"]],
-                    num_of_episodes=1, reward_fn=reward_function, skip_flow_generation=True,
+                    reward_fn=reward_function, skip_flow_generation=True,
                     vsl_enforcement=vsl_enforcement, sumo_binary_path_override=sumo_binary_to_use
                 )
-                # The actual model name for SB3 is not critical here as we don't save the SB3 model itself from tuning
+
                 model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
-                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR_ENABLED) # Short learning for each scenario
                 
-                obs, _ = env.reset() 
-                episode_reward = 0
-                for _ in range(HYPER_PARAM_MODEL_STEPS): # Evaluate for the same number of steps
-                    action_eval, _ = model.predict(obs, deterministic=True)
-                    obs, reward_eval, done_eval, truncated_eval, _ = env.step(action_eval)
-                    episode_reward += reward_eval
-                    if done_eval or truncated_eval:
+                # Learn on the environment
+                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False) # Progress bar off for cleaner logs
+                
+                # --- 2. ENHANCED EVALUATION & OBJECTIVE ---
+                # Now, evaluate the learned policy to get the final metrics
+                obs, _ = env.reset()
+                while True:
+                    action, _ = model.predict(obs, deterministic=True)
+                    obs, _, terminated, truncated, _ = env.step(action)
+                    if terminated or truncated:
                         break
-                total_reward_for_trial += episode_reward
+                
+                # Get the comprehensive summary statistics from your logger
+                summary_stats = env.logger.get_summary_statistics()
+                
+                # The objective is now the composite performance score!
+                # This directly optimizes for the balance of safety and mobility.
+                scenario_performance_score = summary_stats.get('performance_score', 0.0)
+                total_performance_score += scenario_performance_score
 
-                scenario_summary = {
-                    "scenario_id": config_item["id"],
-                    "total_vehicles_before": getattr(env, "total_vehicles_before", None),
-                    "total_vehicles_after": getattr(env, "total_vehicles_after", None),
-                    "episode_reward": episode_reward
-                }
-                trial_summary["scenarios"].append(scenario_summary)
+                # --- 3. INTEGRATED PRUNING ---
+                # Report the intermediate performance to Optuna
+                trial.report(total_performance_score / (i + 1), i)
+
+                # Check if the trial should be pruned
+                if trial.should_prune():
+                    raise optuna.exceptions.TrialPruned()
+
+            except optuna.exceptions.TrialPruned:
+                # Propagate the pruning exception
+                if env: env.close()
+                raise
             except Exception as e:
-                logger.error(f"Trial {trial.number} scenario {config_item['id']} for {tuning_files_model_name} failed: {e}", exc_info=True)
-                # Ensure env is closed if it was created, even on error
-                if env is not None:
-                    try:
-                        env.close()
-                    except Exception as close_e:
-                        logger.error(f"Error closing env in exception for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
-                return float('-inf') # Prune this trial
+                logger.error(f"Trial {trial.number} failed: {e}", exc_info=True)
+                if env: env.close()
+                return 0.0 # Return a poor score for failed trials
             finally:
-                if env is not None: 
-                    try:
-                        logger.debug(f"Closing env for trial {trial.number}, scenario {config_item['id']} in finally block.")
-                        env.close()
-                    except Exception as close_e:
-                        logger.error(f"Error during env.close() in finally for trial {trial.number}, scenario {config_item['id']}: {close_e}", exc_info=True)
-        
-        summary_dir = os.path.dirname("logs/optuna_summaries/")
-        summary_filename = f"summary_{tuning_files_model_name}_trial_{trial.number}.json"
-        summary_path = os.path.join(summary_dir, summary_filename)
-        with open(summary_path, "w") as f:
-            json.dump(trial_summary, f, indent=2)
+                if env: env.close()
 
-        if not scenario_configs: 
-            return 0.0
-        return total_reward_for_trial / len(scenario_configs) # Average reward over scenarios for this trial
+        # The final return value is the average performance score across all scenarios
+        final_objective = total_performance_score / len(scenario_configs)
+        return final_objective
 
     study = optuna.create_study(direction='maximize')
     
