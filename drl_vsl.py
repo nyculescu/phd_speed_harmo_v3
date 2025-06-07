@@ -1132,25 +1132,33 @@ class TrafficEnv(gym.Env):
         return float(reward)
 
     def _reward_balanced(self, invalid_action_penalty):
-        """Balanced reward incorporating delay equity principles from recent research."""
-        # Primary flow efficiency (30%)
-        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.3
+        """Enhanced balanced reward incorporating latest research findings."""
+    
+        # Base components (your existing approach)
+        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.25
         
-        # Speed efficiency with target speed consideration (25%)
-        target_speed = 100.0 / 3.6  # 100 km/h target
+        # Enhanced safety component (higher weight based on literature)
+        speed_variance = np.var(list(self.speed_history)) if len(self.speed_history) > 2 else 0.0
+        R_safety = max(0.0, 1.0 - (speed_variance / 400.0)) * 0.35  # Increased weight
+        
+        # Control smoothness (literature emphasizes this)
+        speed_change_magnitude = abs(self.current_speed_limit - getattr(self, 'previous_speed_limit', self.current_speed_limit))
+        R_smoothness = max(0.0, 1.0 - (speed_change_magnitude / 20.0)) * 0.15
+        
+        # Efficiency with target consideration
+        target_speed = 100.0 / 3.6  # 100 km/h optimal
         speed_efficiency = 1.0 - abs(self.avg_speed_before - target_speed) / target_speed
-        R_speed = max(0.0, speed_efficiency) * 0.25
+        R_efficiency = max(0.0, speed_efficiency) * 0.15
         
-        # Speed harmonization (20%)
-        R_smooth = self._calculate_speed_smoothness() * 0.2
+        # Queue prevention (exponential penalty)
+        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH)**1.5, 1.0) * 0.1
         
-        # Queue equity penalty (15%) - prevent concentrated congestion
-        queue_penalty = min(self.queue_length_upstream / MAX_QUEUE_LENGTH, 1.0) * 0.15
+        total_reward = R_flow + R_safety + R_smoothness + R_efficiency - queue_penalty + invalid_action_penalty + self.collisions_penalty
         
-        # Safety component (10%)
-        safety_reward = -abs(self.collisions_penalty) * 0.1
+        # Track previous speed limit for next iteration
+        self.previous_speed_limit = self.current_speed_limit
         
-        return R_flow + R_speed + R_smooth - queue_penalty + safety_reward + invalid_action_penalty
+        return float(total_reward)
 
     def _calculate_speed_smoothness(self):
         """
@@ -1811,13 +1819,12 @@ if __name__ == '__main__':
     vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
 
     option = 2
-    algo_to_use = "DQN"
-    vsl_enforce_mode = "electric_only" 
-    reward_used = "mobility"
-    
-    config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"  # Updated line
 
     if option == 1:
+        algo_to_use = "DQN"
+        vsl_enforce_mode = "electric_only" 
+        reward_used = "balanced"
+        config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
         create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
                     reward_function=reward_used, 
@@ -1825,6 +1832,10 @@ if __name__ == '__main__':
                     vsl_enforcement=vsl_enforce_mode)
     
     elif option == 2:
+        algo_to_use = "DQN"
+        vsl_enforce_mode = "electric_only" 
+        reward_used = "balanced"
+        config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
         optimal_params = get_optimal_params(algorithm=algo_to_use, traffic_density="high", episode_length="long")
         create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
@@ -1834,6 +1845,7 @@ if __name__ == '__main__':
                     vsl_enforcement=vsl_enforce_mode)
     
     elif option == 3:
+        algo_to_use = "DQN"
         logger.info("Starting parallel hyperparameter tuning for all combinations.")
         
         tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
@@ -1877,6 +1889,7 @@ if __name__ == '__main__':
         logger.info("Parallel hyperparameter tuning finished for all combinations.")
     
     elif option == 4:
+        algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
         parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
@@ -1923,6 +1936,9 @@ if __name__ == '__main__':
         #     logger.info(res_train)
     
     elif option == 5:
+        algo_to_use = "DQN"
+        vsl_enforce_mode = "electric_only" 
+        reward_used = "balanced"
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 
