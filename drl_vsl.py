@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
+    level=getattr(logging, LOG_LEVEL, logging.WARN),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -36,6 +36,7 @@ import time
 import json
 import copy
 import multiprocessing as mp # Added for parallel processing
+import csv
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -88,8 +89,8 @@ PORTS_PER_TUNING_PROCESS = 100 # Max trials * num_scenarios_per_trial + buffer
 
 HYPER_PARAM_SIM_LENGTH = 3600
 HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 3600
-HYPER_PARAM_MODEL_STEPS = 100 # Steps per scenario in a trial
-N_OPTUNA_TRIALS = 9 # Number of trials for Optuna study
+
+OPTUNA_PARAMS_DIR = os.path.join("rl_models", "optuna_params")
 
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
@@ -485,7 +486,7 @@ class TrafficEnv(gym.Env):
         self.collisions = []
         self.collisions_penalty = 0
         self.gen_car_distrib = base_gen_car_distrib
-        self.logger = TrafficDataLogger(self.default_speed_limit)
+        self.logger = TrafficDataLogger(model_name=model_name, log_dir=Path(f"./logs/{model_name}_{reward_fn}_{vsl_enforcement}"))
         self.num_of_episodes = num_of_episodes
         self.reward_fn = reward_fn
         
@@ -637,7 +638,7 @@ class TrafficEnv(gym.Env):
                     logger.error(f"Max retries reached for starting SUMO ({log_id}). Raising exception.")
                     raise e
 
-    def step(self, action):
+    def step(self, action: int):
         """Execute one step in the environment."""
         # Initialize SUMO if not already done
         if not self.is_sumo_initialized:
@@ -1095,14 +1096,17 @@ class TrafficDataLogger:
     Designed for SUMO-based VSL control experiments with SB3 integration.
     """
     
-    def __init__(self, default_speed_limit=130):
+    def __init__(self, model_name: str, log_dir: str):
         """
         Initialize the traffic data logger.
         
         Args:
             default_speed_limit (int): Default speed limit for the simulation (km/h)
         """
-        self.default_speed_limit = default_speed_limit
+        self.model_name = model_name
+        self.log_dir = log_dir
+
+        self.default_speed_limit = 130
         self.data = []
         self.step_count = 0
         self.episode_count = 0
@@ -1120,13 +1124,16 @@ class TrafficDataLogger:
         self.avg_occupancy = 0.0
         self.avg_queue_length = 0.0
         self.speed_limit_changes = 0
-        self.last_speed_limit = default_speed_limit
-        
+        self.last_speed_limit = 0
+
         # Create output directory if it doesn't exist
         self.output_dir = Path("./logs/traffic_data")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.step_data = []
+        self.episode_data = []
         
-        logger.info(f"TrafficDataLogger initialized with default speed limit: {default_speed_limit} km/h")
+        self.reset()
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
                      flow_downstream, occupancy, queue_length, reward, action):
@@ -1291,107 +1298,28 @@ class TrafficDataLogger:
 
     def _save_summary_statistics(self, filepath):
         """
-        Save enhanced, literature-standard summary statistics to a separate CSV file.
-        This provides a comprehensive overview of the agent's performance for academic papers.
+        Calculates summary stats and saves them to the summary log file.
         """
-        if not self.data or not self.episode_rewards:
-            logger.warning("No data available to generate summary statistics.")
-            return
+        # Now this method just calls the calculator and handles file I/O
+        summary_stats = self._calculate_summary_statistics()
         
-        df = pd.DataFrame(self.data)
-        
-        # --- Foundational Metrics ---
-        total_steps = len(df)
-        total_episodes = self.episode_count
-        simulation_duration_hours = df['simulation_time'].iloc[-1] / 3600 if total_steps > 0 else 0
-        
-        # --- 1. Safety Metrics ---
-        # Significance: Directly measures traffic harmonization and risk. Lower variance and fewer collisions are key VSL goals.
-        
-        # Speed Variance: A primary indicator of traffic smoothness. Lower is better.
-        speed_history_ms = df['flow_downstream'] / (df['occupancy'] * 3.6 / 100) if 'occupancy' in df.columns else pd.Series([0])
-        speed_variance = np.var(speed_history_ms.dropna().replace([np.inf, -np.inf], 0))
-        
-        # Collision Rate: The most direct measure of safety. Standardized per hour.
-        total_collisions = self.collision_count # Assuming you update self.collision_count
-        collision_rate_per_hour = total_collisions / simulation_duration_hours if simulation_duration_hours > 0 else 0
+        if not summary_stats:
+            return # Do nothing if there's no data
 
-        # --- 2. Mobility and Efficiency Metrics ---
-        # Significance: Quantifies the VSL system's ability to maximize throughput and prevent congestion.
-        
-        # Average Throughput (Flow): The number of vehicles processed. Higher is better.
-        avg_flow_downstream = df['flow_downstream'].mean()
-        
-        # Capacity Utilization: How effectively the road's theoretical capacity is used.
-        # Assumes MAX_FLOW is defined globally, e.g., 7200 veh/h for 2 lanes.
-        capacity_utilization_pct = (avg_flow_downstream / MAX_FLOW) * 100
-        
-        # Flow Breakdown Probability: Percentage of time the system is in a congested state.
-        # Define breakdown: occupancy > 30% and flow < 1500 veh/h/lane (3000 total).
-        breakdown_conditions = (df['occupancy'] > 30) & (df['flow_downstream'] < 3000)
-        flow_breakdown_probability_pct = (breakdown_conditions.sum() / total_steps) * 100 if total_steps > 0 else 0
+        # Your existing file writing logic
+        with open(self.summary_log_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=summary_stats.keys())
+            if f.tell() == 0:
+                writer.writeheader()
+            writer.writerow(summary_stats)
 
-        # --- 3. Control Stability Metrics ---
-        # Significance: Evaluates the practicality and smoothness of the VSL agent's actions. Erratic control is undesirable.
-        
-        # Control Action Frequency: How often the agent changes the speed limit. Lower is generally better for driver comfort.
-        total_speed_limit_changes = df['speed_limit_changes_total'].iloc[-1] if total_steps > 0 else 0
-        control_actions_per_hour = total_speed_limit_changes / simulation_duration_hours if simulation_duration_hours > 0 else 0
-        
-        # Control Action Magnitude & Stability: The average size and consistency of speed changes.
-        speed_changes_abs = df['speed_change'].abs()
-        avg_control_magnitude = speed_changes_abs[speed_changes_abs > 0].mean() # Avg magnitude of actual changes
-        std_control_magnitude = speed_changes_abs[speed_changes_abs > 0].std()
-
-        # --- 4. Composite (Multi-Objective) Indices ---
-        # Significance: Provides single scores to easily compare overall performance across different models, balancing competing objectives.
-        
-        # Safety Index (0 to 1): Higher is safer. Based on normalized speed variance.
-        max_reasonable_variance = 400.0  # Corresponds to a std dev of 20 m/s
-        safety_index = max(0.0, 1.0 - (speed_variance / max_reasonable_variance))
-        
-        # Mobility Index (0 to 1): Higher is more efficient. Based on capacity utilization.
-        mobility_index = capacity_utilization_pct / 100.0
-        
-        # Overall Performance Score (Weighted sum, customizable for your paper's focus)
-        # Example: 60% weight on safety, 40% on mobility.
-        performance_score = (0.6 * safety_index) + (0.4 * mobility_index)
-
-        # --- Assemble Summary Dictionary ---
-        summary_stats = {
-            'training_duration_minutes': (datetime.now() - self.start_time).total_seconds() / 60,
-            'total_episodes': total_episodes,
-            'total_steps': total_steps,
-            'best_episode_reward': self.best_reward,
-            'avg_episode_reward': np.mean(self.episode_rewards),
-            
-            # Safety
-            'safety_index': safety_index,
-            'speed_variance_ms2': speed_variance,
-            'total_collisions': total_collisions,
-            'collision_rate_per_hour': collision_rate_per_hour,
-            
-            # Mobility
-            'mobility_index': mobility_index,
-            'avg_flow_downstream_veh_h': avg_flow_downstream,
-            'capacity_utilization_pct': capacity_utilization_pct,
-            'flow_breakdown_probability_pct': flow_breakdown_probability_pct,
-            'max_queue_length_m': df['queue_length'].max(),
-
-            # Control Stability
-            'control_actions_per_hour': control_actions_per_hour,
-            'avg_control_magnitude_kmh': avg_control_magnitude,
-            'std_control_magnitude_kmh': std_control_magnitude,
-            
-            # Overall Score
-            'performance_score': performance_score
-        }
-        
-        # Save summary
-        summary_df = pd.DataFrame([summary_stats])
-        summary_df.to_csv(filepath, index=False)
-        
-        logger.info(f"Enhanced summary statistics saved to {filepath}")
+    def get_summary_statistics(self) -> dict:
+        """
+        Public method to safely get the final summary statistics for an episode.
+        This is called by the Optuna objective function.
+        """
+        # It simply calls the private calculation method.
+        return self._calculate_summary_statistics()
 
     def get_performance_metrics(self):
         """
@@ -1455,6 +1383,79 @@ class TrafficDataLogger:
         """String representation of logger status."""
         return (f"TrafficDataLogger(steps={len(self.data)}, episodes={self.episode_count}, "
                 f"avg_reward={np.mean(self.episode_rewards) if self.episode_rewards else 0:.2f})")
+
+    def _calculate_summary_statistics(self) -> dict:
+        """
+        Calculates the final summary statistics for the completed episode and returns them as a dictionary.
+        This method does NOT write to a file.
+        """
+        if not self.data:
+            logger.warning(f"No data was logged for {self.model_name}. Returning default zero-value statistics.")
+            # Return a dictionary of default values to prevent crashes downstream.
+            return {
+                'total_travel_time': 0.0,
+                'average_speed': 0.0,
+                'average_flow_rate': 0.0,
+                'average_occupancy': 0.0,
+                'total_vehicles': 0,
+                'safety_index': 0.0,
+                'mobility_index': 0.0,
+                'flow_breakdown_prob': 0.0,
+                'control_action_freq': 0.0,
+                'performance_score': 0.0 # Return 0 to indicate poor performance
+            }
+
+        df = pd.DataFrame(self.data)
+        
+        if not self.step_data:
+            return {} # Return empty dict if no data was logged
+
+        avg_flow_vph = df['flow_downstream'].mean()
+        avg_speed_kph = df['current_speed_limit'].mean() # Or however you calculate avg speed
+        speed_variance = df['current_speed_limit'].var()
+        avg_occupancy_percent = df['occupancy'].mean()
+        
+        # Calculate total control actions based on the logged 'speed_change'
+        control_actions = df[df['speed_change'] != 0].shape[0]
+        
+        # Example metrics (yours are already more sophisticated)
+        MAX_THEORETICAL_FLOW = 7200.0
+        MAX_SPEED_VARIANCE = 50.0 # Example value
+        mobility_index = avg_flow_vph / (MAX_THEORETICAL_FLOW or 1)
+        safety_index = 1 - (speed_variance / (MAX_SPEED_VARIANCE or 1))
+        
+        performance_score = (
+            0.5 * mobility_index +
+            0.5 * safety_index
+            # ... other components 
+        )
+
+        summary_stats = {
+            'avg_flow_vph': avg_flow_vph,
+            'avg_speed_kph': avg_speed_kph,
+            'speed_variance': speed_variance,
+            'mobility_index': mobility_index,
+            'safety_index': safety_index,
+            'performance_score': performance_score,
+            'total_control_actions': control_actions,
+            # ... any other summary stats
+        }
+        return summary_stats
+
+    def reset(self):
+        """Resets the logger for a new episode or evaluation run."""
+        self.start_time = time.time()
+        
+        # --- THIS IS THE FIX ---
+        # Ensure step_data is re-initialized as an empty list every time.
+        self.data = []
+        self.last_speed_limit = self.default_speed_limit
+        
+        self.step_count = 0
+        self.total_reward = 0.0
+        self.speed_limit_changes = 0
+            
+        logger.debug(f"TrafficDataLogger for model {self.model_name} has been reset.")
 
 class TensorboardCallback(BaseCallback):
     def __init__(self, env, model, verbose=0):

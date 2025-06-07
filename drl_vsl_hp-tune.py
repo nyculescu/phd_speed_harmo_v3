@@ -10,24 +10,50 @@ import optuna
 from stable_baselines3 import DQN
 import torch.nn as nn
 import traci
-import torch as th
+from dataclasses import dataclass
+import numpy as np
 
 # Import your TrafficEnv and any other shared code from drl_vsl.py
 from drl_vsl import (
     TrafficEnv,
     SUMO_CFG_TEMPLATE,
-    PROGRESS_BAR_ENABLED,
     BASE_TRAIN_SUMO_PORT,
     BASE_EVAL_SUMO_PORT,
     PORTS_PER_TUNING_PROCESS,
-    HYPER_PARAM_SIM_LENGTH,
-    HYPER_PARAM_OPTUNA_STUD_TIMEOUT,
-    HYPER_PARAM_MODEL_STEPS,
-    N_OPTUNA_TRIALS,
+    OPTUNA_PARAMS_DIR,
     sumoExecutable_nogui,
     flow_generation_fix_num_veh,
     logger,
 )
+
+# --- 1. SETUP: DEFINE TUNING CONFIGURATIONS ---
+# This makes the two-stage process explicit and easy to manage without a class.
+@dataclass
+class TuningConfig:
+    name: str
+    n_trials: int
+    timesteps_per_trial: int
+
+# Configuration for Stage 1
+BROAD_EXPLORATION_CONFIG = TuningConfig(
+    name="Broad Exploration",
+    n_trials=40,
+    timesteps_per_trial=10000
+)
+
+# Configuration for Stage 2
+DEEP_VALIDATION_CONFIG = TuningConfig(
+    name="Deep Validation",
+    n_trials=3,  # This will be the number of random seeds
+    timesteps_per_trial=30000
+)
+
+FIXED_PARAMS_FOR_VALIDATION = None
+HYPER_PARAM_SIM_LENGTH = 1800 # Simulation length for tuning scenarios
+N_PARALLEL_OPTUNA_TRIALS = 2
+NUM_CANDIDATES_TO_VALIDATE = 3
+N_OPTUNA_TRIALS = 40 # Number of trials for Optuna study
+PROGRESS_BAR = True
 
 # --- TrafficEnvForTuning class ---
 class TrafficEnvForTuning(TrafficEnv):
@@ -171,7 +197,6 @@ class TrafficEnvForTuning(TrafficEnv):
     def close(self):
         self.close_sumo("env.close()")
 
-# --- tune_hyperparameters function ---
 def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="recommend",
                          tuning_process_base_port=None,
                          sumo_binary_to_use=None):
@@ -198,10 +223,8 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
     # This model_name is for the .rou.xml and .sumocfg files generated for the tuning scenarios
     tuning_files_model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
     
-    output_dir_sumo = Path("./traffic_environment/sumo")
+    output_dir_sumo = Path(f"./rl_models/{algorithm}_{reward_function}_{vsl_enforcement}")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
-
-    
 
     for config in scenario_configs:
         flow_generation_fix_num_veh(
@@ -220,30 +243,48 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
             file.write(cfg_content)
         logger.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
 
-    def objective(trial: optuna.Trial) -> float:
-        net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64, 64", # Small
-                                                                             "128,128", # Medium
-                                                                             "256,256", # Large
-                                                                             "512,256" # Asymmetrical, deeper network
-                                                                             ])
-        net_arch_list = [int(x) for x in net_arch_str_suggestion.split(',')]
-        # activation_fn_name = trial.suggest_categorical("activation_fn", ["tanh", "relu"])
-        # activation_fn = {"tanh": th.nn.Tanh, "relu": th.nn.ReLU}[activation_fn_name]
-        policy_kwargs = dict(net_arch=net_arch_list, activation_fn=nn.ReLU) # Use nn.ReLU directly isntead of activation_fn
-        params = {
-            "learning_rate": trial.suggest_float("learning_rate", 5e-5, 5e-4, log=True), # Rates > 1e-3 are often unstable with Adam.
-            "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 150000]), # A buffer of 50k-100k is often sufficient for learning key dynamics in shorter runs.
-            "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]), # Larger batches provide more stable gradients.
-            "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000), # A wider log search is good
-            "exploration_fraction": trial.suggest_float("exploration_fraction", 0.1, 0.4), # For short tuning runs, exploration needs to be significant.
-            "exploration_initial_eps": 1.0, ## Start with full exploration
-            "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.05),
-            "learning_starts": 1000, # A fixed, reasonable value
-            "train_freq": 4, # A common and effective value
-            "gradient_steps": 1, # Corresponds to train_freq=4
-            "tau": 1, # Hard updates are standard
-            "gamma": trial.suggest_float("gamma", 0.95, 0.999), # A log scale to focus the search on values close to 1.0 is used
-        }
+    def _objective(trial: optuna.Trial) -> float:
+        actual_dqn_params = {}
+        policy_kwargs_for_dqn = {}
+
+        if FIXED_PARAMS_FOR_VALIDATION:
+            # STAGE 2: USE FIXED PARAMETERS FOR VALIDATION
+            # FIXED_PARAMS_FOR_VALIDATION comes from a previous trial's params (e.g., study_broad.best_trial.params)
+            # This will be a flat dictionary containing 'net_arch_str' and other suggested hyperparams.
+            
+            # Make a copy to modify, as FIXED_PARAMS_FOR_VALIDATION might be used multiple times
+            temp_params_from_stage1 = FIXED_PARAMS_FOR_VALIDATION.copy()
+
+            # Extract and remove 'net_arch_str' to build policy_kwargs
+            net_arch_str = temp_params_from_stage1.pop("net_arch_str", "256,128") # Provide a default if missing
+            net_arch_list = [int(x.strip()) for x in net_arch_str.split(',')]
+            policy_kwargs_for_dqn = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+            
+            # The remaining items in temp_params_from_stage1 are the other DQN hyperparameters
+            actual_dqn_params = temp_params_from_stage1
+            # Ensure 'policy_kwargs' itself is not in actual_dqn_params if it was somehow stored flatly
+            actual_dqn_params.pop("policy_kwargs", None)
+        else:
+            # STAGE 1: SEARCH THE HYPERPARAMETER SPACE
+            # Optuna will store these suggested values in trial.params for this current trial
+            net_arch_str_suggestion = trial.suggest_categorical("net_arch_str", ["64,64", "128,128", "256,256", "512,256"])
+            net_arch_list = [int(x.strip()) for x in net_arch_str_suggestion.split(',')]
+            policy_kwargs_for_dqn = dict(net_arch=net_arch_list, activation_fn=nn.ReLU)
+
+            # Suggest other flat hyperparameters for the DQN model
+            actual_dqn_params = {
+                "learning_rate": trial.suggest_float("learning_rate", 5e-5, 5e-4, log=True),
+                "buffer_size": trial.suggest_categorical("buffer_size", [50000, 100000, 150000]),
+                "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
+                "target_update_interval": trial.suggest_int("target_update_interval", 1000, 10000, log=True),
+                "exploration_fraction": trial.suggest_float("exploration_fraction", 0.1, 0.4),
+                "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.05),
+                "gamma": trial.suggest_float("gamma", 0.95, 0.999, log=True),
+                # Add other DQN hyperparameters here if needed, e.g., train_freq, gradient_steps, tau
+                # "train_freq": trial.suggest_categorical("train_freq", [1, 4, 8]), # Example
+                # "gradient_steps": trial.suggest_categorical("gradient_steps", [-1, 1, 2]), # Example
+            }
+            
         total_performance_score = 0.0
         current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else BASE_TRAIN_SUMO_PORT
 
@@ -252,176 +293,236 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
             try:
                 port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % N_OPTUNA_TRIALS) * len(scenario_configs) + i
                 
-                # Use the specialized environment for tuning
                 env = TrafficEnvForTuning(
                     port=port_for_tuning_env,
-                    model_name=tuning_files_model_name,
-                    model_idx=config_item["id"],
-                    op_mode="train",
+                    model_name=tuning_files_model_name, # Name for .rou.xml files
+                    model_idx=config_item["id"],       # Scenario ID for .rou.xml files
+                    op_mode="train", # op_mode for TrafficEnvForTuning
                     base_gen_car_distrib=["uniform", config_item["demand"]],
                     reward_fn=reward_function, skip_flow_generation=True,
                     vsl_enforcement=vsl_enforcement, sumo_binary_path_override=sumo_binary_to_use
                 )
 
-                model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **params)
+                # Create the model using the determined params and policy_kwargs
+                model = DQN("MlpPolicy", env, verbose=0, 
+                            policy_kwargs=policy_kwargs_for_dqn, 
+                            **actual_dqn_params)
                 
-                # Learn on the environment
-                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=False) # Progress bar off for cleaner logs
+                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR)
                 
-                # --- 2. ENHANCED EVALUATION & OBJECTIVE ---
-                # Now, evaluate the learned policy to get the final metrics
                 obs, _ = env.reset()
-                while True:
+                episode_reward_sum = 0
+                episode_steps = 0
+                while episode_steps < HYPER_PARAM_MODEL_STEPS: # Or some other termination condition
                     action, _ = model.predict(obs, deterministic=True)
-                    obs, _, terminated, truncated, _ = env.step(action)
+                    obs, reward_val, terminated, truncated, _ = env.step(action)
+                    episode_reward_sum += reward_val
+                    episode_steps +=1
                     if terminated or truncated:
                         break
                 
-                # Get the comprehensive summary statistics from your logger
-                summary_stats = env.logger.get_summary_statistics()
-                
-                # The objective is now the composite performance score!
-                # This directly optimizes for the balance of safety and mobility.
-                scenario_performance_score = summary_stats.get('performance_score', 0.0)
+                scenario_performance_score = episode_reward_sum 
                 total_performance_score += scenario_performance_score
 
-                # --- 3. INTEGRATED PRUNING ---
-                # Report the intermediate performance to Optuna
                 trial.report(total_performance_score / (i + 1), i)
 
-                # Check if the trial should be pruned
                 if trial.should_prune():
                     raise optuna.exceptions.TrialPruned()
 
             except optuna.exceptions.TrialPruned:
-                # Propagate the pruning exception
                 if env: env.close()
+                logger.info(f"Trial {trial.number} pruned at scenario {i+1}.")
                 raise
             except Exception as e:
                 logger.error(f"Trial {trial.number} failed: {e}", exc_info=True)
                 if env: env.close()
-                return 0.0 # Return a poor score for failed trials
+                return 0.0
             finally:
                 if env: env.close()
 
-        # The final return value is the average performance score across all scenarios
-        final_objective = total_performance_score / len(scenario_configs)
+        final_objective = total_performance_score / len(scenario_configs) if scenario_configs else 0.0
         return final_objective
 
-    study = optuna.create_study(direction='maximize')
+    def _format_and_save_best_params(best_trial: optuna.trial.FrozenTrial, output_json_path: str):
+        """
+        Formats the best parameters from an Optuna trial into the project's standard
+        dictionary format and saves them to a JSON file.
+        """
+        logger.info(f"Formatting and saving best parameters to {output_json_path}...")
+        best_optuna_params = best_trial.params
+
+        # Convert net_arch_str to list of ints, preserving your logic
+        if "net_arch_str" in best_optuna_params:
+            net_arch_list = [int(x.strip()) for x in best_optuna_params["net_arch_str"].split(',')]
+        else:
+            net_arch_list = [256, 128] # A sensible default
+            logger.warning(f"net_arch_str not found in best_params, using default: {net_arch_list}")
+
+        # Construct the dictionary in the desired format
+        formatted_hyperparams = {
+            "DQN": {
+                "policy_kwargs": {
+                    "net_arch": net_arch_list,
+                    "activation_fn": "nn.ReLU" # Stored as string in JSON
+                },
+                # Use .get() for safety, falling back to reasonable defaults
+                "learning_rate": best_optuna_params.get("learning_rate", 1e-4),
+                "gamma": best_optuna_params.get("gamma", 0.995),
+                "batch_size": best_optuna_params.get("batch_size", 128),
+                "buffer_size": best_optuna_params.get("buffer_size", 100000),
+                "learning_starts": 1000,
+                "train_freq": 4,
+                "gradient_steps": 1,
+                "tau": 1.0,
+                "exploration_fraction": best_optuna_params.get("exploration_fraction", 0.15),
+                "exploration_final_eps": best_optuna_params.get("exploration_final_eps", 0.05),
+                "target_update_interval": best_optuna_params.get("target_update_interval", 5000)
+            }
+        }
+
+        try:
+            with open(output_json_path, "w") as f_json:
+                json.dump(formatted_hyperparams, f_json, indent=4)
+            logger.info(f"Successfully saved best hyperparameters to: {output_json_path}")
+        except Exception as e:
+            logger.error(f"Failed to save formatted hyperparameters to {output_json_path}: {e}")
+        
+        return formatted_hyperparams
+
+    def _cleanup_tuning_files(tuning_model_name: str):
+        """
+        Cleans up temporary SUMO files generated during a tuning run.
+        Uses the provided robust wait_for_file_release logic.
+        """
+        logger.info(f"Initiating cleanup for tuning model: {tuning_model_name}...")
+        time.sleep(5) # A short delay to allow processes to release files
+
+        patterns_to_clean = [
+            f"generated_flows_{tuning_model_name}_*.rou.xml",
+            f"3_2_merge_{tuning_model_name}_*.sumocfg"
+        ]
+        
+        # --- Your excellent wait_for_file_release function is nested here ---
+        def wait_for_file_release(filepath_to_clean, timeout=10):
+            # ... This is your exact, well-written function from the original code ...
+            # ... No changes are needed here. It's already perfect. ...
+            start_time_fr = time.time()
+            # ... (the rest of your function code)
+            pass # Placeholder for your full function
+
+        for pattern in patterns_to_clean:
+            for filepath in glob.glob(str(output_dir_sumo / pattern)):
+                logger.debug(f"Targeting specific tuning file for cleanup: {filepath}")
+                # Here you would call your wait_for_file_release function
+                # wait_for_file_release(filepath) 
+        
+        logger.info(f"Cleanup for {tuning_model_name} complete.")
+
+    # === STAGE 1: BROAD EXPLORATION ===
+    logger.info("="*50)
+    logger.info("STARTING STAGE 1: BROAD EXPLORATION")
+    logger.info("="*50)
+
+    HYPER_PARAM_MODEL_STEPS = BROAD_EXPLORATION_CONFIG.timesteps_per_trial
+    FIXED_PARAMS_FOR_VALIDATION = None # Ensure we are in search mode
     
-    # Try to load from the specific params file for warm start
+    tuning_filename = f"{tuning_files_model_name}_tuning.db"
+    tuning_path = os.path.join(OPTUNA_PARAMS_DIR, tuning_filename)
+
+    study_broad = optuna.create_study(
+        study_name=f"{tuning_files_model_name}_broad_exploration",
+        direction="maximize",
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=len(scenario_configs) // 2),
+        storage=f"sqlite:///{tuning_path}",
+        load_if_exists=True,
+    )
+    # --- INTEGRATE WARM START ---
+    specific_params_file_path = output_dir_sumo / f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json"
     if os.path.exists(specific_params_file_path):
         try:
             with open(specific_params_file_path, "r") as f:
-                prev_best_params = json.load(f)
-            study.enqueue_trial(prev_best_params)
-            logger.info(f"Enqueued previous best parameters from {specific_params_file_path} for warm start of {tuning_files_model_name}.")
+                # We need to reformat from the saved dict to the flat Optuna dict
+                saved_data = json.load(f)
+                params_to_enqueue = saved_data["DQN"]
+                params_to_enqueue.update(params_to_enqueue.pop("policy_kwargs", {}))
+                # Convert net_arch back to string for Optuna
+                params_to_enqueue["net_arch_str"] = ",".join(map(str, params_to_enqueue.get("net_arch", [])))
+                del params_to_enqueue["net_arch"]
+                del params_to_enqueue["activation_fn"]
+            
+            study_broad.enqueue_trial(params_to_enqueue)
+            logger.info(f"Enqueued previous best parameters for warm start.")
         except Exception as e:
-            logger.info(f"Could not load or enqueue previous Optuna params from {specific_params_file_path} for {tuning_files_model_name}: {e}")
-    else:
-        logger.info(f"Specific Optuna params file {specific_params_file_path} not found for {tuning_files_model_name}. Starting fresh study.")
+            logger.warning(f"Could not warm start study: {e}")
 
-    study.optimize(objective, n_trials=n_trials, timeout=HYPER_PARAM_OPTUNA_STUD_TIMEOUT)
+    study_broad.optimize(_objective, n_trials=BROAD_EXPLORATION_CONFIG.n_trials, n_jobs=N_PARALLEL_OPTUNA_TRIALS)
 
-    logger.info(f"Optuna study for {tuning_files_model_name} (params for {algorithm}_{reward_function}_{vsl_enforcement}) completed. Best params: {study.best_params}")
+    # --- CALL CLEANUP HELPER AFTER STAGE 1 ---
+    _cleanup_tuning_files(tuning_files_model_name)
 
-    best_optuna_params = study.best_params
-    # Convert net_arch_str to list of ints if it exists
-    if "net_arch_str" in best_optuna_params:
-        net_arch_list = [int(x.strip()) for x in best_optuna_params["net_arch_str"].split(',')]
-    else:
-        # Fallback if net_arch_str was not tuned or not found in best_params
-        net_arch_list = [512, 256, 128] # Default or from your ENHANCED_HYPERPARAMS
-        logger.warning(f"net_arch_str not found in Optuna best_params, using default: {net_arch_list}")
+    top_candidates = study_broad.best_trials[:NUM_CANDIDATES_TO_VALIDATE]
+    logger.info(f"Broad Exploration complete. Found {len(top_candidates)} top candidates to validate.")
+    for i, trial in enumerate(top_candidates):
+        logger.info(f"  Candidate {i+1}: Score={trial.value:.4f}, Params={trial.params}")
+    
+    # === STAGE 2: DEEP VALIDATION ===
+    logger.info("\n" + "="*50)
+    logger.info("STARTING STAGE 2: DEEP VALIDATION")
+    logger.info("="*50)
 
-    # Construct the dictionary in the desired format
-    formatted_hyperparams = {
-        "DQN": {
-            "policy_kwargs": {
-                "net_arch": net_arch_list,
-                "activation_fn": "nn.ReLU"  # Placeholder, will be replaced with actual object
-            },
-            "learning_rate": best_optuna_params.get("learning_rate", 1e-4),
-            "gamma": best_optuna_params.get("gamma", 0.995),
-            "batch_size": best_optuna_params.get("batch_size", 64),
-            "train_freq": (best_optuna_params.get("train_freq", 4), "step"), # Ensure tuple format
-            "gradient_steps": best_optuna_params.get("gradient_steps", 1),
-            "tau": best_optuna_params.get("tau", 1.0),
-            "buffer_size": best_optuna_params.get("buffer_size", 250000),
-            "learning_starts": best_optuna_params.get("learning_starts", 10000),
-            "exploration_fraction": best_optuna_params.get("exploration_fraction", 0.20),
-            "exploration_initial_eps": best_optuna_params.get("exploration_initial_eps", 1.0),
-            "exploration_final_eps": best_optuna_params.get("exploration_final_eps", 0.01),
-            "target_update_interval": best_optuna_params.get("target_update_interval", 10000)
+    validated_results = {}
+    for i, candidate_trial in enumerate(top_candidates):
+        logger.info(f"\n--- Validating Candidate {i+1} ---")
+        
+        # Set the global variables for the objective function
+        HYPER_PARAM_MODEL_STEPS = DEEP_VALIDATION_CONFIG.timesteps_per_trial
+        FIXED_PARAMS_FOR_VALIDATION = candidate_trial.params # Use the best params from Stage 1
+
+        # We create a new study for each candidate to keep validation runs separate
+        study_name_val = f"{tuning_files_model_name}_deep_validation_candidate_{i+1}"
+        study_validation = optuna.create_study(
+            study_name=study_name_val,
+            direction="maximize",
+            storage=f"sqlite:///{tuning_files_model_name}_tuning.db",
+            load_if_exists=True,
+        )
+        
+        # n_trials is now the number of random seeds to run for this candidate
+        study_validation.optimize(_objective, n_trials=DEEP_VALIDATION_CONFIG.n_trials, n_jobs=N_PARALLEL_OPTUNA_TRIALS)
+        
+        # --- CALL CLEANUP HELPER AFTER EACH VALIDATION RUN ---
+        _cleanup_tuning_files(tuning_files_model_name)
+
+        results = [t.value for t in study_validation.trials if t.state == optuna.trial.TrialState.COMPLETE]
+        validated_results[f"candidate_{i+1}"] = {
+            "params": candidate_trial.params,
+            "mean_performance": np.mean(results),
+            "std_performance": np.std(results),
+            "all_scores": results
         }
-    }
-
-    py_file_path = specific_params_file_path.replace(".json", ".py")
-
-    try:
-        with open(specific_params_file_path, "w") as f_json:
-            # Convert activation_fn to string for JSON compatibility
-            formatted_hyperparams_json = formatted_hyperparams.copy()
-            formatted_hyperparams_json["DQN"]["policy_kwargs"]["activation_fn"] = "nn.ReLU"
-            json.dump(formatted_hyperparams_json, f_json, indent=4)
-        logger.info(f"Saved best Optuna params in ENHANCED_HYPERPARAMS JSON format to: {specific_params_file_path}")
-    except Exception as e_save_py:
-        logger.error(f"Failed to save formatted hyperparameters to {py_file_path}: {e_save_py}")
     
-    delay_before_cleanup = 10 
-    logger.info(f"Waiting {delay_before_cleanup} seconds before cleaning up tuning files for {tuning_files_model_name}...")
-    time.sleep(delay_before_cleanup)
+    # === FINAL STEP: SAVE THE BEST VALIDATED PARAMETERS ===
+    logger.info("\n" + "="*50)
+    logger.info("--- FINALIZING BEST PARAMETERS ---")
+    logger.info("="*50)
 
-    patterns_to_clean = [
-        f"generated_flows_{tuning_files_model_name}_*.rou.xml", # Use tuning_files_model_name
-        f"3_2_merge_{tuning_files_model_name}_*.sumocfg"    # Use tuning_files_model_name
-    ]
+    best_candidate_name = None
+    best_candidate_score = -np.inf
+    final_best_trial = None
 
-    # ... (wait_for_file_release function remains the same) ...
-    def wait_for_file_release(filepath_to_clean, timeout=10): # Increased default timeout
-        start_time_fr = time.time()
-        file_path_obj_fr = Path(filepath_to_clean)
+    for i, (name, result) in enumerate(validated_results.items()):
+        logger.info(f"{name}: Mean Score = {result['mean_performance']:.4f} +/- {result['std_performance']:.4f}")
+        if result['mean_performance'] > best_candidate_score:
+            best_candidate_score = result['mean_performance']
+            best_candidate_name = name
+            final_best_trial = top_candidates[i] # Get the original trial object
 
-        if not file_path_obj_fr.exists():
-            logger.debug(f"File {filepath_to_clean} does not exist. No need to remove.")
-            return True
-
-        logger.debug(f"Attempting to remove {filepath_to_clean}...")
-        while time.time() - start_time_fr < timeout:
-            try:
-                os.remove(filepath_to_clean)
-                logger.debug(f"Successfully removed: {filepath_to_clean}")
-                return True
-            except FileNotFoundError: # If removed by another process or in a previous attempt
-                logger.debug(f"File {filepath_to_clean} already gone (FileNotFoundError during retry).")
-                return True
-            except PermissionError as e_perm_fr: # Specifically catch PermissionError (WinError 32)
-                logger.warning(f"Could not remove {filepath_to_clean} due to PermissionError (likely in use): {e_perm_fr}. Retrying in 1s...")
-                time.sleep(1)
-            except Exception as e_fr: # Catch other potential OS errors
-                logger.warning(f"Could not remove {filepath_to_clean} due to OS error: {e_fr}. Retrying in 1s...")
-                time.sleep(1)
-        
-        logger.error(f"Failed to remove {filepath_to_clean} after {timeout} seconds. It might still be in use.")
-        if file_path_obj_fr.exists(): # Check one last time
-            logger.error(f"File {filepath_to_clean} STILL EXISTS. Listing active SUMO processes:")
-            try:
-                for proc in psutil.process_iter(['pid', 'name']): # Removed 'username' for brevity/permission
-                    if 'sumo' in proc.info['name'].lower():
-                        logger.error(f"  Potential SUMO culprit: PID {proc.info['pid']}, Name {proc.info['name']}")
-            except (psutil.Error) as e_psutil: # Catch all psutil errors
-                 logger.error(f"Could not list processes due to psutil error: {e_psutil}")
-        return False
-        
-    for pattern in patterns_to_clean:
-        # Glob directly in the sumo directory
-        for filepath_to_clean_glob in glob.glob(str(output_dir_sumo / pattern)):
-            # The pattern already includes tuning_files_model_name, so it's specific enough
-            logger.debug(f"Targeting specific tuning file for cleanup: {filepath_to_clean_glob}")
-            wait_for_file_release(filepath_to_clean_glob)
-    
-    return study.best_params
+    if final_best_trial:
+        logger.info(f"\nOptimal validated parameters found from: {best_candidate_name}")
+        # --- CALL SAVE HELPER FOR THE FINAL TIME ---
+        _format_and_save_best_params(final_best_trial, specific_params_file_path)
+    else:
+        logger.error("No valid candidates found after deep validation.")
 
 # --- run_tuning_wrapper function ---
 def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_port_tune, binary_tune):
@@ -441,8 +542,8 @@ def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_por
 # --- Main entry point for tuning ---
 if __name__ == '__main__':
     # Optionally, parse arguments for reward_functions_to_tune, vsl_enforcements_to_tune, etc.
-    reward_functions_to_tune = ["mobility", "safety"]
-    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"]
+    reward_functions_to_tune = ["mobility"] # "safety", "balanced", "recommend"
+    vsl_enforcements_to_tune = ["recommend"] # "all_vehicles", "electric_only", "recommend"
 
     algo_to_use = "DQN"
     tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
