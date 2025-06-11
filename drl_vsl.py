@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.WARN),
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -75,10 +75,10 @@ num_test_envs_per_model = 1
 num_train_envs_per_model = 1
 num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
-# sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
-sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo' # This doesn't work
-sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui) # Default to GUI
-
+sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
+sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
+SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
+sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
@@ -92,6 +92,11 @@ HYPER_PARAM_SIM_LENGTH = 3600
 HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 3600
 
 OPTUNA_PARAMS_DIR = os.path.join("rl_models", "optuna_params")
+
+BASE_DIR = Path(__file__).resolve().parent
+TRAFFIC_ENV_SUMO_DIR = BASE_DIR / "traffic_environment" / "sumo"
+SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be written
+NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
 
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
@@ -156,7 +161,6 @@ def create_sumocfg(file_postfix, vsl_enforcement="recommend", model_idx_offset=0
 
 def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
-        # Use provided port or default from global, adjusted by idx
         port_for_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_TRAIN_SUMO_PORT + idx
         
         env = Monitor(TrafficEnv(port=port_for_env,
@@ -201,7 +205,9 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    steps_per_episode = 504000 // 60  
+    train_sim_length = 504000 # # Full simulation time in seconds for training
+    eval_sim_length = int(interval_length * num_of_intervals)  # Evaluation length
+    steps_per_episode = train_sim_length // 60  
     total_timesteps = steps_per_episode * num_of_episodes
     eval_timesteps = steps_per_episode // 4
 
@@ -307,10 +313,11 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
         logger.error(f"Error loading model from {model_load_path}: {e}. Exiting test.")
         return
 
+    test_sim_length = int(24 * 3600)
     env = TrafficEnv(port=BASE_EVAL_SUMO_PORT,
                      model_name=model_name,
                      model_idx=0,
-                     op_mode="test",
+                     sim_length=test_sim_length,
                      base_gen_car_distrib=["bimodal", 3],
                      reward_fn=reward_function,
                      vsl_enforcement=vsl_enforcement,
@@ -491,17 +498,23 @@ def run_training_for_combination(config_tuple):
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Classes """
 MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
-MAX_FLOW = 7200.0               # vehicles per hour
+MAX_FLOW = 10000.0               # vehicles per hour
 MAX_QUEUE_LENGTH = 500.0        # meters
 SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
 
 class TrafficEnv(gym.Env):
-    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", vsl_enforcement="recommend",
-                 sumo_binary_path_override=None):
+    metadata = {"render_modes": ["human"], "render_fps": 30}
+    
+    def __init__(self, port, model_name, model_idx, sim_length, base_gen_car_distrib, 
+                 num_of_episodes, reward_fn="balanced", 
+                 vsl_enforcement="recommend",
+                 sumo_binary_path_override: Optional[str] = None, 
+                 normalization_bounds_path: Optional[str] = None):
         super(TrafficEnv, self).__init__()
         self.default_speed_limit = 130
         self.port = port
+        self.sim_length = sim_length
+        self.sumo_step_length = 1  # [s] SUMO step length
         self.model_name = model_name
         self.model_idx = model_idx
         self.effective_model_name_for_files = model_name
@@ -511,7 +524,6 @@ class TrafficEnv(gym.Env):
         self.aggregation_time = 60  # [s] Data aggregation duration
         self.sumo_process = None
         self.sumo_max_retries = 3
-        self.operation_mode = op_mode
         self.is_sumo_initialized = False  # Track SUMO initialization state
         self.collisions = []
         self.collisions_penalty = 0
@@ -528,6 +540,8 @@ class TrafficEnv(gym.Env):
         self.occupancy_smoothed = 0.0
         
         # Action and observation spaces
+        self._load_or_set_normalization_bounds(normalization_bounds_path)
+
         self.action_space = gym.spaces.Discrete(5)
         self.current_speed_limit = self.default_speed_limit
         
@@ -548,15 +562,6 @@ class TrafficEnv(gym.Env):
         self.avg_speed_before = 0
         self.occupancy_upstream = 0
         self.simulation_step = 0
-        
-        # Set simulation length based on operation mode
-        if self.operation_mode == "train":
-            # For training: run for generated flow duration (504000 seconds)
-            self.sim_length = 504000  # Full simulation time in seconds
-        elif self.operation_mode == "eval":
-            self.sim_length = int(interval_length * num_of_intervals)
-        elif self.operation_mode == "test":
-            self.sim_length = int(24 * 3600)  # 24 hours in seconds
 
         # Track a moving average of recent rewards. If this average falls below a threshold for a certain number of steps, terminate the episode early.
         self.reward_window = deque(maxlen=50)  # Track last 50 rewards
@@ -573,6 +578,32 @@ class TrafficEnv(gym.Env):
 
         self.veh_passed_downstream = 0  # FIXME: Temp debug
 
+    def _load_or_set_normalization_bounds(self, bounds_path: Optional[str]):
+        """Loads normalization bounds from a file or falls back to hardcoded defaults."""
+        if bounds_path and os.path.exists(bounds_path):
+            try:
+                with open(bounds_path, 'r') as f:
+                    bounds = json.load(f)
+                self.max_flow = bounds.get("max_flow", MAX_FLOW)
+                self.max_occupancy = bounds.get("max_occupancy", MAX_OCCUPANCY)
+                self.max_queue_length = bounds.get("max_queue_length", MAX_QUEUE_LENGTH)
+                logger.info(f"Port {self.port}: Successfully loaded dynamic normalization bounds from {bounds_path}.")
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.error(f"Port {self.port}: Failed to read bounds from {bounds_path}, using defaults. Error: {e}")
+                self._set_default_normalization_bounds()
+        else:
+            if bounds_path: # Path was given but not found
+                logger.warning(f"Port {self.port}: Bounds file not found at {bounds_path}, using defaults.")
+            else: # Path was not given
+                logger.debug(f"Port {self.port}: No bounds file path provided, using default normalization bounds.")
+            self._set_default_normalization_bounds()
+    
+    def _set_default_normalization_bounds(self):
+        """Sets the hardcoded default normalization bounds as instance variables."""
+        self.max_flow = MAX_FLOW
+        self.max_occupancy = MAX_OCCUPANCY
+        self.max_queue_length = MAX_QUEUE_LENGTH
+
     def _get_sumo_log_identifier(self):
         """Helper to get a consistent identifier for SUMO instance logging."""
         # For TrafficEnvForTuning, effective_model_name_for_files includes "_tune_"
@@ -580,6 +611,18 @@ class TrafficEnv(gym.Env):
         # For TrafficEnv, these are the main model name and sub-env index.
         return f"{self._sumo_start_context_prefix}{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}"
     
+    def _ensure_clean_traci_state(self):
+        """Ensure TraCI is in a clean state before starting SUMO."""
+        try:
+            if traci.isLoaded():
+                logger.debug("TraCI connection found active, closing it...")
+                traci.close()
+        except Exception as e:
+            logger.debug(f"Error while checking/closing TraCI: {e}")
+        
+        # Small delay to ensure connection is fully closed
+        time.sleep(0.1)
+
     def start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
         log_id = self._get_sumo_log_identifier()
@@ -600,12 +643,7 @@ class TrafficEnv(gym.Env):
             logger.debug(f"SUMO process handle existed for {log_id} but PID was not found. Clearing handle.")
             self.sumo_process = None # Clear stale handle
 
-        if traci.isLoaded():
-            try:
-                traci.close(wait=False)
-                logger.debug(f"Closed existing TraCI connection before starting new SUMO instance for {log_id}.")
-            except Exception as e:
-                logger.warning(f"Error closing previous TraCI connection for {log_id}: {e}")
+        self._ensure_clean_traci_state()
         
         for attempt in range(self.sumo_max_retries):
             try:
@@ -615,13 +653,14 @@ class TrafficEnv(gym.Env):
                     if self.gen_car_distrib[0] == 'uniform':
                         flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
                                                     self.gen_car_distrib[1],
-                                                    int(interval_length // 60),
+                                                    self.sim_length,
                                                     self.num_of_episodes,
-                                                    num_of_intervals,
-                                                    self.operation_mode)
+                                                    num_of_intervals)
                     elif self.gen_car_distrib[0] == 'bimodal':
-                        flow_generation(self.effective_model_name_for_files, self.effective_model_idx_for_files,
-                                        bimodal_distribution_24h(self.gen_car_distrib[1]), 1)
+                        flow_generation(self.effective_model_name_for_files, 
+                                        self.effective_model_idx_for_files,
+                                        bimodal_distribution_24h(self.gen_car_distrib[1]), 
+                                        self.sim_length)
                 
                 route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
@@ -636,7 +675,7 @@ class TrafficEnv(gym.Env):
                     "--default.emergencydecel=7",
                     '--random-depart-offset=3600',
                     "--remote-port", str(port),
-                    "--step-length=0.1",
+                    f"--step-length={self.sumo_step_length}",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
                     "--quit-on-end",
@@ -645,7 +684,10 @@ class TrafficEnv(gym.Env):
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
+
+                logger.debug(f"SUMO command: {' '.join(sumo_cmd)}")
+                logger.debug(f"Expected simulation end time: {self.sim_length}s")
+
                 logger.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
                 time.sleep(0.5) 
                 try:
@@ -724,7 +766,8 @@ class TrafficEnv(gym.Env):
         occupancy_upstream_temp = 0
         
         # Simulation steps and data aggregation
-        for step in range(self.aggregation_time):
+        num_sumo_steps = int(self.aggregation_time / self.sumo_step_length)
+        for step in range(num_sumo_steps):
             try:
                 traci.simulationStep()
                 current_time = traci.simulation.getTime()
@@ -746,12 +789,23 @@ class TrafficEnv(gym.Env):
             flow_upstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_before")
             flow_downstream_temp += traci.edge.getLastStepVehicleNumber("seg_0_after")
             
-            # Queue length based on halting vehicles
-            queue_length_temp += sum([
-                traci.lane.getLastStepHaltingNumber(lane) * 7.5
-                for lane in seg_1_before
-            ])
+            """
+            # Measure queue for all upstream segments based on halting vehicles
+            queue_length_temp += sum(
+                traci.lane.getLastStepHaltingNumber(lane_id) * 7.5
+                for segment in segments_before  # Use your defined segments_before list
+                for lane_id in segment
+            )
+            """
             
+            # Measure queue for specific critical segments (e.g., near merge point)
+            critical_segments = [seg_1_before, seg_0_before]
+            queue_length_temp += sum(
+                traci.lane.getLastStepHaltingNumber(lane_id) * 7.5
+                for segment in critical_segments
+                for lane_id in segment
+            )
+
             # Speed measurements
             mean_speeds_downstream += traci.edge.getLastStepMeanSpeed("seg_0_before")
             mean_speeds_upstream += traci.edge.getLastStepMeanSpeed("seg_0_after")
@@ -1543,7 +1597,7 @@ if __name__ == '__main__':
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
-        parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
+        parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI)
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         # reward_functions = ["mobility", "safety", "balanced"] # Original selection

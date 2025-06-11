@@ -1,0 +1,18 @@
+{
+    "max_flow": 9372.33,
+    "max_occupancy": 1.27,
+    "max_queue_length": 0.0,
+    "calibration_info": {
+        "demand_scenarios_tested_this_run": [
+            2000,
+            2500,
+            3000,
+            3500,
+            4000
+        ],
+        "total_samples_this_run": 610,
+        "episodes_per_scenario_config": 2,
+        "sim_steps_per_episode_config": 60,
+        "last_calibrated_utc": "2025-06-12T21:35:47.450604Z"
+    }
+}

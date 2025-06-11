@@ -3,7 +3,6 @@ import sys
 import time
 import json
 import glob
-import psutil
 from pathlib import Path
 from itertools import product
 import optuna
@@ -12,6 +11,9 @@ import torch.nn as nn
 import traci
 from dataclasses import dataclass
 import numpy as np
+from tqdm import tqdm
+from typing import Optional
+import datetime
 
 # Import your TrafficEnv and any other shared code from drl_vsl.py
 from drl_vsl import (
@@ -22,8 +24,13 @@ from drl_vsl import (
     PORTS_PER_TUNING_PROCESS,
     OPTUNA_PARAMS_DIR,
     sumoExecutable_nogui,
+    sumoExecutable_gui,
     flow_generation_fix_num_veh,
     logger,
+    MAX_FLOW,
+    MAX_OCCUPANCY,
+    SUMO_CONFIG_DIR,
+    MAX_QUEUE_LENGTH
 )
 
 # --- 1. SETUP: DEFINE TUNING CONFIGURATIONS ---
@@ -32,51 +39,61 @@ from drl_vsl import (
 class TuningConfig:
     name: str
     n_trials: int
-    timesteps_per_trial: int
+    timesteps_per_trial: int # total_timesteps for model.learn() per scenario within an Optuna trial
+
+FIXED_PARAMS_FOR_VALIDATION = None
+HYPER_PARAM_SIM_LENGTH = 7200 # 1800 (Simulation length for tuning scenarios) / 60 (Aggregation Time) = 30 DRL steps
+N_PARALLEL_OPTUNA_TRIALS = 1
+NUM_CANDIDATES_TO_VALIDATE = 3
+N_OPTUNA_TRIALS = 40 # Number of trials for Optuna study
+PROGRESS_BAR = False # prevent SB3 from trying to create it's own tqdm progress bar
+NORMALIZATION_BOUNDS_FILE = os.path.join(OPTUNA_PARAMS_DIR, "normalization_bounds.json")
+CALIBRATION_EPISODE_LENGTH_ENV_STEPS = 60 # 3600 s
+BROAD_EXPLORATION_TIMESTEPS_PER_SCENARIO = 600
+DEEP_VALIDATION_TIMESTEPS_PER_SCENARIO = 6000 # 200 episodes * 30 steps = 6000 DRL steps
+SUMO_EXE_GUI = sumoExecutable_nogui
+SHARED_DEMAND_SCENARIOS = [
+        {"id": 100, "demand": 2000, "pattern": "uniform"},
+        {"id": 101, "demand": 2500, "pattern": "uniform"}, 
+        {"id": 102, "demand": 3000, "pattern": "uniform"},
+        {"id": 103, "demand": 3500, "pattern": "uniform"},
+        {"id": 104, "demand": 4000, "pattern": "uniform"},
+    ]
 
 # Configuration for Stage 1
 BROAD_EXPLORATION_CONFIG = TuningConfig(
     name="Broad Exploration",
-    n_trials=40,
-    timesteps_per_trial=10000
+    n_trials=N_OPTUNA_TRIALS, # Number of different hyperparameter sets to try (random seeds)
+    timesteps_per_trial=BROAD_EXPLORATION_TIMESTEPS_PER_SCENARIO
 )
 
 # Configuration for Stage 2
 DEEP_VALIDATION_CONFIG = TuningConfig(
     name="Deep Validation",
-    n_trials=3,  # This will be the number of random seeds
-    timesteps_per_trial=30000
+    n_trials=3,  # Random seeds
+    timesteps_per_trial=DEEP_VALIDATION_TIMESTEPS_PER_SCENARIO
 )
 
-FIXED_PARAMS_FOR_VALIDATION = None
-HYPER_PARAM_SIM_LENGTH = 1800 # Simulation length for tuning scenarios
-N_PARALLEL_OPTUNA_TRIALS = 2
-NUM_CANDIDATES_TO_VALIDATE = 3
-N_OPTUNA_TRIALS = 40 # Number of trials for Optuna study
-PROGRESS_BAR = True
-
-# --- TrafficEnvForTuning class ---
 class TrafficEnvForTuning(TrafficEnv):
     """
     Specialized TrafficEnv for hyperparameter tuning that uses pre-generated flow files.
     Inherits from TrafficEnv but skips flow generation to use scenario-specific files.
     """
     
-    def __init__(self, port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                 num_of_episodes=0, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="recommend",
-                 sumo_binary_path_override=None):
-        super().__init__(port, model_name, model_idx, op_mode, base_gen_car_distrib, 
-                        num_of_episodes, reward_fn, vsl_enforcement, sumo_binary_path_override)
+    def __init__(self, port, model_name, model_idx, sim_length, base_gen_car_distrib, 
+                 num_of_episodes, reward_fn="balanced", skip_flow_generation=True, vsl_enforcement="recommend",
+                 sumo_binary_path_override=None,
+                 normalization_bounds_path: Optional[str] = None,
+                 update_bounds: bool = False):
+        super().__init__(port, model_name, model_idx, sim_length, base_gen_car_distrib, 
+                        num_of_episodes, reward_fn, vsl_enforcement, sumo_binary_path_override,
+                        normalization_bounds_path=normalization_bounds_path)
         
         self.skip_flow_generation = skip_flow_generation # This is the primary flag
-        
-        if self.operation_mode == "train": # This is "tuning" mode
-            self.sim_length = HYPER_PARAM_SIM_LENGTH
 
         # Override customization attributes from parent for tuning context
         self._sumo_start_context_prefix = "Tuning "
-        # If sumo_binary_path_override is provided, it's used. Otherwise, tuning defaults to no-GUI.
-        self._default_sumo_binary_for_env = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
+        self._default_sumo_binary_for_env = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI)
         # Tuning uses a different (potentially shorter) retry sleep logic
         self._sumo_retry_sleep_func = lambda attempt, max_retries_param_ignored: 1 + attempt 
 
@@ -85,6 +102,10 @@ class TrafficEnvForTuning(TrafficEnv):
         
         self.total_vehicles_before = 0
         self.total_vehicles_after = 0
+
+        self.update_bounds = update_bounds
+        self.bounds_path = normalization_bounds_path
+        self.observed_values = {"flows": [], "occupancies": [], "queues": []}
     
     def _verify_flow_files(self):
         """Verify that required pre-generated flow files exist."""
@@ -160,6 +181,11 @@ class TrafficEnvForTuning(TrafficEnv):
                 self._cumulative_reward += reward
             else:
                 self._cumulative_reward = reward
+
+        if self.update_bounds and self.bounds_path:
+            self.observed_values["flows"].append(self.flow_downstream)
+            self.observed_values["occupancies"].append(self.occupancy_upstream)
+            self.observed_values["queues"].append(self.queue_length_upstream)
         
         return observation, reward, done, truncated, info
     
@@ -173,8 +199,55 @@ class TrafficEnvForTuning(TrafficEnv):
         return super().reset(seed, options)
     
     def close_sumo(self, reason):
+        """Close with optional bounds updating."""
+        if self.update_bounds and self.bounds_path and self.observed_values["flows"]:
+            self._update_normalization_bounds()
+        
         super().close_sumo(reason)
     
+    def _update_normalization_bounds(self):
+        """Update the normalization bounds file with new observations."""
+        try:
+            # Load existing bounds
+            if os.path.exists(self.bounds_path):
+                with open(self.bounds_path, 'r') as f:
+                    current_bounds = json.load(f)
+            else:
+                current_bounds = {
+                    "max_flow": MAX_FLOW,
+                    "max_occupancy": MAX_OCCUPANCY,
+                    "max_queue_length": MAX_QUEUE_LENGTH
+                }
+
+            # Calculate new maximums from this environment's observations
+            if self.observed_values["flows"]:
+                new_max_flow = max(self.observed_values["flows"])
+                new_max_occupancy = max(self.observed_values["occupancies"])
+                new_max_queue = max(self.observed_values["queues"])
+                
+                # Update bounds if new values are higher
+                updated = False
+                if new_max_flow > current_bounds["max_flow"]:
+                    current_bounds["max_flow"] = round(new_max_flow * 1.1, 2)
+                    updated = True
+                
+                if new_max_occupancy > current_bounds["max_occupancy"]:
+                    current_bounds["max_occupancy"] = min(round(new_max_occupancy * 1.1, 2), 100.0)
+                    updated = True
+                
+                if new_max_queue > current_bounds["max_queue_length"]:
+                    current_bounds["max_queue_length"] = round(new_max_queue * 1.1, 2)
+                    updated = True
+                
+                # Save updated bounds
+                if updated:
+                    with open(self.bounds_path, 'w') as f:
+                        json.dump(current_bounds, f, indent=4)
+                    logger.debug(f"Updated normalization bounds: {current_bounds}")
+        
+        except Exception as e:
+            logger.warning(f"Failed to update normalization bounds: {e}")
+
     def get_tuning_metrics(self):
         """
         Get metrics specifically useful for hyperparameter tuning.
@@ -199,7 +272,8 @@ class TrafficEnvForTuning(TrafficEnv):
 
 def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="recommend",
                          tuning_process_base_port=None,
-                         sumo_binary_to_use=None):
+                         sumo_binary_to_use=None,
+                         bounds_file_path: Optional[str] = None):
     """
     Efficient hyperparameter tuning for a specific combination.
     Saves results to the file specified by specific_params_file_path.
@@ -213,12 +287,6 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
     # Ensure the directory for the specific params file exists
     os.makedirs(os.path.dirname(specific_params_file_path), exist_ok=True)
 
-    scenario_configs = [
-        {"id": 100, "demand": 2000, "pattern": "uniform"},
-        {"id": 101, "demand": 2500, "pattern": "uniform"}, 
-        {"id": 102, "demand": 3000, "pattern": "uniform"},
-        {"id": 103, "demand": 3500, "pattern": "uniform"}
-    ]
     # Model name for tuning files (rou, sumocfg) should be unique per tuning process
     # This model_name is for the .rou.xml and .sumocfg files generated for the tuning scenarios
     tuning_files_model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
@@ -226,16 +294,14 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
     output_dir_sumo = Path(f"./rl_models/{algorithm}_{reward_function}_{vsl_enforcement}")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
 
-    for config in scenario_configs:
+    for config in SHARED_DEMAND_SCENARIOS:
         flow_generation_fix_num_veh(
             tuning_files_model_name, 
             config["id"],
             config["demand"], 
-            num_of_hrs=1, # For HYPER_PARAM_SIM_LENGTH
+            HYPER_PARAM_SIM_LENGTH,
             num_of_episodes=1, 
-            num_of_intervals=1, 
-            op_mode="train" # op_mode for flow_gen, env will use its own
-        )
+            num_of_intervals=1)
         cfg_filename = f"3_2_merge_{tuning_files_model_name}_{config['id']}.sumocfg"
         cfg_filepath = output_dir_sumo / cfg_filename
         cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=tuning_files_model_name, index=config['id'])
@@ -288,19 +354,27 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
         total_performance_score = 0.0
         current_tuning_base_port_for_scenarios = tuning_process_base_port if tuning_process_base_port is not None else BASE_TRAIN_SUMO_PORT
 
-        for i, config_item in enumerate(scenario_configs):
+        for i, config_item in enumerate(SHARED_DEMAND_SCENARIOS):
             env = None
+            model = None
             try:
-                port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % N_OPTUNA_TRIALS) * len(scenario_configs) + i
+                if i > 0:
+                    time.sleep(1)
+
+                port_for_tuning_env = current_tuning_base_port_for_scenarios + (trial.number % N_OPTUNA_TRIALS) * len(SHARED_DEMAND_SCENARIOS) + i
                 
                 env = TrafficEnvForTuning(
                     port=port_for_tuning_env,
-                    model_name=tuning_files_model_name, # Name for .rou.xml files
-                    model_idx=config_item["id"],       # Scenario ID for .rou.xml files
-                    op_mode="train", # op_mode for TrafficEnvForTuning
+                    model_name=tuning_files_model_name,
+                    model_idx=config_item["id"],
+                    sim_length=HYPER_PARAM_SIM_LENGTH,
                     base_gen_car_distrib=["uniform", config_item["demand"]],
-                    reward_fn=reward_function, skip_flow_generation=True,
-                    vsl_enforcement=vsl_enforcement, sumo_binary_path_override=sumo_binary_to_use
+                    num_of_episodes=1,
+                    reward_fn=reward_function, 
+                    skip_flow_generation=True,
+                    vsl_enforcement=vsl_enforcement, 
+                    sumo_binary_path_override=sumo_binary_to_use,
+                    normalization_bounds_path=bounds_file_path
                 )
 
                 # Create the model using the determined params and policy_kwargs
@@ -308,17 +382,33 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
                             policy_kwargs=policy_kwargs_for_dqn, 
                             **actual_dqn_params)
                 
-                model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR)
+                try:
+                    model.learn(total_timesteps=HYPER_PARAM_MODEL_STEPS, progress_bar=PROGRESS_BAR)
+                except Exception as learn_error:
+                    logger.warning(f"Model.learn failed for trial {trial.number}, scenario {i}: {learn_error}")
+                    # Force cleanup and return poor score
+                    if env:
+                        env.close()
+                    return 0.0
                 
                 obs, _ = env.reset()
                 episode_reward_sum = 0
                 episode_steps = 0
-                while episode_steps < HYPER_PARAM_MODEL_STEPS: # Or some other termination condition
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, reward_val, terminated, truncated, _ = env.step(action)
-                    episode_reward_sum += reward_val
-                    episode_steps +=1
-                    if terminated or truncated:
+
+                while episode_steps < HYPER_PARAM_MODEL_STEPS:
+                    try:
+                        action, _ = model.predict(obs, deterministic=True)
+                        obs, reward_val, terminated, truncated, _ = env.step(action)
+                        episode_reward_sum += reward_val
+                        episode_steps += 1
+                        
+                        if terminated or truncated:
+                            break
+                            
+                    except (OSError, traci.exceptions.TraCIException) as step_error:
+                        logger.warning(f"Step failed for trial {trial.number}, scenario {i}: {step_error}")
+                        # Return partial score based on completed steps
+                        episode_reward_sum = episode_reward_sum if episode_steps > 0 else -10
                         break
                 
                 scenario_performance_score = episode_reward_sum 
@@ -338,9 +428,17 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
                 if env: env.close()
                 return 0.0
             finally:
-                if env: env.close()
+                # Ensure cleanup always happens
+                if env:
+                    try:
+                        env.close()
+                    except Exception as cleanup_error:
+                        logger.debug(f"Error during env cleanup: {cleanup_error}")
+                
+                # Add small delay between scenarios
+                time.sleep(0.5)
 
-        final_objective = total_performance_score / len(scenario_configs) if scenario_configs else 0.0
+        final_objective = total_performance_score / len(SHARED_DEMAND_SCENARIOS) if SHARED_DEMAND_SCENARIOS else 0.0
         return final_objective
 
     def _format_and_save_best_params(best_trial: optuna.trial.FrozenTrial, output_json_path: str):
@@ -432,11 +530,11 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
     study_broad = optuna.create_study(
         study_name=f"{tuning_files_model_name}_broad_exploration",
         direction="maximize",
-        pruner=optuna.pruners.MedianPruner(n_warmup_steps=len(scenario_configs) // 2),
+        pruner=optuna.pruners.MedianPruner(n_warmup_steps=len(SHARED_DEMAND_SCENARIOS) // 2),
         storage=f"sqlite:///{tuning_path}",
         load_if_exists=True,
     )
-    # --- INTEGRATE WARM START ---
+    # --- WARM START ---
     specific_params_file_path = output_dir_sumo / f"best_optuna_params_{algorithm}_{reward_function}_{vsl_enforcement}.json"
     if os.path.exists(specific_params_file_path):
         try:
@@ -524,8 +622,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
     else:
         logger.error("No valid candidates found after deep validation.")
 
-# --- run_tuning_wrapper function ---
-def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_port_tune, binary_tune):
+def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_port_tune, binary_tune, bounds_file: Optional[str] = None):
     logger.info(f"Starting tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune} with params file {specific_file} on base port {base_port_tune}")
     try:
         tune_hyperparameters(algorithm=algo_tune,
@@ -534,10 +631,183 @@ def run_tuning_wrapper(r_fn_tune, vsl_m_tune, algo_tune, specific_file, base_por
                              vsl_enforcement=vsl_m_tune,
                              tuning_process_base_port=base_port_tune,
                              sumo_binary_to_use=binary_tune,
-                             n_trials=N_OPTUNA_TRIALS) # Use defined N_OPTUNA_TRIALS
+                             n_trials=N_OPTUNA_TRIALS,
+                             bounds_file_path=bounds_file) # Use defined N_OPTUNA_TRIALS
         logger.info(f"Finished tuning for {algo_tune}_{r_fn_tune}_{vsl_m_tune}")
     except Exception as e_tune_wrapper:
          logger.error(f"Error in tuning wrapper for {algo_tune}_{r_fn_tune}_{vsl_m_tune}: {e_tune_wrapper}", exc_info=True)
+
+def calibrate_normalization_bounds(output_path,
+                                    demand_scenarios=None,
+                                    num_episodes_per_scenario=2,
+                                    sim_steps_per_episode=60):
+    DEFAULT_CALIBRATION_DEMANDS = [scenario["demand"] for scenario in SHARED_DEMAND_SCENARIOS]
+
+    """
+    Calibrates normalization bounds by running simulations across various demand scenarios.
+    Loads existing bounds if available and updates them with new maximums found.
+    """
+    logger.info("==================================================")
+    logger.info("STARTING CALIBRATION FOR NORMALIZATION BOUNDS")
+    
+    if demand_scenarios is None:
+        demand_scenarios = DEFAULT_CALIBRATION_DEMANDS
+    
+    logger.info(f"Testing {len(demand_scenarios)} demand scenarios: {demand_scenarios}")
+    logger.info(f"Running {num_episodes_per_scenario} episodes per scenario")
+    logger.info(f"Each episode runs for {sim_steps_per_episode} environment steps ({sim_steps_per_episode * 60} SUMO seconds).")
+    logger.info("==================================================")
+    logger.info("="*50)
+
+    current_max_values = {
+        "max_flow": 0.0,
+        "max_occupancy": 0.0,
+        "max_queue_length": 0.0
+    }
+    loaded_calibration_info = {}
+
+    if os.path.exists(output_path):
+        try:
+            with open(output_path, 'r') as f:
+                existing_bounds = json.load(f)
+            current_max_values["max_flow"] = existing_bounds.get("max_flow", 0.0)
+            current_max_values["max_occupancy"] = existing_bounds.get("max_occupancy", 0.0)
+            current_max_values["max_queue_length"] = existing_bounds.get("max_queue_length", 0.0)
+            loaded_calibration_info = existing_bounds.get("calibration_info", {})
+            logger.info(f"Loaded existing normalization bounds from {output_path}: {current_max_values}")
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from {output_path}. Starting with default bounds.")
+        except Exception as e:
+            logger.error(f"Error loading {output_path}: {e}. Starting with default bounds.")
+    else:
+        logger.info(f"No existing normalization bounds file found at {output_path}. Starting with default bounds.")
+
+    all_collected_metrics = []
+    calibration_sim_length = sim_steps_per_episode * 60 # Total SUMO seconds per episode (e.g., 60 steps * 60s/step = 3600s)
+    
+    original_traffic_env_init = TrafficEnv.__init__
+
+    try:
+        for demand_idx, demand_val in enumerate(demand_scenarios):
+            logger.info(f"Calibrating with demand: {demand_val} veh/hr")
+            
+            calibration_model_name = f"calibration_demand_{demand_val}"
+            calibration_model_idx = BASE_EVAL_SUMO_PORT + 800 + demand_idx 
+
+            flow_generation_fix_num_veh(
+                model=calibration_model_name,
+                idx=calibration_model_idx,
+                base_num_veh_per_hr=demand_val,
+                sim_length_seconds=calibration_sim_length,
+                num_of_episodes=1, 
+                num_of_intervals=1
+            )
+
+            # --- SUMO Configuration ---
+            cfg_filename = f"3_2_merge_{calibration_model_name}_{calibration_model_idx}.sumocfg"
+            # cfg_filepath is now correctly using the globally defined SUMO_CONFIG_DIR
+            cfg_filepath = SUMO_CONFIG_DIR / cfg_filename 
+            
+            cfg_content = SUMO_CFG_TEMPLATE.format(
+                file_postfix=calibration_model_name, 
+                index=calibration_model_idx
+            )
+            with open(cfg_filepath, 'w') as file:
+                file.write(cfg_content)
+            
+            calibration_port = BASE_EVAL_SUMO_PORT + 900 + demand_idx
+            env = None
+            
+            try:
+                def temporary_init(self, *args, **kwargs):
+                    original_traffic_env_init(self, *args, **kwargs)
+                    self.sumo_cfg_path_override = str(cfg_filepath) # Use the generated cfg_filepath
+                    self.skip_flow_generation = True 
+                    self._sumo_start_context_prefix = "Calibration "
+                    self._default_sumo_binary_for_env = os.path.join(os.environ.get('SUMO_HOME', ''), 'bin', sumoExecutable_nogui)
+
+                TrafficEnv.__init__ = temporary_init
+                
+                env = TrafficEnv(
+                    port=calibration_port, 
+                    model_name=calibration_model_name,
+                    model_idx=calibration_model_idx,
+                    sim_length=calibration_sim_length,
+                    base_gen_car_distrib=["uniform", demand_val],
+                    num_of_episodes=1,
+                    reward_fn="mobility",
+                    sumo_binary_path_override=os.path.join(os.environ.get('SUMO_HOME', ''), 'bin', sumoExecutable_nogui)
+                )
+                
+                for episode in range(num_episodes_per_scenario):
+                    logger.info(f"  Starting Calibration Episode {episode + 1} for demand {demand_val}")
+                    obs, info = env.reset()
+                    if info:
+                         all_collected_metrics.append({
+                            "flow": info.get("flow_raw", 0.0),
+                            "occupancy": info.get("occupancy_raw", 0.0),
+                            "queue": info.get("queue_raw", 0.0)
+                        })
+
+                    for step in tqdm(range(sim_steps_per_episode), desc=f"Demand {demand_val}, Ep {episode + 1}"):
+                        action = env.action_space.sample()
+                        obs, reward, terminated, truncated, info = env.step(action)
+                        
+                        all_collected_metrics.append({
+                            "flow": info.get("flow_raw", 0.0),
+                            "occupancy": info.get("occupancy_raw", 0.0),
+                            "queue": info.get("queue_raw", 0.0)
+                        })
+                        if terminated or truncated:
+                            logger.warning(f"Calibration episode {episode + 1} for demand {demand_val} ended prematurely at step {step}.")
+                            break
+                    logger.info(f"  Finished Calibration Episode {episode + 1} for demand {demand_val}. Collected {sim_steps_per_episode} samples.")
+
+            except Exception as e:
+                logger.error(f"Error during calibration for demand {demand_val}: {e}", exc_info=True)
+            finally:
+                if env:
+                    env.close()
+                TrafficEnv.__init__ = original_traffic_env_init
+        
+        # ... (rest of the logic for updating and saving bounds from previous correct answer) ...
+        if all_collected_metrics:
+            max_observed_flow = max(m['flow'] for m in all_collected_metrics) if all_collected_metrics else 0
+            max_observed_occupancy = max(m['occupancy'] for m in all_collected_metrics) if all_collected_metrics else 0
+            max_observed_queue = max(m['queue'] for m in all_collected_metrics) if all_collected_metrics else 0
+
+            logger.info(f"Max observed in current run: Flow={max_observed_flow}, Occupancy={max_observed_occupancy}, Queue={max_observed_queue}")
+
+            current_max_values["max_flow"] = max(current_max_values["max_flow"], max_observed_flow)
+            current_max_values["max_occupancy"] = max(current_max_values["max_occupancy"], max_observed_occupancy)
+            current_max_values["max_queue_length"] = max(current_max_values["max_queue_length"], max_observed_queue)
+        else:
+            logger.warning("No metrics collected during this calibration run. Existing bounds (if any) will be preserved.")
+
+        calibration_info_data = {
+            "demand_scenarios_tested_this_run": demand_scenarios,
+            "total_samples_this_run": len(all_collected_metrics),
+            "episodes_per_scenario_config": num_episodes_per_scenario,
+            "sim_steps_per_episode_config": sim_steps_per_episode,
+            "last_calibrated_utc": datetime.datetime.utcnow().isoformat() + "Z" # Corrected datetime usage
+        }
+        
+        final_bounds_data = {
+            "max_flow": current_max_values["max_flow"],
+            "max_occupancy": current_max_values["max_occupancy"],
+            "max_queue_length": current_max_values["max_queue_length"],
+            "calibration_info": calibration_info_data
+        }
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as f:
+            json.dump(final_bounds_data, f, indent=4)
+        logger.info(f"Successfully saved/updated normalization bounds to {output_path}: {final_bounds_data}")
+
+    finally:
+        TrafficEnv.__init__ = original_traffic_env_init
+        logger.info("CALIBRATION FOR NORMALIZATION BOUNDS FINISHED")
+        logger.info("==================================================")
 
 # --- Main entry point for tuning ---
 if __name__ == '__main__':
@@ -546,10 +816,13 @@ if __name__ == '__main__':
     vsl_enforcements_to_tune = ["recommend"] # "all_vehicles", "electric_only", "recommend"
 
     algo_to_use = "DQN"
-    tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', sumoExecutable_nogui)
+    tuning_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI)
     tuning_combinations = list(product(reward_functions_to_tune, vsl_enforcements_to_tune))
     num_parallel_tuning_processes = min(len(tuning_combinations), os.cpu_count() - 1 if os.cpu_count() > 1 else 1)
     logger.info(f"Running {len(tuning_combinations)} tuning combinations using up to {num_parallel_tuning_processes} parallel processes.")
+
+    os.makedirs(OPTUNA_PARAMS_DIR, exist_ok=True)
+    calibrate_normalization_bounds(output_path=NORMALIZATION_BOUNDS_FILE)
 
     import multiprocessing as mp
     if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
@@ -564,7 +837,7 @@ if __name__ == '__main__':
         current_tuning_base_port = BASE_EVAL_SUMO_PORT + i * PORTS_PER_TUNING_PROCESS
 
         p_tune = mp.Process(target=run_tuning_wrapper, args=(
-            r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary
+            r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary, NORMALIZATION_BOUNDS_FILE
         ))
         tuning_processes.append(p_tune)
         p_tune.start()

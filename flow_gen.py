@@ -99,14 +99,27 @@ def triangular_distribution_24h(amplitude, x=np.arange(0, 24, 1)):
     y[y < 50] = np.random.uniform(0, 50)
     return adjust_amplitude(y.astype(int)[:24], amplitude)
 
-def flow_generation(model, idx, daily_pattern, num_days):
+def flow_generation(model, idx, daily_pattern, sim_length_seconds):
+    """
+    Generate traffic flows for a given simulation length.
+    
+    Args:
+        model: Model name for file generation
+        idx: Model index for file generation  
+        daily_pattern: List of hourly vehicle counts
+        sim_length_seconds: Total simulation length in seconds
+    """
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
+        # Calculate number of hours and intervals based on sim_length
+        total_hours = sim_length_seconds / 3600
+        num_intervals = min(len(daily_pattern), int(total_hours))
+
         # Iterate over each pair of rates
-        for day_index in range(num_days):
+        for day_index in range(num_intervals):
             for i in range(len(daily_pattern)):
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15) * (1.0 if (day_index == 6) else 0.0)
@@ -213,29 +226,30 @@ def flow_generation(model, idx, daily_pattern, num_days):
 
                 # Calculate start and end times for each flow
                 # begin_time = (day_index * len(daily_pattern_ampl) * 1800) + (i * 1800)
-                begin_time = day_index * len(daily_pattern) * 3600 + i * 3600
-                end_time = begin_time + 3600
+                begin_time = i * 3600
+                end_time = min(begin_time + 3600, sim_length_seconds) # NOTE: Don't exceed sim_length
                                 
-                # Create flows for each vehicle type based on their proportions
-                for vehicle_type in proportions:
-                    vehs_gen = round(daily_pattern[i] * proportions[vehicle_type] / 100)
-                    
-                    if vehs_gen > 0:
-                        if "disobedient" in vehicle_type and add_disobedient_vehicles:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
-                        elif "electric" in vehicle_type and add_electric_vehicles:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
-                        else:
-                            flows.append((day_index, begin_time,
-                                        f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
-                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
-                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
+                if begin_time < sim_length_seconds:
+                    # Create flows for each vehicle type based on their proportions
+                    for vehicle_type in proportions:
+                        vehs_gen = round(daily_pattern[i] * proportions[vehicle_type] / 100)
+                        
+                        if vehs_gen > 0:
+                            if "disobedient" in vehicle_type and add_disobedient_vehicles:
+                                flows.append((begin_time,
+                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                            f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
+                            elif "electric" in vehicle_type and add_electric_vehicles:
+                                flows.append((begin_time,
+                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                            f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
+                            else:
+                                flows.append((begin_time,
+                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                            f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
 
         # Sort flows by begin time only (no need to sort by day index first)
         flows.sort(key=lambda x: (x[1]))
@@ -396,16 +410,46 @@ def flow_generation(model, idx, daily_pattern, num_days):
 
     logging.info(f"Flow generation complete for model {model} id {idx}.")
 
-def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num_of_episodes, num_of_intervals, op_mode):
+def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seconds, num_of_episodes, num_of_intervals):
+    """
+    Generate traffic flows with fixed number of vehicles per hour.
+    
+    Args:
+        model: Model name for file generation
+        idx: Model index for file generation
+        base_num_veh_per_hr: Base vehicles per hour
+        sim_length_seconds: Total simulation length in seconds
+        num_of_episodes: Number of episodes
+        num_of_intervals: Number of intervals per episode
+    """
     # Open a .rou.xml file to write flows
     with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
+        # Calculate interval duration based on sim_length and intervals
+        total_intervals = num_of_episodes * num_of_intervals
+        interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
+
+        logging.info(f"Flow generation called with: model={model}, idx={idx}, sim_length={sim_length_seconds}s")
+        logging.info(f"Episodes={num_of_episodes}, intervals={num_of_intervals}")
+
+        # Calculate interval duration
+        total_intervals = num_of_episodes * num_of_intervals
+        interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
+        
+        logging.info(f"Calculated: total_intervals={total_intervals}, interval_duration={interval_duration}s")
+
         # Iterate over each pair of rates
         for ep in range(num_of_episodes):
-            for i in range(num_of_hrs * num_of_intervals):
-                num_veh_per_hr_temp = base_num_veh_per_hr + (i // num_of_hrs) * 100 if op_mode == "train" else base_num_veh_per_hr
+            for i in range(num_of_intervals):
+                current_time = ep * (sim_length_seconds / num_of_episodes) + i * interval_duration
+                if current_time >= sim_length_seconds:
+                    logging.warning(f"Breaking early: current_time={current_time} >= sim_length={sim_length_seconds}")
+                    break
+
+                num_veh_per_hr_temp = base_num_veh_per_hr + (i * 100)
+
                 # Vehicle type distributions
                 trucks = np.random.uniform(10, 15)
                 cars = np.random.uniform(70, 85) * 1.15
@@ -510,12 +554,17 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
                 }
 
                 # Calculate start and end times for each flow
-                begin_time = i * 3600 + (num_of_hrs * num_of_intervals * ep * 3600)
-                end_time = begin_time + 3600
+                begin_time = int(current_time)
+                end_time = min(int(current_time + interval_duration), sim_length_seconds)
+                if end_time - begin_time < 60:  # Minimum 60 seconds
+                    end_time = min(begin_time + 60, sim_length_seconds)
+
+                logging.debug(f"Flow interval {ep}_{i}: begin={begin_time}, end={end_time}, duration={end_time-begin_time}s")
 
                 # Create flows for each vehicle type based on their proportions
                 for vehicle_type in proportions:
-                    vehs_gen = round(num_veh_per_hr_temp * proportions[vehicle_type] / 100)
+                    actual_interval_hours = (end_time - begin_time) / 3600
+                    vehs_gen = round(num_veh_per_hr_temp * proportions[vehicle_type] / 100 * actual_interval_hours)
                     
                     if vehs_gen > 0:
                         if "disobedient" in vehicle_type and add_disobedient_vehicles:
@@ -535,7 +584,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
                                         f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
 
         # Sort flows by begin time only (no need to sort by day index first)
-        flows.sort(key=lambda x: (x[0]))
+        flows.sort(key=lambda x: x[0])
 
         # Write sorted flows
         f.write('<routes>\n')
@@ -684,9 +733,16 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, num_of_hrs, num
         f.write(f'    <route id="{route_id}" edges="{edges}"/>\n') # Replace {your_edges_here} with actual edges
         f.write('\n')
 
+        if flows:
+            first_flow_time = flows[0][0]
+            last_flow_time = flows[-1][0] if flows else 0
+            logging.info(f"Generated {len(flows)} flows from time {first_flow_time}s to {last_flow_time}s")
+        else:
+            logging.warning("No flows were generated!")
+    
         # Write sorted flows to file
-        for _, flow in flows:
-            f.write(flow)
+        for _, flow_text in flows:
+            f.write(flow_text)
 
         f.write('</routes>\n')
 
