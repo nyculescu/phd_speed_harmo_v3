@@ -237,17 +237,17 @@ def flow_generation(model, idx, daily_pattern, sim_length_seconds):
                         if vehs_gen > 0:
                             if "disobedient" in vehicle_type and add_disobedient_vehicles:
                                 flows.append((begin_time,
-                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                             f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                             f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("disobedient_")}"/>\n'))
                             elif "electric" in vehicle_type and add_electric_vehicles:
                                 flows.append((begin_time,
-                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                             f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                             f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
                             else:
                                 flows.append((begin_time,
-                                            f'    <flow id="{vehicle_type}_flow_{i}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                             f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                             f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type}"/>\n'))
 
@@ -403,7 +403,7 @@ def flow_generation(model, idx, daily_pattern, sim_length_seconds):
         f.write('\n')
 
         # Write sorted flows to file
-        for _, _, flow in flows:
+        for _, flow in flows:
             f.write(flow)
 
         f.write('</routes>\n')

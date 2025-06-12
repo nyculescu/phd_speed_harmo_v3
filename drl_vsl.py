@@ -159,13 +159,15 @@ def create_sumocfg(file_postfix, vsl_enforcement="recommend", model_idx_offset=0
         
         logger.debug(f"Created {filepath}")
 
-def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
+def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         port_for_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_TRAIN_SUMO_PORT + idx
         
+        # This call inside the constructor is missing sim_length
         env = Monitor(TrafficEnv(port=port_for_env,
                                 model_name=model_name,
-                                model_idx=idx, # model_idx is specific to this sub-process env
+                                model_idx=idx,
+                                sim_length=sim_length, # <-- This was the missing link
                                 op_mode="train",
                                 base_gen_car_distrib=["uniform", 2000],
                                 num_of_episodes=num_of_episodes,
@@ -175,16 +177,15 @@ def train_env_constructor(idx, model_name, num_of_episodes, reward_fn, vsl_enfor
         return env
     return _init
 
-def eval_env_constructor(model_name, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
+def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
-        # Use provided port or default from global
         port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
-        # model_idx for eval env can be fixed, e.g., num_envs_per_model -1, or a dedicated high number
-        eval_model_idx = num_envs_per_model -1 # Or a distinct ID like 999
+        eval_model_idx = num_envs_per_model - 1
 
         env = Monitor(TimeLimit(TrafficEnv(port=port_for_eval_env,
-                                            model_name=model_name, # model_name is unique per parallel run
-                                            model_idx=eval_model_idx, 
+                                            model_name=model_name,
+                                            model_idx=eval_model_idx,
+                                            sim_length=sim_length, # <-- PASS sim_length HERE
                                             op_mode="eval",
                                             base_gen_car_distrib=["uniform", 3000],
                                             num_of_episodes=1,
@@ -224,13 +225,15 @@ def train_model(algorithm: str,
     current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else BASE_EVAL_SUMO_PORT
 
     train_env = SubprocVecEnv([
-        train_env_constructor(i, model_name, num_of_episodes, reward_function, vsl_enforcement,
-                              sumo_port_to_use=current_train_base_port + i, # Each sub-env gets a unique port
+        train_env_constructor(i, model_name, train_sim_length, num_of_episodes, reward_function, vsl_enforcement,
+                              sumo_port_to_use=current_train_base_port + i,
                               sumo_binary_to_use=sumo_binary_to_use)
         for i in range(num_train_envs_per_model)
     ])
-    env_eval = SubprocVecEnv([eval_env_constructor(model_name, reward_function, vsl_enforcement,
-                                                  sumo_port_to_use=current_eval_base_port, # Eval env gets its own port
+
+    env_eval = SubprocVecEnv([
+        eval_env_constructor(model_name, eval_sim_length, reward_function, vsl_enforcement,
+                                                  sumo_port_to_use=current_eval_base_port,
                                                   sumo_binary_to_use=sumo_binary_to_use)])
 
     model = DQN("MlpPolicy", train_env, 
@@ -319,6 +322,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
                      model_idx=0,
                      sim_length=test_sim_length,
                      base_gen_car_distrib=["bimodal", 3],
+                     num_of_episodes=1,
                      reward_fn=reward_function,
                      vsl_enforcement=vsl_enforcement,
                      sumo_binary_path_override=sumoBinary) # Use the globally defined sumoBinary
@@ -506,7 +510,7 @@ class TrafficEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
     
     def __init__(self, port, model_name, model_idx, sim_length, base_gen_car_distrib, 
-                 num_of_episodes, reward_fn="balanced", 
+                 num_of_episodes, op_mode: str = "train", reward_fn="balanced", 
                  vsl_enforcement="recommend",
                  sumo_binary_path_override: Optional[str] = None, 
                  normalization_bounds_path: Optional[str] = None):
@@ -668,6 +672,8 @@ class TrafficEnv(gym.Env):
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
+                sumo_log_file = f"./logs/sumo_log_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.txt"
+
                 sumo_cmd = [
                     current_sumo_binary, "-c",
                     f"./traffic_environment/sumo/3_2_merge_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.sumocfg",
@@ -680,7 +686,8 @@ class TrafficEnv(gym.Env):
                     f"--end={self.sim_length}",
                     "--quit-on-end",
                     "--no-step-log", 
-                    "--no-warnings"
+                    "--no-warnings",
+                    "--log", sumo_log_file
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
