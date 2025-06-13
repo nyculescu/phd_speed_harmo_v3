@@ -898,7 +898,7 @@ class TrafficEnv(gym.Env):
         self.logger.log_step_data(
             current_time, self.current_speed_limit, self.flow_upstream,
             self.flow_downstream, self.occupancy_upstream, self.queue_length_upstream,
-            reward, action
+            reward, action, self.avg_speed_before
         )
         
         info = {
@@ -1298,7 +1298,7 @@ class TrafficDataLogger:
         self.reset()
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
-                     flow_downstream, occupancy, queue_length, reward, action):
+                     flow_downstream, occupancy, queue_length, reward, action, avg_speed_before):
         """
         Log data for a single simulation step.
         
@@ -1345,7 +1345,8 @@ class TrafficDataLogger:
             'queue_length': queue_length,
             'reward': reward,
             'cumulative_reward': self.total_reward + reward,
-            'speed_limit_changes_total': self.speed_limit_changes
+            'speed_limit_changes_total': self.speed_limit_changes,
+            'avg_speed_before_mps': avg_speed_before,
         }
         
         self.data.append(step_data)
@@ -1731,10 +1732,8 @@ if __name__ == '__main__':
         parallel_training_sumo_binary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI)
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
-        # reward_functions = ["mobility", "safety", "balanced"] # Original selection
-        reward_functions = ["mobility"] # As per user's active selection in prompt
-        # vsl_enforcements = ["all_vehicles", "electric_only", "recommend"]
-        vsl_enforcements = ["electric_only", "recommend"]
+        reward_functions = ["mobility", "safety", "balanced"] # ["mobility", "safety", "balanced"]
+        vsl_enforcements = ["electric_only", "recommend"] # ["all_vehicles", "electric_only", "recommend"]
 
         use_hyperparams_by_optuna = True
         all_combinations_params_for_training = []
