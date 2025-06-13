@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
+    level=getattr(logging, LOG_LEVEL, logging.WARN),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -199,7 +199,7 @@ def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="rec
 
 def train_model(algorithm: str,
                 reward_function: str = "balanced",
-                num_of_episodes: int = 7, # Total episodes for the training run
+                num_of_episodes: int = 200, # Total episodes for the training run
                 hyperparams: Optional[dict] = None,
                 vsl_enforcement: str = "recommend",
                 process_train_base_port: Optional[int] = None,
@@ -207,11 +207,10 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    train_sim_length = 504000 # # Full simulation time in seconds for training
-    eval_sim_length = int(interval_length * num_of_intervals)  # Evaluation length
-    steps_per_episode = train_sim_length // 60  
-    total_timesteps = steps_per_episode * num_of_episodes
-    eval_timesteps = steps_per_episode // 4
+    TOTAL_TRAINING_TIMESTEPS = 250_000
+    EPISODE_SIM_LENGTH = 3600 # 1 hour for training episodes
+    eval_sim_length = 3600 * 4 # 4 hours for evaluation
+    eval_freq = 10_000
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -226,7 +225,7 @@ def train_model(algorithm: str,
     current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else BASE_EVAL_SUMO_PORT
 
     train_env = SubprocVecEnv([
-        train_env_constructor(i, model_name, train_sim_length, num_of_episodes, reward_function, vsl_enforcement,
+        train_env_constructor(i, model_name, EPISODE_SIM_LENGTH, num_of_episodes, reward_function, vsl_enforcement,
                               sumo_port_to_use=current_train_base_port + i,
                               sumo_binary_to_use=sumo_binary_to_use)
         for i in range(num_train_envs_per_model)
@@ -258,7 +257,7 @@ def train_model(algorithm: str,
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
     checkpoint_cb = CheckpointCallback(
-        save_freq=eval_timesteps,
+        save_freq=eval_freq,
         save_path=model_dir,
         name_prefix=f"rl_model_{model_name}",
         save_replay_buffer=True,
@@ -267,8 +266,8 @@ def train_model(algorithm: str,
     )
 
     no_improve_cb = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=1,
-        min_evals=3,
+        max_no_improvement_evals=3, # Allow more evaluations without improvement
+        min_evals=5,
         verbose=1
     )
 
@@ -276,7 +275,7 @@ def train_model(algorithm: str,
         env_eval,
         best_model_save_path=model_dir,
         log_path=log_dir,
-        eval_freq=eval_timesteps,
+        eval_freq=eval_freq,
         n_eval_episodes=1,
         deterministic=True,
         render=False,
@@ -284,10 +283,12 @@ def train_model(algorithm: str,
         verbose=1
     )
 
+    custom_cb = CustomMetricsCallback()
+
     # Training loop
     try:
-        model.learn(total_timesteps=total_timesteps,
-                    callback=[checkpoint_cb, eval_cb],
+        model.learn(total_timesteps=TOTAL_TRAINING_TIMESTEPS,
+                    callback=[checkpoint_cb, eval_cb, custom_cb],
                     progress_bar=PROGRESS_BAR_ENABLED,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
@@ -580,6 +581,16 @@ class TrafficEnv(gym.Env):
 
         self.veh_passed_downstream = 0  # FIXME: Temp debug
 
+        self.training_scenarios = [
+            {"demand": 2500, "pattern": "uniform"},
+            {"demand": 3000, "pattern": "uniform"}, 
+            {"demand": 3500, "pattern": "uniform"},
+            {"demand": 4000, "pattern": "uniform"},
+            {"demand": 4500, "pattern": "uniform"},
+            {"demand": 5000, "pattern": "uniform"},
+        ]
+        self.gen_car_distrib = base_gen_car_distrib 
+
     def _load_or_set_normalization_bounds(self, bounds_path: Optional[str]):
         """Loads normalization bounds from a file or falls back to hardcoded defaults."""
         if bounds_path and os.path.exists(bounds_path):
@@ -650,19 +661,6 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 port = self.port
-                
-                if not self.skip_flow_generation:
-                    if self.gen_car_distrib[0] == 'uniform':
-                        flow_generation_fix_num_veh(self.effective_model_name_for_files, self.effective_model_idx_for_files,
-                                                    self.gen_car_distrib[1],
-                                                    self.sim_length,
-                                                    self.num_of_episodes,
-                                                    num_of_intervals)
-                    elif self.gen_car_distrib[0] == 'bimodal':
-                        flow_generation(self.effective_model_name_for_files, 
-                                        self.effective_model_idx_for_files,
-                                        bimodal_distribution_24h(self.gen_car_distrib[1]), 
-                                        self.sim_length)
                 
                 route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
@@ -896,8 +894,9 @@ class TrafficEnv(gym.Env):
         info = {
             'flow_upstream': self.flow_upstream,
             'flow_downstream': self.flow_downstream,
+            'avg_speed_before': self.avg_speed_before, # <-- Add this line
             'occupancy': self.occupancy_upstream,
-            'queue_length': self.queue_length_upstream,
+            'queue_length_upstream': self.queue_length_upstream, # <-- Add this line
             'speed_limit': self.current_speed_limit,
             'collisions': len(self.collisions),
             'simulation_time': current_time,
@@ -917,6 +916,30 @@ class TrafficEnv(gym.Env):
         if self.is_sumo_initialized:
             self.close_sumo("Environment reset")
         
+        if not self.skip_flow_generation:
+            # Randomly select a scenario for the new episode
+            scenario = np.random.choice(self.training_scenarios)
+            self.gen_car_distrib = [scenario["pattern"], scenario["demand"]]
+            logger.info(f"Resetting env. New scenario: Demand={self.gen_car_distrib[1]} veh/hr")
+
+            # Generate the flow file for this specific scenario
+            if self.gen_car_distrib[0] == 'uniform':
+                flow_generation_fix_num_veh(
+                    self.effective_model_name_for_files, 
+                    self.effective_model_idx_for_files,
+                    self.gen_car_distrib[1],
+                    self.sim_length,
+                    1, # Each episode is now self-contained
+                    1
+                )
+            elif self.gen_car_distrib[0] == 'bimodal':
+                flow_generation(
+                    self.effective_model_name_for_files, 
+                    self.effective_model_idx_for_files,
+                    bimodal_distribution_24h(self.gen_car_distrib[1]), 
+                    self.sim_length
+                )
+
         # Reset state variables
         self.current_speed_limit = self.default_speed_limit
         self.flow_upstream = 0
@@ -1547,11 +1570,8 @@ class TrafficDataLogger:
         # Calculate total control actions based on the logged 'speed_change'
         control_actions = df[df['speed_change'] != 0].shape[0]
         
-        # Example metrics (yours are already more sophisticated)
-        MAX_THEORETICAL_FLOW = 7200.0
-        MAX_SPEED_VARIANCE = 50.0 # Example value
-        mobility_index = avg_flow_vph / (MAX_THEORETICAL_FLOW or 1)
-        safety_index = 1 - (speed_variance / (MAX_SPEED_VARIANCE or 1))
+        mobility_index = avg_flow_vph / (MAX_FLOW or 1)
+        safety_index = 1 - (speed_variance / (MAX_SPEED_DIFF or 1))
         
         performance_score = (
             0.5 * mobility_index +
@@ -1599,6 +1619,42 @@ class TensorboardCallback(BaseCallback):
                 self.logger.record("env/mean_speed", mean_speed)
         return True
 
+class CustomMetricsCallback(BaseCallback):
+    """
+    A custom callback that logs key traffic metrics from the environment to TensorBoard.
+    This version is compatible with SubprocVecEnv.
+    """
+    def __init__(self, verbose=0):
+        super(CustomMetricsCallback, self).__init__(verbose)
+
+    def _on_step(self) -> bool:
+        # 'locals' contains all local variables from the model's 'learn' method
+        # 'infos' is a list of info dicts from each environment in the VecEnv
+        infos = self.locals.get("infos", [])
+        
+        for i, info in enumerate(infos):
+            # The 'final_info' key is added by the Monitor wrapper when an episode ends
+            # This ensures we only log at the end of an episode, providing a stable summary
+            if "final_info" in info:
+                final_info = info["final_info"]
+                
+                # Log key performance indicators (KPIs) for the i-th environment
+                # The 'custom' prefix helps group these in TensorBoard
+                self.logger.record(f'custom/env_{i}/flow_downstream', final_info.get('flow_downstream', 0))
+                self.logger.record(f'custom/env_{i}/avg_speed_before', final_info.get('avg_speed_before', 0))
+                self.logger.record(f'custom/env_{i}/queue_length_upstream', final_info.get('queue_length_upstream', 0))
+                self.logger.record(f'custom/env_{i}/collisions', final_info.get('collisions', 0))
+
+                # Log the mean reward for the episode
+                self.logger.record(f'custom/env_{i}/ep_reward', info.get('r', 0))
+
+                # Example of a derived metric
+                throughput_efficiency = final_info.get('flow_downstream', 0) / MAX_FLOW
+                self.logger.record(f'custom/env_{i}/throughput_efficiency', throughput_efficiency)
+
+        return True
+
+
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Main entry point for running the DRL VSL environment with SUMO. """
 
@@ -1613,7 +1669,7 @@ if __name__ == '__main__':
     reward_functions_to_tune = ["mobility", "safety"] # List of options: "mobility", "safety", "balanced"
     vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
 
-    option = 3
+    option = 2
     
     if option == 1:
         algo_to_use = "DQN"
