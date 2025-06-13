@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from tqdm import tqdm
 from typing import Optional
-import datetime
+from datetime import datetime, timezone
 
 # Import your TrafficEnv and any other shared code from drl_vsl.py
 from drl_vsl import (
@@ -51,7 +51,7 @@ NORMALIZATION_BOUNDS_FILE = os.path.join(OPTUNA_PARAMS_DIR, "normalization_bound
 CALIBRATION_EPISODE_LENGTH_ENV_STEPS = 60 # 3600 s
 BROAD_EXPLORATION_TIMESTEPS_PER_SCENARIO = 600
 DEEP_VALIDATION_TIMESTEPS_PER_SCENARIO = 6000 # 200 episodes * 30 steps = 6000 DRL steps
-SUMO_EXE_GUI = sumoExecutable_nogui
+SUMO_EXE_GUI = sumoExecutable_gui
 SHARED_DEMAND_SCENARIOS = [
         {"id": 100, "demand": 2000, "pattern": "uniform"},
         {"id": 101, "demand": 2500, "pattern": "uniform"}, 
@@ -789,7 +789,7 @@ def calibrate_normalization_bounds(output_path,
             "total_samples_this_run": len(all_collected_metrics),
             "episodes_per_scenario_config": num_episodes_per_scenario,
             "sim_steps_per_episode_config": sim_steps_per_episode,
-            "last_calibrated_utc": datetime.datetime.utcnow().isoformat() + "Z" # Corrected datetime usage
+            "last_calibrated_utc": datetime.now(timezone.utc).isoformat()
         }
         
         final_bounds_data = {
@@ -828,26 +828,39 @@ if __name__ == '__main__':
     if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
         mp.set_start_method('spawn', force=True)
 
-    tuning_processes = []
-    for i, (r_fn, vsl_m) in enumerate(tuning_combinations):
-        params_dir = os.path.join("rl_models", "optuna_params")
-        os.makedirs(params_dir, exist_ok=True)
-        specific_params_filename = f"best_optuna_params_{algo_to_use}_{r_fn}_{vsl_m}.json"
-        specific_params_file = os.path.join(params_dir, specific_params_filename)
-        current_tuning_base_port = BASE_EVAL_SUMO_PORT + i * PORTS_PER_TUNING_PROCESS
+    option = 2
 
-        p_tune = mp.Process(target=run_tuning_wrapper, args=(
-            r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary, NORMALIZATION_BOUNDS_FILE
-        ))
-        tuning_processes.append(p_tune)
-        p_tune.start()
+    # OPTION 1: Parallel hyperparameter tuning using multiprocessing
+    if option == 1:
+        logger.info("Starting parallel hyperparameter tuning using multiprocessing...")
+        tuning_processes = []
+        for i, (r_fn, vsl_m) in enumerate(tuning_combinations):
+            params_dir = os.path.join("rl_models", "optuna_params")
+            os.makedirs(params_dir, exist_ok=True)
+            specific_params_filename = f"best_optuna_params_{algo_to_use}_{r_fn}_{vsl_m}.json"
+            specific_params_file = os.path.join(params_dir, specific_params_filename)
+            current_tuning_base_port = BASE_EVAL_SUMO_PORT + i * PORTS_PER_TUNING_PROCESS
 
-        if len(tuning_processes) >= num_parallel_tuning_processes:
-            for proc_to_join in tuning_processes:
-                proc_to_join.join()
-            tuning_processes = []
+            p_tune = mp.Process(target=run_tuning_wrapper, args=(
+                r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary, NORMALIZATION_BOUNDS_FILE
+            ))
+            tuning_processes.append(p_tune)
+            p_tune.start()
 
-    for p_tune in tuning_processes:
-        p_tune.join()
+            if len(tuning_processes) >= num_parallel_tuning_processes:
+                for proc_to_join in tuning_processes:
+                    proc_to_join.join()
+                tuning_processes = []
+
+        for p_tune in tuning_processes:
+            p_tune.join()
+    
+    # OPTION 2: Hyperparameter tuning using Optuna's parallel capabilities
+    else:
+        r_fn = "mobility"  # Default reward function for tuning
+        vsl_m = "recommend"  # Default VSL enforcement for tuning
+        specific_params_file = os.path.join(OPTUNA_PARAMS_DIR, f"best_optuna_params_{algo_to_use}_{r_fn}_{vsl_m}.json")
+        current_tuning_base_port = BASE_EVAL_SUMO_PORT + 1000  # Starting port for tuning processes
+        run_tuning_wrapper(r_fn, vsl_m, algo_to_use, specific_params_file, current_tuning_base_port, tuning_sumo_binary, NORMALIZATION_BOUNDS_FILE)
 
     logger.info("Parallel hyperparameter tuning finished for all combinations.")

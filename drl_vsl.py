@@ -22,7 +22,7 @@ from stable_baselines3.common.logger import configure
 from flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
-from datetime import datetime 
+from datetime import datetime, timezone
 import psutil
 from time import sleep
 import traci
@@ -672,7 +672,8 @@ class TrafficEnv(gym.Env):
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
-                sumo_log_file = f"./logs/sumo_log_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.txt"
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}_{timestamp_str}.txt"
 
                 sumo_cmd = [
                     current_sumo_binary, "-c",
@@ -684,7 +685,7 @@ class TrafficEnv(gym.Env):
                     f"--step-length={self.sumo_step_length}",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
-                    "--quit-on-end",
+                    # "--quit-on-end",
                     "--no-step-log", 
                     "--no-warnings",
                     "--log", sumo_log_file
@@ -692,13 +693,26 @@ class TrafficEnv(gym.Env):
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+                # Give SUMO a moment to launch and potentially fail
+                time.sleep(0.2) 
+                # poll() returns the exit code if the process has terminated, or None otherwise.
+                exit_code = self.sumo_process.poll()
+                if exit_code is not None:
+                    # Process terminated immediately. Capture and log the error.
+                    out, err = self.sumo_process.communicate()
+                    logger.error(f"SUMO process failed on launch with exit code {exit_code}.")
+                    logger.error(f"SUMO stdout: {out.decode()}")
+                    logger.error(f"SUMO stderr: {err.decode()}")
+                    # Raise an exception to stop the attempt.
+                    raise RuntimeError("SUMO failed to start. Check logs for details.")
+
                 logger.debug(f"SUMO command: {' '.join(sumo_cmd)}")
                 logger.debug(f"Expected simulation end time: {self.sim_length}s")
 
                 logger.info(f"Attempting to connect to SUMO ({log_id}) on port {port}")
                 time.sleep(0.5) 
                 try:
-                    traci.init(port=port, numRetries=5, host='127.0.0.1')
+                    traci.init(port=port, numRetries=5)
                 except Exception as e:
                     if self.sumo_process:
                         out, err = self.sumo_process.communicate(timeout=2)
@@ -1160,26 +1174,44 @@ class TrafficEnv(gym.Env):
         
         if traci.isLoaded():
             try:
-                traci.close(wait=False) # wait=False to prevent blocking if SUMO already crashed
+                traci.close(wait=False)
                 logger.debug(f"TraCI connection closed for {log_id}.")
             except Exception as e:
                 logger.warning(f"Exception during traci.close() for {log_id}: {e}")
         
         if self.sumo_process:
-            if psutil.pid_exists(self.sumo_process.pid):
+            # Check if the process is still running before trying to terminate
+            if self.sumo_process.poll() is None: # poll() is None if process is running
                 try:
                     logger.debug(f"Terminating SUMO process PID {self.sumo_process.pid} for {log_id}.")
                     self.sumo_process.terminate()
-                    self.sumo_process.wait(timeout=5) # Wait for a few seconds
-                    logger.debug(f"SUMO process PID {self.sumo_process.pid} terminated for {log_id}.")
-                except subprocess.TimeoutExpired:
-                    logger.warning(f"SUMO process PID {self.sumo_process.pid} did not terminate in time, attempting kill for {log_id}.")
-                    self.sumo_process.kill()
-                    self.sumo_process.wait(timeout=2)
+                    # +++ NEW: Wait for termination and capture final output +++
+                    try:
+                        # Wait for 5 seconds for the process to terminate gracefully
+                        out, err = self.sumo_process.communicate(timeout=5)
+                        if err:
+                            logger.warning(f"Final SUMO stderr on close for {log_id}: {err.decode().strip()}")
+                        if out:
+                            logger.debug(f"Final SUMO stdout on close for {log_id}: {out.decode().strip()}")
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"SUMO process PID {self.sumo_process.pid} did not terminate in time, killing.")
+                        self.sumo_process.kill()
+                        # Capture output after killing
+                        out, err = self.sumo_process.communicate()
+                        if err:
+                            logger.error(f"Final SUMO stderr after kill for {log_id}: {err.decode().strip()}")
+
+                    logger.debug(f"SUMO process PID {self.sumo_process.pid} has been handled.")
+
                 except Exception as e:
                     logger.error(f"Exception during SUMO process termination for {log_id}: {e}")
             else:
-                logger.debug(f"SUMO process PID {self.sumo_process.pid} for {log_id} did not exist when trying to close.")
+                # If the process already finished, it's good practice to still communicate()
+                # to clear the stdout/stderr buffers and prevent deadlocks.
+                out, err = self.sumo_process.communicate()
+                if err:
+                    logger.debug(f"SUMO process for {log_id} had already terminated. Final stderr: {err.decode().strip()}")
+
             self.sumo_process = None
         self.is_sumo_initialized = False
 
