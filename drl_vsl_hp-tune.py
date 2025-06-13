@@ -51,13 +51,13 @@ NORMALIZATION_BOUNDS_FILE = os.path.join(OPTUNA_PARAMS_DIR, "normalization_bound
 CALIBRATION_EPISODE_LENGTH_ENV_STEPS = 60 # 3600 s
 BROAD_EXPLORATION_TIMESTEPS_PER_SCENARIO = 600
 DEEP_VALIDATION_TIMESTEPS_PER_SCENARIO = 6000 # 200 episodes * 30 steps = 6000 DRL steps
-SUMO_EXE_GUI = sumoExecutable_gui
+SUMO_EXE_GUI = sumoExecutable_nogui
 SHARED_DEMAND_SCENARIOS = [
-        {"id": 100, "demand": 2000, "pattern": "uniform"},
-        {"id": 101, "demand": 2500, "pattern": "uniform"}, 
-        {"id": 102, "demand": 3000, "pattern": "uniform"},
-        {"id": 103, "demand": 3500, "pattern": "uniform"},
-        {"id": 104, "demand": 4000, "pattern": "uniform"},
+        {"id": 100, "demand": 6000, "pattern": "uniform"},
+        {"id": 101, "demand": 6500, "pattern": "uniform"}, 
+        {"id": 102, "demand": 7500, "pattern": "uniform"},
+        {"id": 103, "demand": 7500, "pattern": "uniform"},
+        {"id": 104, "demand": 8000, "pattern": "uniform"},
     ]
 
 # Configuration for Stage 1
@@ -736,7 +736,8 @@ def calibrate_normalization_bounds(output_path,
                     base_gen_car_distrib=["uniform", demand_val],
                     num_of_episodes=1,
                     reward_fn="mobility",
-                    sumo_binary_path_override=os.path.join(os.environ.get('SUMO_HOME', ''), 'bin', sumoExecutable_nogui)
+                    vsl_enforcement="recommend",
+                    sumo_binary_path_override=os.path.join(os.environ.get('SUMO_HOME', ''), 'bin', SUMO_EXE_GUI)
                 )
                 
                 for episode in range(num_episodes_per_scenario):
@@ -824,14 +825,13 @@ if __name__ == '__main__':
     os.makedirs(OPTUNA_PARAMS_DIR, exist_ok=True)
     calibrate_normalization_bounds(output_path=NORMALIZATION_BOUNDS_FILE)
 
-    import multiprocessing as mp
-    if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
-        mp.set_start_method('spawn', force=True)
-
     option = 2
 
     # OPTION 1: Parallel hyperparameter tuning using multiprocessing
     if option == 1:
+        import multiprocessing as mp
+        if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
+            mp.set_start_method('spawn', force=True)
         logger.info("Starting parallel hyperparameter tuning using multiprocessing...")
         tuning_processes = []
         for i, (r_fn, vsl_m) in enumerate(tuning_combinations):

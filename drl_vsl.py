@@ -80,12 +80,13 @@ sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
 SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
-MAX_FLOW = 7200.0      # vehicles/hour (theoretical maximum for 2 lanes)
+MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
-MAX_QUEUE_LENGTH = 500 # vehicles (adjust based on your segment length)
+MAX_QUEUE_LENGTH = 575.0 / 4 # vehicles (adjust based on the segment length)
 OBSERVATION_SPACE_SIZE = 7
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
-
+MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
+SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
 PORTS_PER_TUNING_PROCESS = 100 # Max trials * num_scenarios_per_trial + buffer
 
 HYPER_PARAM_SIM_LENGTH = 3600
@@ -501,17 +502,14 @@ def run_training_for_combination(config_tuple):
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Classes """
-MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
-MAX_FLOW = 10000.0               # vehicles per hour
-MAX_QUEUE_LENGTH = 500.0        # meters
-SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
-
 class TrafficEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 30}
     
     def __init__(self, port, model_name, model_idx, sim_length, base_gen_car_distrib, 
-                 num_of_episodes, op_mode: str = "train", reward_fn="balanced", 
-                 vsl_enforcement="recommend",
+                 num_of_episodes, 
+                 op_mode: str = "train", # FIXME: remove it
+                 reward_fn="balanced", 
+                 vsl_enforcement: str = "recommend",
                  sumo_binary_path_override: Optional[str] = None, 
                  normalization_bounds_path: Optional[str] = None):
         super(TrafficEnv, self).__init__()
