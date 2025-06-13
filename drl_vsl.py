@@ -353,7 +353,17 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
                 break
     
     pbar.close() # Ensure progress bar is closed
+    final_summary = env.logger.get_summary_statistics()
     env.close()
+
+    print(f"\n--- Comprehensive Test Results for {model_name} ---")
+    # Pretty print the dictionary
+    for key, value in final_summary.items():
+        print(f"{key:<30}: {value}")
+    
+    log_filename = f"test_run_{model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    env.logger.save_to_csv(filename=log_filename)
+    print(f"\nDetailed step-by-step log saved to: ./logs/traffic_data/{log_filename}")
 
     print(f"\nTest Results for {model_name}:")
     print(f"Total Steps: {step_count}")
@@ -1538,59 +1548,87 @@ class TrafficDataLogger:
 
     def _calculate_summary_statistics(self) -> dict:
         """
-        Calculates the final summary statistics for the completed episode and returns them as a dictionary.
-        This method does NOT write to a file.
+        Calculates a comprehensive summary for a completed simulation run (e.g., a full test).
+        This method leverages the per-step data collected by the logger.
         """
         if not self.data:
-            logger.warning(f"No data was logged for {self.model_name}. Returning default zero-value statistics.")
-            # Return a dictionary of default values to prevent crashes downstream.
+            logger.warning(f"No data was logged for {self.model_name} in this run. Cannot generate summary.")
+            # Return a dictionary of default zero-values.
             return {
-                'total_travel_time': 0.0,
-                'average_speed': 0.0,
-                'average_flow_rate': 0.0,
-                'average_occupancy': 0.0,
-                'total_vehicles': 0,
-                'safety_index': 0.0,
-                'mobility_index': 0.0,
-                'flow_breakdown_prob': 0.0,
-                'control_action_freq': 0.0,
-                'performance_score': 0.0 # Return 0 to indicate poor performance
+                'total_steps': 0, 'total_sim_time_s': 0, 'avg_flow_vph': 0,
+                'flow_stability_std_dev': 0, 'avg_queue_m': 0, 'max_queue_m': 0,
+                'avg_speed_kph': 0, 'speed_variance': 0, 'total_control_actions': 0,
+                'control_frequency_pct': 0, 'mobility_index': 0, 'safety_index': 0,
+                'overall_performance_score': 0
             }
 
         df = pd.DataFrame(self.data)
         
-        if not self.step_data:
-            return {} # Return empty dict if no data was logged
-
+        # --- Basic Metrics ---
+        total_steps = len(df)
+        total_sim_time_s = df['simulation_time'].max()
+        
+        # --- Mobility / Throughput Metrics ---
+        # Average flow over the entire run
         avg_flow_vph = df['flow_downstream'].mean()
-        avg_speed_kph = df['current_speed_limit'].mean() # Or however you calculate avg speed
-        speed_variance = df['current_speed_limit'].var()
-        avg_occupancy_percent = df['occupancy'].mean()
+        # Flow stability: lower standard deviation is better
+        flow_stability_std_dev = df['flow_downstream'].std()
         
-        # Calculate total control actions based on the logged 'speed_change'
+        # --- Congestion Metrics ---
+        avg_queue_m = df['queue_length'].mean()
+        max_queue_m = df['queue_length'].max()
+
+        # --- Safety & Smoothness Metrics ---
+        # Use a relevant speed metric. The speed limit itself is an action, so let's use the resulting traffic speed.
+        # We need to add 'avg_speed_before' to the logger first. 
+        # For now, we'll use 'current_speed_limit' as a proxy for control action variance.
+        avg_speed_kph = df['current_speed_limit'].mean() 
+        speed_variance = df['current_speed_limit'].var() # Variance of the agent's chosen speed limits.
+
+        # --- Control Effort Metrics ---
+        # Count how many times the agent changed the speed limit
         control_actions = df[df['speed_change'] != 0].shape[0]
-        
-        mobility_index = avg_flow_vph / (MAX_FLOW or 1)
-        safety_index = 1 - (speed_variance / (MAX_SPEED_DIFF or 1))
-        
-        performance_score = (
-            0.5 * mobility_index +
-            0.5 * safety_index
-            # ... other components 
-        )
+        control_frequency_pct = (control_actions / total_steps) * 100 if total_steps > 0 else 0
+
+        # --- Composite Performance Indices (Example) ---
+        # Normalize metrics to a [0, 1] scale where 1 is best.
+        # Note: MAX_FLOW and MAX_QUEUE_LENGTH are from your global constants
+        norm_flow = np.clip(avg_flow_vph / MAX_FLOW, 0, 1)
+        # Penalize instability: 1 is perfect stability (std_dev=0)
+        norm_stability = 1 - np.clip(flow_stability_std_dev / (avg_flow_vph or 1), 0, 1)
+        # Invert queue: 1 is no queue
+        norm_queue = 1 - np.clip(avg_queue_m / MAX_QUEUE_LENGTH, 0, 1)
+
+        # Weight the components
+        mobility_index = (0.7 * norm_flow) + (0.3 * norm_stability)
+        safety_index = 1 - np.clip(speed_variance / 50.0, 0, 1) # Lower variance = higher safety index
+
+        # Final weighted score
+        overall_performance_score = (0.6 * mobility_index) + (0.3 * safety_index) + (0.1 * norm_queue)
 
         summary_stats = {
+            'total_steps': total_steps,
+            'total_sim_time_s': total_sim_time_s,
             'avg_flow_vph': avg_flow_vph,
+            'flow_stability_std_dev': flow_stability_std_dev,
+            'avg_queue_m': avg_queue_m,
+            'max_queue_m': max_queue_m,
             'avg_speed_kph': avg_speed_kph,
             'speed_variance': speed_variance,
+            'total_control_actions': control_actions,
+            'control_frequency_pct': control_frequency_pct,
             'mobility_index': mobility_index,
             'safety_index': safety_index,
-            'performance_score': performance_score,
-            'total_control_actions': control_actions,
-            # ... any other summary stats
+            'overall_performance_score': overall_performance_score,
         }
-        return summary_stats
+        
+        # Round all float values for clean reporting
+        for key, value in summary_stats.items():
+            if isinstance(value, float):
+                summary_stats[key] = round(value, 3)
 
+        return summary_stats
+    
     def reset(self):
         """Resets the logger for a new episode or evaluation run."""
         self.start_time = time.time()
