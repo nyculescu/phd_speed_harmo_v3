@@ -1465,7 +1465,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    option = 1
+    option = 2
     
     # Option 1: Run a single training with tuned parameters
     if option == 1:
@@ -1538,6 +1538,7 @@ if __name__ == '__main__':
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 
+    """
     # Option 4: Quick test for TrafficDataLogger
     elif option == 4:
         print("--- Quick Test for TrafficDataLogger (Option 4) ---")
@@ -1572,6 +1573,7 @@ if __name__ == '__main__':
             # traceback.print_exc()
         
         print("--- End of Quick Test ---")
+    """
 
 """
 Accepted limitations and Future Work:
