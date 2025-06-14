@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.WARN),
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -39,6 +39,8 @@ import multiprocessing as mp # Added for parallel processing
 import csv
 from tqdm import tqdm
 import shutil
+from itertools import product
+
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -78,7 +80,7 @@ num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
-SUMO_EXE_GUI = sumoExecutable_gui # NOTE: Change this to define which SUMO executable is used
+SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
@@ -141,25 +143,21 @@ SUMO_CFG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </configuration>
     """
 
-def create_sumocfg(file_postfix, vsl_enforcement="recommend", model_idx_offset=0):
+def create_sumocfg(file_postfix, model_idx=0):
     output_dir = "./traffic_environment/sumo"
     os.makedirs(output_dir, exist_ok=True)
 
-    # Generate configuration files
-    for i in range(num_envs_per_model):
-        # Ensure index is unique even if model_name is the same for SubprocVecEnv instances
-        actual_index = i + model_idx_offset
-        filename = f"3_2_merge_{file_postfix}_{actual_index}.sumocfg"
-        filepath = os.path.join(output_dir, filename)
-        
-        # Format the template with current model and index
-        content = SUMO_CFG_TEMPLATE.format(file_postfix=file_postfix, index=actual_index)
-        
-        # Write the content to the file
-        with open(filepath, 'w') as file:
-             file.write(content)
-        
-        logger.debug(f"Created {filepath}")
+    filename = f"3_2_merge_{file_postfix}_{model_idx}.sumocfg"
+    filepath = os.path.join(output_dir, filename)
+
+    # Format the template with current model and index
+    content = SUMO_CFG_TEMPLATE.format(file_postfix=file_postfix, index=model_idx)
+
+    # Write the content to the file
+    with open(filepath, 'w') as file:
+         file.write(content)
+    
+    logger.debug(f"Created {filepath}")
 
 def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
@@ -304,7 +302,7 @@ def train_model(algorithm: str,
         env_eval.close()
         logger.info(f"Finished training for {model_name}")
 
-def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
+def test_model(algorithm, reward_function, vsl_enforcement="recommend", idx=0):
     """Test a trained DQN model with comprehensive evaluation."""
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     model_load_path = Path(f"rl_models/{model_name}/best_model.zip")
@@ -324,7 +322,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     NO_OF_HR_OF_TEST = 4 # hours for testing
     TEST_SIM_LENGTH = 3600 * NO_OF_HR_OF_TEST
 
-    env = TrafficEnv(port=BASE_EVAL_SUMO_PORT,
+    env = TrafficEnv(port=BASE_EVAL_SUMO_PORT + idx,
                      model_name=model_name,
                      model_idx=0,
                      sim_length=TEST_SIM_LENGTH,
@@ -496,7 +494,7 @@ def run_training_for_combination(config_tuple):
 
     try:
         logger.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
-        create_sumocfg(config_model_name_for_training, vsl_mode) 
+        create_sumocfg(config_model_name_for_training) 
                                            
         logger.info(f"Process {process_id}: Training model {config_model_name_for_training} with final hyperparams: {final_hyperparams}")
         train_model(algorithm=algo_used,
@@ -512,6 +510,87 @@ def run_training_for_combination(config_tuple):
     except Exception as e:
         logger.error(f"Process {process_id}: FAILED for {config_model_name_for_training}. Error: {e}", exc_info=True)
         return f"Failure: {config_model_name_for_training} - {e}"
+
+def run_evaluation_for_combination(config_tuple):
+    """
+    Worker function to test a single trained model combination in its own process.
+    This is the core of the parallel evaluation functionality.
+
+    Args:
+        config_tuple (tuple): A tuple containing (algorithm, reward_function, 
+                                                vsl_enforcement, process_id).
+    
+    Returns:
+        dict: A dictionary containing the summary statistics for the evaluated model.
+              Returns an error status if the model is not found.
+    """
+    algo, reward_fn, vsl_mode, process_id = config_tuple
+    # The evaluation model name must be unique for logging and config files
+    eval_model_name = f"eval_{algo}_{reward_fn}_{vsl_mode}"
+    
+    # This is the name of the trained model we want to load
+    trained_model_name = f"{algo}_{reward_fn}_{vsl_mode}"
+    
+    logger.info(f"Process {process_id}: Starting evaluation for {trained_model_name}.")
+
+    model_load_path = Path(f"rl_models/{trained_model_name}/best_model.zip")
+    if not model_load_path.exists():
+        logger.error(f"Process {process_id}: Model not found at {model_load_path}. Skipping.")
+        return {"model_name": trained_model_name, "status": "Model not found", "total_reward": 0}
+
+    # *** FIX APPLIED HERE ***
+    # Create the unique SUMO config file required for this specific evaluation process.
+    # This must be done BEFORE the TrafficEnv is initialized.
+    create_sumocfg(eval_model_name)
+    
+    # Assign a unique SUMO port for this evaluation process to avoid conflicts
+    eval_port = BASE_EVAL_SUMO_PORT + process_id
+    
+    # Define a challenging, consistent test scenario for fair comparison
+    TEST_SIM_LENGTH = 3600 * 4  # 4-hour test simulation
+    
+    summary = {}
+    try:
+        # Each process gets its own TrafficEnv instance on a unique port
+        env = TrafficEnv(port=eval_port,
+                         model_name=eval_model_name, # Use the unique eval name
+                         model_idx=process_id,
+                         sim_length=TEST_SIM_LENGTH,
+                         base_gen_car_distrib=["bimodal", 4000], # Your custom test scenario
+                         num_of_episodes=1,
+                         reward_fn=reward_fn,
+                         vsl_enforcement=vsl_mode,
+                         sumo_binary_path_override=sumoBinary)
+
+        model = DQN.load(str(model_load_path), env=env)
+        logger.info(f"Process {process_id}: Loaded model {trained_model_name} for evaluation.")
+        
+        obs, info = env.reset()
+        total_reward = 0
+        
+        # Run the evaluation loop
+        done, truncated = False, False
+        while not (done or truncated):
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, truncated, info = env.step(action)
+            total_reward += reward
+
+        # Collect summary statistics from the environment's logger
+        summary = env.logger.get_summary_statistics()
+        summary['model_name'] = trained_model_name # Use original name for report
+        summary['total_reward'] = round(total_reward, 2)
+        summary['status'] = 'Success'
+
+        logger.info(f"Process {process_id}: Finished evaluation for {trained_model_name}. Total Reward: {total_reward:.2f}")
+
+    except Exception as e:
+        logger.error(f"Process {process_id}: An error occurred during evaluation of {trained_model_name}: {e}", exc_info=True)
+        summary = {"model_name": trained_model_name, "status": f"Error: {e}", "total_reward": 0}
+    finally:
+        if 'env' in locals() and env:
+            env.close()
+
+    return summary
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Classes """
@@ -693,7 +772,7 @@ class TrafficEnv(gym.Env):
                     f"--step-length={self.sumo_step_length}",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
-                    # "--quit-on-end",
+                    "--quit-on-end",
                     "--no-step-log", 
                     "--no-warnings",
                     "--log", sumo_log_file
@@ -1453,7 +1532,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    option = 2
+    option = 3
     
     # Option 1: Run a single training with tuned parameters
     if option == 1:
@@ -1465,7 +1544,7 @@ if __name__ == '__main__':
         optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
         # optimal_params["gamma"] = 0.95 # Override gamma to 0.95 for this run FIXME: Temp debug, remove later
 
-        create_sumocfg(config_model_name, vsl_enforce_mode)  # Add vsl_mode parameter
+        create_sumocfg(config_model_name)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
                     reward_function=reward_used,
                     hyperparams=optimal_params,
@@ -1526,8 +1605,57 @@ if __name__ == '__main__':
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 
+    # Option 4: Run parallel evaluations for all combinations of reward functions and VSL enforcement modes 
+    elif option == 4:
+        logger.info("--- Starting Parallel Evaluation of All Model Combinations (Option 4) ---")
+        
+        # Define the combinations you want to evaluate
+        # These should match the models you trained with Option 2
+        algo_to_use = "DQN"
+        reward_functions_to_test = ["mobility", "safety", "balanced"]
+        vsl_enforcements_to_test = ["electric_only", "recommend"]
+
+        # Generate a list of configuration tuples for the worker function
+        evaluation_tasks = [
+            (algo_to_use, r_fn, vsl_m, i)
+            for i, (r_fn, vsl_m) in enumerate(product(reward_functions_to_test, vsl_enforcements_to_test))
+        ]
+
+        num_parallel_processes = min(len(evaluation_tasks), mp.cpu_count() - 1 or 1)
+        logger.info(f"Evaluating {len(evaluation_tasks)} models using up to {num_parallel_processes} parallel processes.")
+
+        # Use a multiprocessing Pool to run evaluations and collect results
+        with mp.Pool(processes=num_parallel_processes) as pool:
+            # tqdm can be used here for a nice progress bar
+            results = list(tqdm(pool.imap(run_evaluation_for_combination, evaluation_tasks), total=len(evaluation_tasks), desc="Evaluating Models"))
+
+        logger.info("--- Parallel Evaluation Complete. Consolidating results... ---")
+
+        # Convert the list of result dictionaries into a pandas DataFrame for nice formatting
+        if results:
+            results_df = pd.DataFrame(results)
+            
+            # Define the order of columns for better readability
+            desired_columns = [
+                'model_name', 'status', 'total_reward', 'avg_flow_vph', 'avg_speed_kph', 
+                'avg_queue_m', 'max_queue_m', 'speed_variance', 'flow_stability_std_dev', 
+                'total_control_actions'
+            ]
+            # Filter to keep only existing columns, in case some are missing from error results
+            existing_columns = [col for col in desired_columns if col in results_df.columns]
+            results_df = results_df[existing_columns]
+
+            # Sort by total reward to easily see the best performing model
+            if 'total_reward' in results_df.columns:
+                results_df = results_df.sort_values(by="total_reward", ascending=False)
+            
+            print("\n\n--- Comparative Evaluation Results ---")
+            print(results_df.to_string()) # .to_string() prints the full DataFrame without truncation
+        else:
+            print("No evaluation results were collected.")
+    
     """
-    # Option 4: Quick test for TrafficDataLogger
+    # Option 5: Quick test for TrafficDataLogger
     elif option == 4:
         print("--- Quick Test for TrafficDataLogger (Option 4) ---")
         test_log_dir = log_dir=Path("./logs/temp_test_logs") 
