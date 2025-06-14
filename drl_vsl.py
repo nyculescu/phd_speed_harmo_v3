@@ -83,7 +83,7 @@ sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Defaul
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
-MAX_QUEUE_LENGTH = 575.0 / 4 # vehicles (adjust based on the segment length)
+MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION = 575.0 * 3 / 7 # [vehicles], where 7 is a median vehicle length in meters, 3 is the no. of lanes and 575 is the total length in meters of 2 segments
 OBSERVATION_SPACE_SIZE = 7
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
 MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
@@ -208,12 +208,12 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    TOTAL_TRAINING_TIMESTEPS = 250_000
-    NO_OF_HR_OF_SIM = 1 # hours for training episodes
+    TOTAL_TRAINING_TIMESTEPS = 100_000
+    NO_OF_HR_OF_SIM = 4 # hours for training episodes
     EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
     NO_OF_HR_OF_EVAL = 1 # hours for evaluation
     EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
-    EVAL_FREQ = 60
+    EVAL_FREQ = 1800
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -294,7 +294,7 @@ def train_model(algorithm: str,
                     callback=[checkpoint_cb, eval_cb, custom_cb],
                     progress_bar=PROGRESS_BAR_ENABLED,
                     reset_num_timesteps=False)
-        model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}.zip"))
+        model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}_last.zip"))
     except KeyboardInterrupt:
         logger.warning(f"Training for {model_name} interrupted by user.")
     except Exception as e:
@@ -309,7 +309,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     model_load_path = Path(f"rl_models/{model_name}/best_model.zip")
     if not model_load_path.exists():
-        model_load_path = Path(f"rl_models/{model_name}/{model_name}.zip") # Try the final saved model
+        model_load_path = Path(f"rl_models/{model_name}/{model_name}_last.zip") # Try the final saved model
         if not model_load_path.exists():
             logger.error(f"Could not find model for {model_name} at {model_load_path} or best_model.zip. Exiting test.")
             return
@@ -321,11 +321,13 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
         logger.error(f"Error loading model from {model_load_path}: {e}. Exiting test.")
         return
 
-    test_sim_length = int(24 * 3600)
+    NO_OF_HR_OF_TEST = 4 # hours for testing
+    TEST_SIM_LENGTH = 3600 * NO_OF_HR_OF_TEST
+
     env = TrafficEnv(port=BASE_EVAL_SUMO_PORT,
                      model_name=model_name,
                      model_idx=0,
-                     sim_length=test_sim_length,
+                     sim_length=TEST_SIM_LENGTH,
                      base_gen_car_distrib=["bimodal", 3],
                      num_of_episodes=1,
                      reward_fn=reward_function,
@@ -336,9 +338,6 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend"):
     total_reward = 0
     step_count = 0
 
-    # Calculate expected number of steps for the progress bar
-    # sim_length for "test" mode is 24 * 3600 seconds
-    # aggregation_time is 60 seconds
     expected_test_steps = env.sim_length // env.aggregation_time
 
     logger.info(f"Starting test for {model_name}. Expected steps: {expected_test_steps}")
@@ -612,7 +611,7 @@ class TrafficEnv(gym.Env):
                     bounds = json.load(f)
                 self.max_flow = bounds.get("max_flow", MAX_FLOW)
                 self.max_occupancy = bounds.get("max_occupancy", MAX_OCCUPANCY)
-                self.max_queue_length = bounds.get("max_queue_length", MAX_QUEUE_LENGTH)
+                self.max_queue_length = bounds.get("max_queue_length", MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)
                 logger.info(f"Port {self.port}: Successfully loaded dynamic normalization bounds from {bounds_path}.")
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Port {self.port}: Failed to read bounds from {bounds_path}, using defaults. Error: {e}")
@@ -628,7 +627,7 @@ class TrafficEnv(gym.Env):
         """Sets the hardcoded default normalization bounds as instance variables."""
         self.max_flow = MAX_FLOW
         self.max_occupancy = MAX_OCCUPANCY
-        self.max_queue_length = MAX_QUEUE_LENGTH
+        self.max_queue_length = MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
 
     def _get_sumo_log_identifier(self):
         """Helper to get a consistent identifier for SUMO instance logging."""
@@ -1018,7 +1017,7 @@ class TrafficEnv(gym.Env):
         R_smooth = self._calculate_speed_smoothness() * 0.2
         
         # Queue penalty with exponential scaling
-        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH)**2, 1.0) * 0.1
+        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)**2, 1.0) * 0.1
         
         return R_flow + throughput_reward + R_smooth - queue_penalty + invalid_action_penalty + self.collisions_penalty
 
@@ -1060,7 +1059,7 @@ class TrafficEnv(gym.Env):
         R_efficiency = max(0.0, speed_efficiency) * 0.15
         
         # Queue prevention (exponential penalty)
-        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH)**1.5, 1.0) * 0.1
+        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)**1.5, 1.0) * 0.1
         
         total_reward = R_flow + R_safety + R_smoothness + R_efficiency - queue_penalty + invalid_action_penalty + self.collisions_penalty
         
@@ -1123,7 +1122,7 @@ class TrafficEnv(gym.Env):
         avg_speed = np.clip(raw_state[0], 0, MAX_SPEED_MPS) / MAX_SPEED_MPS
         flow_upstream = np.clip(raw_state[1], 0, MAX_FLOW) / MAX_FLOW
         flow_smoothed = np.clip(raw_state[2], 0, MAX_FLOW) / MAX_FLOW
-        queue_length = np.clip(raw_state[3], 0, MAX_QUEUE_LENGTH) / MAX_QUEUE_LENGTH
+        queue_length = np.clip(raw_state[3], 0, MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION) / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
         
         # Speed trend normalization: clip to [-1,1], then scale to [0,1]
         speed_trend = np.clip(raw_state[4], -SPEED_TREND_CLIP, SPEED_TREND_CLIP)
@@ -1157,7 +1156,7 @@ class TrafficEnv(gym.Env):
             # Option 3: Only set maximum allowed speed for the lane
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
-            logger.debug(f"VSL Mode 3: Set lane max speed to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode {self.vsl_enforcement}: Set lane max speed to {speed_limit_kmh} km/h")
             
         elif self.vsl_enforcement == "all_vehicles":
             # Option 1: Force all vehicles to obey speed limit immediately
@@ -1174,7 +1173,7 @@ class TrafficEnv(gym.Env):
                     except Exception as e:
                         logger.debug(f"Could not set speed for vehicle {veh_id}: {e}")
             
-            logger.debug(f"VSL Mode 1: Forced all vehicles to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced all vehicles to {speed_limit_kmh} km/h")
             
         elif self.vsl_enforcement == "electric_only":
             # Option 2: Force only electric_passenger vehicles to obey speed limit
@@ -1193,7 +1192,7 @@ class TrafficEnv(gym.Env):
                     except Exception as e:
                         logger.debug(f"Could not check/set speed for vehicle {veh_id}: {e}")
             
-            logger.debug(f"VSL Mode 2: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
+            logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
             
         else:
             logger.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using recommend.")
@@ -1317,17 +1316,6 @@ class TrafficDataLogger:
         self.data.append(step_data)
         self.step_count += 1
         self.total_reward += reward
-
-    def log_episode_end(self, episode_reward, episode_length):
-        """
-        Log episode completion data.
-        """
-        self.episode_rewards.append(episode_reward)
-        self.episode_count += 1
-        
-        if episode_reward > self.best_reward:
-            self.best_reward = episode_reward
-            logger.info(f"New best episode reward: {episode_reward:.2f}")
 
     def save_to_csv(self, filename: str):
         """
@@ -1494,7 +1482,7 @@ if __name__ == '__main__':
         reward_functions = ["mobility", "safety", "balanced"] # ["mobility", "safety", "balanced"]
         vsl_enforcements = ["electric_only", "recommend"] # ["all_vehicles", "electric_only", "recommend"]
 
-        use_hyperparams_by_optuna = True
+        use_hyperparams_by_optuna = False
         all_combinations_params_for_training = []
         process_counter = 0
         for r_fn_train in reward_functions:

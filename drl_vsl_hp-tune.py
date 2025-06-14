@@ -30,7 +30,7 @@ from drl_vsl import (
     MAX_FLOW,
     MAX_OCCUPANCY,
     SUMO_CONFIG_DIR,
-    MAX_QUEUE_LENGTH
+    MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
 )
 
 # --- 1. SETUP: DEFINE TUNING CONFIGURATIONS ---
@@ -216,7 +216,7 @@ class TrafficEnvForTuning(TrafficEnv):
                 current_bounds = {
                     "max_flow": MAX_FLOW,
                     "max_occupancy": MAX_OCCUPANCY,
-                    "max_queue_length": MAX_QUEUE_LENGTH
+                    "max_queue_length": MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
                 }
 
             # Calculate new maximums from this environment's observations
