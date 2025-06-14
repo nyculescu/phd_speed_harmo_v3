@@ -38,6 +38,7 @@ import copy
 import multiprocessing as mp # Added for parallel processing
 import csv
 from tqdm import tqdm
+import shutil
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -77,7 +78,7 @@ num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
-SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
+SUMO_EXE_GUI = sumoExecutable_gui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
@@ -208,9 +209,11 @@ def train_model(algorithm: str,
     """Trains a model using the specified algorithm and parameters."""
 
     TOTAL_TRAINING_TIMESTEPS = 250_000
-    EPISODE_SIM_LENGTH = 3600 # 1 hour for training episodes
-    eval_sim_length = 3600 * 4 # 4 hours for evaluation
-    eval_freq = 10_000
+    NO_OF_HR_OF_SIM = 1 # hours for training episodes
+    EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
+    NO_OF_HR_OF_EVAL = 1 # hours for evaluation
+    EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
+    EVAL_FREQ = 60
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -232,7 +235,7 @@ def train_model(algorithm: str,
     ])
 
     env_eval = SubprocVecEnv([
-        eval_env_constructor(model_name, eval_sim_length, reward_function, vsl_enforcement,
+        eval_env_constructor(model_name, EVAL_SIM_LENGTH, reward_function, vsl_enforcement,
                                                   sumo_port_to_use=current_eval_base_port,
                                                   sumo_binary_to_use=sumo_binary_to_use)])
 
@@ -257,7 +260,7 @@ def train_model(algorithm: str,
     model.set_logger(configure(log_dir, ["stdout", "csv", "tensorboard"]))
 
     checkpoint_cb = CheckpointCallback(
-        save_freq=eval_freq,
+        save_freq=EVAL_FREQ,
         save_path=model_dir,
         name_prefix=f"rl_model_{model_name}",
         save_replay_buffer=True,
@@ -266,8 +269,8 @@ def train_model(algorithm: str,
     )
 
     no_improve_cb = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=3, # Allow more evaluations without improvement
-        min_evals=5,
+        max_no_improvement_evals=1, # Allow more evaluations without improvement
+        min_evals=1,
         verbose=1
     )
 
@@ -275,7 +278,7 @@ def train_model(algorithm: str,
         env_eval,
         best_model_save_path=model_dir,
         log_path=log_dir,
-        eval_freq=eval_freq,
+        eval_freq=EVAL_FREQ,
         n_eval_episodes=1,
         deterministic=True,
         render=False,
@@ -1263,72 +1266,37 @@ class TrafficDataLogger:
         Initialize the traffic data logger.
         
         Args:
-            default_speed_limit (int): Default speed limit for the simulation (km/h)
+            model_name (str): Name of the model for identification.
+            log_dir (str or Path): The base directory for logs.
         """
         self.model_name = model_name
-        self.log_dir = log_dir
-
         self.default_speed_limit = 130
-        self.data = []
-        self.step_count = 0
-        self.episode_count = 0
-        self.start_time = datetime.now()
         
-        # Performance tracking variables
-        self.total_reward = 0.0
-        self.episode_rewards = []
-        self.best_reward = float('-inf')
-        self.collision_count = 0
-        
-        # Traffic metrics tracking
-        self.total_vehicles_processed = 0
-        self.avg_flow_rate = 0.0
-        self.avg_occupancy = 0.0
-        self.avg_queue_length = 0.0
-        self.speed_limit_changes = 0
-        self.last_speed_limit = 0
-
-        # Create output directory if it doesn't exist
-        self.output_dir = Path("./logs/traffic_data")
+        # *** FIX APPLIED HERE ***
+        # self.output_dir is now correctly initialized as a Path object.
+        self.output_dir = Path(log_dir) / "traffic_data"
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-        self.step_data = []
-        self.episode_data = []
         
+        # Consistently use the Path object to define the summary log path.
+        self.summary_log_path = self.output_dir / f"summary_log_{self.model_name}.csv"
+
+        # Initialize or reset data containers
+        self.data = []
+        self.episode_rewards = []
         self.reset()
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
                      flow_downstream, occupancy, queue_length, reward, action, avg_speed_before):
         """
         Log data for a single simulation step.
-        
-        Args:
-            simulation_time (float): Current simulation time in seconds
-            current_speed_limit (int): Applied speed limit in km/h
-            flow_upstream (float): Upstream traffic flow (vehicles/hour)
-            flow_downstream (float): Downstream traffic flow (vehicles/hour)
-            occupancy (float): Detector occupancy percentage
-            queue_length (float): Queue length in meters
-            reward (float): Reward received for this step
-            action (int): Action taken (0: -5km/h, 1: 0km/h, 2: +5km/h)
         """
-        # Track speed limit changes for control smoothness analysis[2]
         if current_speed_limit != self.last_speed_limit:
             self.speed_limit_changes += 1
             self.last_speed_limit = current_speed_limit
         
-        # Convert action to human-readable format
-        action_map = {0: -5, 1: 0, 2: 5}
-        if isinstance(action, np.ndarray):
-            action_scalar = action.item() if action.size == 1 else action[0]
-        else:
-            action_scalar = action
-        speed_change = action_map.get(action_scalar, 0)
-        
-        # Calculate derived metrics
-        flow_efficiency = (flow_downstream / max(flow_upstream, 1)) * 100  # Percentage
-        capacity_utilization = (flow_downstream / 7200) * 100  # Assuming max capacity 7200 veh/h
-        
+        action_map = {0: -10, 1: -5, 2: 0, 3: 5, 4: 10}
+        speed_change = action_map.get(int(action), 0)
+
         step_data = {
             'timestamp': datetime.now().isoformat(),
             'simulation_time': simulation_time,
@@ -1336,41 +1304,23 @@ class TrafficDataLogger:
             'episode': self.episode_count,
             'current_speed_limit': current_speed_limit,
             'speed_change': speed_change,
-            'action': action,
+            'action': int(action),
             'flow_upstream': flow_upstream,
             'flow_downstream': flow_downstream,
-            'flow_efficiency': flow_efficiency,
-            'capacity_utilization': capacity_utilization,
             'occupancy': occupancy,
             'queue_length': queue_length,
             'reward': reward,
             'cumulative_reward': self.total_reward + reward,
-            'speed_limit_changes_total': self.speed_limit_changes,
             'avg_speed_before_mps': avg_speed_before,
         }
         
         self.data.append(step_data)
         self.step_count += 1
         self.total_reward += reward
-        
-        # Update running averages for performance tracking
-        self._update_running_averages(flow_downstream, occupancy, queue_length)
-        
-        # Log significant events
-        if abs(speed_change) > 0:
-            logger.debug(f"Speed limit changed by {speed_change} km/h to {current_speed_limit} km/h at step {self.step_count}")
-        
-        if reward < -10:
-            logger.warning(f"Large negative reward ({reward:.2f}) at step {self.step_count}")
 
-    def log_episode_end(self, episode_reward, episode_length, final_metrics=None):
+    def log_episode_end(self, episode_reward, episode_length):
         """
         Log episode completion data.
-        
-        Args:
-            episode_reward (float): Total reward for the episode
-            episode_length (int): Number of steps in the episode
-            final_metrics (dict, optional): Additional episode metrics
         """
         self.episode_rewards.append(episode_reward)
         self.episode_count += 1
@@ -1378,234 +1328,54 @@ class TrafficDataLogger:
         if episode_reward > self.best_reward:
             self.best_reward = episode_reward
             logger.info(f"New best episode reward: {episode_reward:.2f}")
-        
-        episode_data = {
-            'episode': self.episode_count,
-            'episode_reward': episode_reward,
-            'episode_length': episode_length,
-            'avg_reward_per_step': episode_reward / max(episode_length, 1),
-            'speed_limit_changes': self.speed_limit_changes,
-            'avg_flow_rate': self.avg_flow_rate,
-            'avg_occupancy': self.avg_occupancy,
-            'avg_queue_length': self.avg_queue_length,
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        if final_metrics:
-            episode_data.update(final_metrics)
-        
-        logger.info(f"Episode {self.episode_count} completed: "
-                    f"Reward={episode_reward:.2f}, Length={episode_length}, "
-                    f"Avg Flow={self.avg_flow_rate:.1f} veh/h")
-        
-        # Reset episode-specific counters
-        self.speed_limit_changes = 0
-        self.last_speed_limit = self.default_speed_limit
 
-    def save(self):
-        import csv
-        filename = f"traffic_log_{self._get_sumo_log_identifier()}.csv"
-        with open(filename, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(self.header)
-            writer.writerows(self.data)
-
-    def _update_running_averages(self, flow_downstream, occupancy, queue_length):
-        """Update running averages for key traffic metrics."""
-        alpha = 0.1  # Exponential moving average factor
-        
-        if self.step_count == 1:
-            # Initialize with first values
-            self.avg_flow_rate = flow_downstream
-            self.avg_occupancy = occupancy
-            self.avg_queue_length = queue_length
-        else:
-            # Update exponential moving averages
-            self.avg_flow_rate = (1 - alpha) * self.avg_flow_rate + alpha * flow_downstream
-            self.avg_occupancy = (1 - alpha) * self.avg_occupancy + alpha * occupancy
-            self.avg_queue_length = (1 - alpha) * self.avg_queue_length + alpha * queue_length
-
-    def save_to_csv(self, filename=None, include_summary=True):
+    def save_to_csv(self, filename: str):
         """
-        Save logged data to CSV file with optional performance summary.
-        
+        Save logged step-by-step data to a CSV file.
+
         Args:
-            filename (str, optional): Custom filename. If None, auto-generates based on timestamp
-            include_summary (bool): Whether to include summary statistics
+            filename (str): The name of the file to save (e.g., 'log.csv').
         """
         if not self.data:
-            logger.warning("No data to save")
+            logger.warning(f"No step data to save for {filename}")
             return
-        
-        if filename is None:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"traffic_simulation_{timestamp}.csv"
-        
+
+        # *** FIX IS EFFECTIVE HERE ***
+        # The '/' operator now works because self.output_dir is a Path object.
         filepath = self.output_dir / filename
-        
+
         try:
-            # Save step-by-step data[3]
             df = pd.DataFrame(self.data)
             df.to_csv(filepath, index=False)
-            
-            # Save summary statistics if requested
-            if include_summary:
-                summary_filepath = filepath.with_suffix('.summary.csv')
-                self._save_summary_statistics(summary_filepath)
-            
-            logger.info(f"Traffic data saved to {filepath}")
-            logger.info(f"Total steps logged: {len(self.data)}")
-            
+            logger.info(f"Traffic data log saved to {filepath}")
         except Exception as e:
-            logger.error(f"Error saving data to {filepath}: {e}")
-
-    def _save_summary_statistics(self, filepath):
-        """
-        Calculates summary stats and saves them to the summary log file.
-        """
-        # Now this method just calls the calculator and handles file I/O
-        summary_stats = self._calculate_summary_statistics()
-        
-        if not summary_stats:
-            return # Do nothing if there's no data
-
-        # Your existing file writing logic
-        with open(self.summary_log_path, 'a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=summary_stats.keys())
-            if f.tell() == 0:
-                writer.writeheader()
-            writer.writerow(summary_stats)
+            logger.error(f"Error saving step data to {filepath}: {e}")
 
     def get_summary_statistics(self) -> dict:
         """
-        Public method to safely get the final summary statistics for an episode.
-        This is called by the Optuna objective function.
-        """
-        # It simply calls the private calculation method.
-        return self._calculate_summary_statistics()
-
-    def get_performance_metrics(self):
-        """
-        Get current performance metrics for monitoring during training[2].
-        
-        Returns:
-            dict: Dictionary containing key performance indicators
+        Calculates a comprehensive summary for a completed simulation run.
         """
         if not self.data:
+            logger.warning(f"No data logged for {self.model_name}; cannot generate summary.")
             return {}
-        
-        df = pd.DataFrame(self.data)
-        
-        return {
-            'total_steps': len(self.data),
-            'total_episodes': self.episode_count,
-            'current_avg_reward': np.mean(self.episode_rewards[-10:]) if len(self.episode_rewards) >= 10 else np.mean(self.episode_rewards),
-            'best_reward': self.best_reward,
-            'avg_flow_rate': self.avg_flow_rate,
-            'avg_occupancy': self.avg_occupancy,
-            'avg_queue_length': self.avg_queue_length,
-            'recent_reward_trend': np.mean(df['reward'].tail(50)) if len(df) >= 50 else np.mean(df['reward']),
-            'speed_limit_changes_rate': self.speed_limit_changes / max(len(df), 1),
-            'training_time_minutes': (datetime.now() - self.start_time).total_seconds() / 60
-        }
-
-    def reset_episode_data(self):
-        """Reset episode-specific data while keeping historical records."""
-        self.speed_limit_changes = 0
-        self.last_speed_limit = self.default_speed_limit
-        self.total_reward = 0.0
-
-    def export_for_analysis(self, export_format='pandas'):
-        """
-        Export data in various formats for external analysis.
-        
-        Args:
-            export_format (str): Format for export ('pandas', 'numpy', 'dict')
-            
-        Returns:
-            Data in requested format
-        """
-        if not self.data:
-            return None
-        
-        if export_format == 'pandas':
-            return pd.DataFrame(self.data)
-        elif export_format == 'numpy':
-            df = pd.DataFrame(self.data)
-            return df.select_dtypes(include=[np.number]).values
-        elif export_format == 'dict':
-            return self.data.copy()
-        else:
-            raise ValueError(f"Unsupported export format: {export_format}")
-
-    def __len__(self):
-        """Return number of logged steps."""
-        return len(self.data)
-
-    def __str__(self):
-        """String representation of logger status."""
-        return (f"TrafficDataLogger(steps={len(self.data)}, episodes={self.episode_count}, "
-                f"avg_reward={np.mean(self.episode_rewards) if self.episode_rewards else 0:.2f})")
-
-    def _calculate_summary_statistics(self) -> dict:
-        """
-        Calculates a comprehensive summary for a completed simulation run (e.g., a full test).
-        This method leverages the per-step data collected by the logger.
-        """
-        if not self.data:
-            logger.warning(f"No data was logged for {self.model_name} in this run. Cannot generate summary.")
-            # Return a dictionary of default zero-values.
-            return {
-                'total_steps': 0, 'total_sim_time_s': 0, 'avg_flow_vph': 0,
-                'flow_stability_std_dev': 0, 'avg_queue_m': 0, 'max_queue_m': 0,
-                'avg_speed_kph': 0, 'speed_variance': 0, 'total_control_actions': 0,
-                'control_frequency_pct': 0, 'mobility_index': 0, 'safety_index': 0,
-                'overall_performance_score': 0
-            }
 
         df = pd.DataFrame(self.data)
         
-        # --- Basic Metrics ---
+        # --- Basic & Mobility Metrics ---
         total_steps = len(df)
         total_sim_time_s = df['simulation_time'].max()
-        
-        # --- Mobility / Throughput Metrics ---
-        # Average flow over the entire run
         avg_flow_vph = df['flow_downstream'].mean()
-        # Flow stability: lower standard deviation is better
         flow_stability_std_dev = df['flow_downstream'].std()
         
-        # --- Congestion Metrics ---
+        # --- Congestion & Safety Metrics ---
         avg_queue_m = df['queue_length'].mean()
         max_queue_m = df['queue_length'].max()
-
-        # --- Safety & Smoothness Metrics ---
-        # Use a relevant speed metric. The speed limit itself is an action, so let's use the resulting traffic speed.
-        # We need to add 'avg_speed_before' to the logger first. 
-        # For now, we'll use 'current_speed_limit' as a proxy for control action variance.
-        avg_speed_kph = df['current_speed_limit'].mean() 
-        speed_variance = df['current_speed_limit'].var() # Variance of the agent's chosen speed limits.
+        avg_speed_kph = df['avg_speed_before_mps'].mean() * 3.6
+        speed_variance = df['avg_speed_before_mps'].var()
 
         # --- Control Effort Metrics ---
-        # Count how many times the agent changed the speed limit
         control_actions = df[df['speed_change'] != 0].shape[0]
         control_frequency_pct = (control_actions / total_steps) * 100 if total_steps > 0 else 0
-
-        # --- Composite Performance Indices (Example) ---
-        # Normalize metrics to a [0, 1] scale where 1 is best.
-        # Note: MAX_FLOW and MAX_QUEUE_LENGTH are from your global constants
-        norm_flow = np.clip(avg_flow_vph / MAX_FLOW, 0, 1)
-        # Penalize instability: 1 is perfect stability (std_dev=0)
-        norm_stability = 1 - np.clip(flow_stability_std_dev / (avg_flow_vph or 1), 0, 1)
-        # Invert queue: 1 is no queue
-        norm_queue = 1 - np.clip(avg_queue_m / MAX_QUEUE_LENGTH, 0, 1)
-
-        # Weight the components
-        mobility_index = (0.7 * norm_flow) + (0.3 * norm_stability)
-        safety_index = 1 - np.clip(speed_variance / 50.0, 0, 1) # Lower variance = higher safety index
-
-        # Final weighted score
-        overall_performance_score = (0.6 * mobility_index) + (0.3 * safety_index) + (0.1 * norm_queue)
 
         summary_stats = {
             'total_steps': total_steps,
@@ -1618,30 +1388,20 @@ class TrafficDataLogger:
             'speed_variance': speed_variance,
             'total_control_actions': control_actions,
             'control_frequency_pct': control_frequency_pct,
-            'mobility_index': mobility_index,
-            'safety_index': safety_index,
-            'overall_performance_score': overall_performance_score,
         }
         
-        # Round all float values for clean reporting
-        for key, value in summary_stats.items():
-            if isinstance(value, float):
-                summary_stats[key] = round(value, 3)
+        return {k: round(v, 3) if isinstance(v, float) else v for k, v in summary_stats.items()}
 
-        return summary_stats
-    
     def reset(self):
         """Resets the logger for a new episode or evaluation run."""
         self.start_time = time.time()
-        
-        # Ensure step_data is re-initialized as an empty list every time.
-        self.data = []
+        self.data.clear()
         self.last_speed_limit = self.default_speed_limit
-        
         self.step_count = 0
         self.total_reward = 0.0
         self.speed_limit_changes = 0
-            
+        self.best_reward = float('-inf')
+        self.episode_count = 0
         logger.debug(f"TrafficDataLogger for model {self.model_name} has been reset.")
 
 class TensorboardCallback(BaseCallback):
@@ -1705,11 +1465,9 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    reward_functions_to_tune = ["mobility", "safety"] # List of options: "mobility", "safety", "balanced"
-    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
-
-    option = 2
+    option = 1
     
+    # Option 1: Run a single training with tuned parameters
     if option == 1:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
@@ -1725,6 +1483,7 @@ if __name__ == '__main__':
                     hyperparams=optimal_params,
                     vsl_enforcement=vsl_enforce_mode)
 
+    # Option 2: Run parallel training for all combinations of reward functions and VSL enforcement modes
     elif option == 2:
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
@@ -1771,12 +1530,48 @@ if __name__ == '__main__':
         # for res_train in training_results: # If using a results list
         #     logger.info(res_train)
     
+    # Option 3: Evaluate a trained model with tuned parameters
     elif option == 3:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
+
+    # Option 4: Quick test for TrafficDataLogger
+    elif option == 4:
+        print("--- Quick Test for TrafficDataLogger (Option 4) ---")
+        test_log_dir = log_dir=Path("./logs/temp_test_logs") 
+        test_identifier = "QuickTest_DQN"
+        # test_id = 999
+        try:
+            logger_instance = TrafficDataLogger(
+                model_name=test_identifier,
+                log_dir=test_log_dir,
+                # test_id  
+            )
+            
+            print(f"  Logger instantiated.")
+            
+            summary_path_value = getattr(logger_instance, 'summary_log_path', 'NOT SET')
+            print(f"  summary_log_path: {summary_path_value}")
+
+            if summary_path_value not in ['NOT SET', None]:
+                # Check if the directory for the summary log was created by the logger
+                summary_dir = os.path.dirname(summary_path_value)
+                if os.path.exists(summary_dir):
+                    print(f"  Directory for summary_log_path exists: {summary_dir}")
+                else:
+                    print(f"  WARNING: Directory for summary_log_path does NOT exist: {summary_dir}")
+            
+        except NameError:
+            print("  ERROR: TrafficDataLogger class not found. Ensure it's defined or imported.")
+        except Exception as e:
+            print(f"  ERROR during TrafficDataLogger quick test: {e}")
+            # import traceback # Uncomment for full traceback if needed
+            # traceback.print_exc()
+        
+        print("--- End of Quick Test ---")
 
 """
 Accepted limitations and Future Work:
