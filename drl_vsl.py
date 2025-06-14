@@ -1270,13 +1270,8 @@ class TrafficDataLogger:
             log_dir (str or Path): The base directory for logs.
         """
         self.model_name = model_name
-<<<<<<< HEAD
-=======
-
->>>>>>> be4e433ee0c70c183deb16f84313236b4df3610d
         self.default_speed_limit = 130
         
-<<<<<<< HEAD
         # *** FIX APPLIED HERE ***
         # self.output_dir is now correctly initialized as a Path object.
         self.output_dir = Path(log_dir) / "traffic_data"
@@ -1288,55 +1283,6 @@ class TrafficDataLogger:
         # Initialize or reset data containers
         self.data = []
         self.episode_rewards = []
-=======
-        # Performance tracking variables
-        self.total_reward = 0.0
-        self.episode_rewards = []
-        self.best_reward = float('-inf')
-        self.collision_count = 0
-        
-        # Traffic metrics tracking
-        self.total_vehicles_processed = 0
-        self.avg_flow_rate = 0.0
-        self.avg_occupancy = 0.0
-        self.avg_queue_length = 0.0
-        self.speed_limit_changes = 0
-        self.last_speed_limit = 0
-
-        # Create output directory if it doesn't exist
-        self.output_dir = os.path.join(log_dir, "traffic_data")
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.traffic_log_path = os.path.join(self.output_dir, f"traffic_log_{self.model_name}.csv")
-        self.step_data = []
-        self.episode_data = []
-
-        if hasattr(self, 'traffic_log_path') and isinstance(self.traffic_log_path, str) and self.traffic_log_path:
-            _log_dir = os.path.dirname(self.traffic_log_path)
-            _log_filename = os.path.basename(self.traffic_log_path)
-
-            # Derive summary_filename from log_filename.
-            # This attempts to replace "traffic_log_" with "summary_log_".
-            # Adjust the replacement logic if your naming convention differs.
-            if _log_filename.startswith("traffic_log_"):
-                _summary_filename = _log_filename.replace("traffic_log_", "summary_log_", 1)
-            elif _log_filename.startswith("traffic_"): # A more general case
-                _summary_filename = _log_filename.replace("traffic_", "summary_", 1)
-            else:
-                # Fallback if no "traffic_" prefix is found
-                _summary_filename = f"summary_{_log_filename}"
-            
-            self.summary_log_path = os.path.join(_log_dir, _summary_filename)
-        else:
-            # If traffic_log_path isn't available or not a string, set summary_log_path to None.
-            # The code using summary_log_path might need to handle this case.
-            self.summary_log_path = None
-            # You could add a log/print statement here if this case is unexpected:
-            # print("Warning: 'traffic_log_path' not found or invalid. 'summary_log_path' set to None.")
-        
-        if hasattr(self, 'summary_log_path') and self.summary_log_path:
-            os.makedirs(os.path.dirname(self.summary_log_path), exist_ok=True)
-
->>>>>>> be4e433ee0c70c183deb16f84313236b4df3610d
         self.reset()
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
@@ -1519,11 +1465,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-<<<<<<< HEAD
     option = 2
-=======
-    option = 1
->>>>>>> be4e433ee0c70c183deb16f84313236b4df3610d
     
     # Option 1: Run a single training with tuned parameters
     if option == 1:
