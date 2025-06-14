@@ -128,7 +128,7 @@ class TrafficEnvForTuning(TrafficEnv):
             "total_vehicles_after": self.total_vehicles_after
         }
     
-    def start_sumo(self):
+    def _start_sumo(self):
         """
         Modified SUMO startup that optionally skips flow generation.
         Uses pre-generated scenario-specific flow files for consistent tuning.
@@ -141,7 +141,7 @@ class TrafficEnvForTuning(TrafficEnv):
         # All other logic is now handled by the parent's start_sumo
         # using the overridden attributes (_sumo_start_context_prefix, 
         # _default_sumo_binary_for_env, _sumo_retry_sleep_func)
-        super().start_sumo()
+        super()._start_sumo()
     
     def step(self, action):
         """
@@ -198,12 +198,12 @@ class TrafficEnvForTuning(TrafficEnv):
         # Call parent reset
         return super().reset(seed, options)
     
-    def close_sumo(self, reason):
+    def _close_sumo(self, reason):
         """Close with optional bounds updating."""
         if self.update_bounds and self.bounds_path and self.observed_values["flows"]:
             self._update_normalization_bounds()
         
-        super().close_sumo(reason)
+        super()._close_sumo(reason)
     
     def _update_normalization_bounds(self):
         """Update the normalization bounds file with new observations."""
@@ -268,7 +268,7 @@ class TrafficEnvForTuning(TrafficEnv):
         return metrics
 
     def close(self):
-        self.close_sumo("env.close()")
+        self._close_sumo("env.close()")
 
 def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, specific_params_file_path=None, vsl_enforcement="recommend",
                          tuning_process_base_port=None,

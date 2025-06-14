@@ -648,7 +648,7 @@ class TrafficEnv(gym.Env):
         # Small delay to ensure connection is fully closed
         time.sleep(0.1)
 
-    def start_sumo(self):
+    def _start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
         log_id = self._get_sumo_log_identifier()
 
@@ -662,7 +662,7 @@ class TrafficEnv(gym.Env):
                 self.is_sumo_initialized = False # Mark for restart
         
         if self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
-            self.close_sumo(f"Restarting SUMO for initialization ({log_id})")
+            self._close_sumo(f"Restarting SUMO for initialization ({log_id})")
             sleep(3) # Give a bit more time for resources to free up
         elif self.sumo_process and not psutil.pid_exists(self.sumo_process.pid):
             logger.debug(f"SUMO process handle existed for {log_id} but PID was not found. Clearing handle.")
@@ -732,7 +732,7 @@ class TrafficEnv(gym.Env):
                 
             except (FatalTraCIError, TraCIException, ConnectionRefusedError) as e:
                 logger.error(f"Attempt {attempt + 1} to start/connect SUMO ({log_id}) failed: {e}")
-                self.close_sumo(f"Failed to start/connect SUMO ({log_id}) on attempt {attempt+1}")
+                self._close_sumo(f"Failed to start/connect SUMO ({log_id}) on attempt {attempt+1}")
                 if attempt < self.sumo_max_retries - 1:
                     sleep(self._sumo_retry_sleep_func(attempt, self.sumo_max_retries)) # Use customized retry sleep
                 else:
@@ -743,7 +743,7 @@ class TrafficEnv(gym.Env):
         """Execute one step in the environment."""
         # Initialize SUMO if not already done
         if not self.is_sumo_initialized:
-            self.start_sumo()
+            self._start_sumo()
         
         # Check SUMO responsiveness
         try:
@@ -751,7 +751,7 @@ class TrafficEnv(gym.Env):
         except (FatalTraCIError, TraCIException):
             logger.error("Lost connection to SUMO, restarting...")
             self.is_sumo_initialized = False
-            self.start_sumo()
+            self._start_sumo()
             current_time = traci.simulation.getTime()
         
         # Apply action: gradual speed limit changes
@@ -784,7 +784,7 @@ class TrafficEnv(gym.Env):
         self.recent_changes.append(self.current_speed_limit - previous_speed_limit)
         
         # Apply VSL enforcement using the new method
-        self.apply_vsl_enforcement(self.current_speed_limit)
+        self._apply_vsl_enforcement(self.current_speed_limit)
         
         # Initialize data collection variables
         flow_upstream_temp = 0
@@ -805,7 +805,7 @@ class TrafficEnv(gym.Env):
                 logger.error("Lost connection during simulation steps. Terminating episode.")
                 # Return a valid 5-tuple to signal a terminal state
                 # Get the last valid observation before the crash
-                last_observation = self.preprocess_state(np.array([
+                last_observation = self._preprocess_state(np.array([
                     self.avg_speed_before, self.flow_upstream, self.flow_smoothed,
                     self.queue_length_upstream, self._calculate_speed_trend(),
                     self.occupancy_smoothed / 100.0, self.current_speed_limit
@@ -890,7 +890,7 @@ class TrafficEnv(gym.Env):
         ], dtype=np.float64)
 
         # Normalize observation for DQN
-        observation = self.preprocess_state(raw_observation)
+        observation = self._preprocess_state(raw_observation)
                 
         # Check termination conditions
         # End when simulation time reaches limit OR no more vehicles expected
@@ -926,7 +926,7 @@ class TrafficEnv(gym.Env):
         
         # Close existing SUMO if running
         if self.is_sumo_initialized:
-            self.close_sumo("Environment reset")
+            self._close_sumo("Environment reset")
         
         if not self.skip_flow_generation:
             # Randomly select a scenario for the new episode
@@ -970,7 +970,7 @@ class TrafficEnv(gym.Env):
         self.speed_history.clear()
         
         # Start fresh SUMO instance
-        self.start_sumo()
+        self._start_sumo()
                 
         raw_observation = np.array([
             self.default_speed_limit / 3.6,
@@ -980,7 +980,7 @@ class TrafficEnv(gym.Env):
 
         self.veh_passed_downstream = 0  # FIXME: Temp debug
 
-        observation = self.preprocess_state(raw_observation)
+        observation = self._preprocess_state(raw_observation)
 
         info = {
             'flow_upstream': 0, 'flow_downstream': 0, 'occupancy': 0,
@@ -1109,7 +1109,7 @@ class TrafficEnv(gym.Env):
         slope = numerator / denominator
         return float(slope)
 
-    def preprocess_state(self, raw_state):
+    def _preprocess_state(self, raw_state):
         """
         Normalize raw observation state vector to [0,1] range for DQN input.
 
@@ -1143,7 +1143,7 @@ class TrafficEnv(gym.Env):
         
         return normalized_state
 
-    def apply_vsl_enforcement(self, speed_limit_kmh):
+    def _apply_vsl_enforcement(self, speed_limit_kmh):
         """
         Apply Variable Speed Limit enforcement based on configured mode.
         
@@ -1200,7 +1200,7 @@ class TrafficEnv(gym.Env):
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
 
-    def close_sumo(self, reason: str):
+    def _close_sumo(self, reason: str):
         """Safely closes the TraCI connection and terminates the SUMO process."""
         log_id = self._get_sumo_log_identifier()
         logger.debug(f"Closing SUMO for {log_id} due to: {reason}")
@@ -1250,7 +1250,7 @@ class TrafficEnv(gym.Env):
 
     def close(self):
         """Closes the environment and its SUMO instance."""
-        self.close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
+        self._close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
         if hasattr(self.logger, 'save_to_csv') and isinstance(self.logger, TrafficDataLogger): # If using TrafficDataLogger per env
              self.logger.save_to_csv(filename=f"traffic_log_{self._get_sumo_log_identifier()}.csv")
 
