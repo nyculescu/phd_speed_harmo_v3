@@ -110,7 +110,7 @@ class TrafficEnvForTuning(TrafficEnv):
     def _verify_flow_files(self):
         """Verify that required pre-generated flow files exist."""
         expected_flow_file = f"./traffic_environment/sumo/generated_flows_{self.model_name}_{self.model_idx}.rou.xml"
-        expected_config_file = f"./traffic_environment/sumo/3_2_merge_{self.model_name}_{self.model_idx}.sumocfg"
+        expected_config_file = f"./traffic_environment/sumo/3_2_merge_{self.model_name}.sumocfg"
         
         if not os.path.exists(expected_flow_file):
             logger.error(f"Missing pre-generated flow file: {expected_flow_file}")
@@ -289,7 +289,7 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
 
     # Model name for tuning files (rou, sumocfg) should be unique per tuning process
     # This model_name is for the .rou.xml and .sumocfg files generated for the tuning scenarios
-    tuning_files_model_name = f"{algorithm}_tune_{reward_function}_{vsl_enforcement}"
+    tuning_files_model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}_tune_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     
     output_dir_sumo = Path(f"./rl_models/{algorithm}_{reward_function}_{vsl_enforcement}")
     output_dir_sumo.mkdir(parents=True, exist_ok=True)
@@ -302,9 +302,9 @@ def tune_hyperparameters(algorithm, reward_function, n_trials=N_OPTUNA_TRIALS, s
             HYPER_PARAM_SIM_LENGTH,
             num_of_episodes=1, 
             num_of_intervals=1)
-        cfg_filename = f"3_2_merge_{tuning_files_model_name}_{config['id']}.sumocfg"
+        cfg_filename = f"3_2_merge_{tuning_files_model_name}.sumocfg"
         cfg_filepath = output_dir_sumo / cfg_filename
-        cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=tuning_files_model_name, index=config['id'])
+        cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=tuning_files_model_name)
         with open(cfg_filepath, 'w') as file:
             file.write(cfg_content)
         logger.debug(f"Created {cfg_filepath} for tuning scenario id {config['id']}")
@@ -704,7 +704,7 @@ def calibrate_normalization_bounds(output_path,
             )
 
             # --- SUMO Configuration ---
-            cfg_filename = f"3_2_merge_{calibration_model_name}_{calibration_model_idx}.sumocfg"
+            cfg_filename = f"3_2_merge_{calibration_model_name}.sumocfg"
             # cfg_filepath is now correctly using the globally defined SUMO_CONFIG_DIR
             cfg_filepath = SUMO_CONFIG_DIR / cfg_filename 
             
@@ -736,8 +736,7 @@ def calibrate_normalization_bounds(output_path,
                     base_gen_car_distrib=["uniform", demand_val],
                     num_of_episodes=1,
                     reward_fn="mobility",
-                    vsl_enforcement="recommend",
-                    sumo_binary_path_override=os.path.join(os.environ.get('SUMO_HOME', ''), 'bin', SUMO_EXE_GUI)
+                    vsl_enforcement="recommend"
                 )
                 
                 for episode in range(num_episodes_per_scenario):

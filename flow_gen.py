@@ -110,7 +110,7 @@ def flow_generation(model, idx, daily_pattern, sim_length_seconds):
         sim_length_seconds: Total simulation length in seconds
     """
     # Open a .rou.xml file to write flows
-    with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
+    with open(f"./traffic_environment/sumo/generated_flows_{model}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
@@ -423,7 +423,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
         num_of_intervals: Number of intervals per episode
     """
     # Open a .rou.xml file to write flows
-    with open(f"./traffic_environment/sumo/generated_flows_{model}_{idx}.rou.xml", "w") as f:
+    with open(f"./traffic_environment/sumo/generated_flows_{model}.rou.xml", "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 

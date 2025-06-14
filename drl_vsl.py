@@ -133,7 +133,7 @@ SUMO_CFG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
             <net-file value="3_2_merge.net.xml"/>
-            <route-files value="generated_flows_{file_postfix}_{index}.rou.xml"/>
+            <route-files value="generated_flows_{file_postfix}.rou.xml"/>
             <additional-files value="loops_detectors.add.xml"/>
             <gui-settings-file value="colored.view.xml"/>
         </input>
@@ -143,15 +143,15 @@ SUMO_CFG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     </configuration>
     """
 
-def create_sumocfg(file_postfix, model_idx=0):
+def create_sumocfg(file_postfix):
     output_dir = "./traffic_environment/sumo"
     os.makedirs(output_dir, exist_ok=True)
 
-    filename = f"3_2_merge_{file_postfix}_{model_idx}.sumocfg"
+    filename = f"3_2_merge_{file_postfix}.sumocfg"
     filepath = os.path.join(output_dir, filename)
 
     # Format the template with current model and index
-    content = SUMO_CFG_TEMPLATE.format(file_postfix=file_postfix, index=model_idx)
+    content = SUMO_CFG_TEMPLATE.format(file_postfix=file_postfix)
 
     # Write the content to the file
     with open(filepath, 'w') as file:
@@ -526,7 +526,7 @@ def run_evaluation_for_combination(config_tuple):
     """
     algo, reward_fn, vsl_mode, process_id = config_tuple
     # The evaluation model name must be unique for logging and config files
-    eval_model_name = f"eval_{algo}_{reward_fn}_{vsl_mode}"
+    eval_model_name = f"{algo}_{reward_fn}_{vsl_mode}"
     
     # This is the name of the trained model we want to load
     trained_model_name = f"{algo}_{reward_fn}_{vsl_mode}"
@@ -713,7 +713,7 @@ class TrafficEnv(gym.Env):
         # For TrafficEnvForTuning, effective_model_name_for_files includes "_tune_"
         # and effective_model_idx_for_files is the scenario_id.
         # For TrafficEnv, these are the main model name and sub-env index.
-        return f"{self._sumo_start_context_prefix}{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}"
+        return f"{self._sumo_start_context_prefix}{self.effective_model_name_for_files}"
     
     def _ensure_clean_traci_state(self):
         """Ensure TraCI is in a clean state before starting SUMO."""
@@ -753,18 +753,18 @@ class TrafficEnv(gym.Env):
             try:
                 port = self.port
                 
-                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.rou.xml"
+                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}.rou.xml"
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
                     logger.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
                 timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}_{timestamp_str}.txt"
+                sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
 
                 sumo_cmd = [
                     current_sumo_binary, "-c",
-                    f"./traffic_environment/sumo/3_2_merge_{self.effective_model_name_for_files}_{self.effective_model_idx_for_files}.sumocfg",
+                    f"./traffic_environment/sumo/3_2_merge_{self.effective_model_name_for_files}.sumocfg",
                     '--start',
                     "--default.emergencydecel=7",
                     '--random-depart-offset=3600',
@@ -1532,7 +1532,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    option = 3
+    option = 1
     
     # Option 1: Run a single training with tuned parameters
     if option == 1:
@@ -1617,17 +1617,20 @@ if __name__ == '__main__':
 
         # Generate a list of configuration tuples for the worker function
         evaluation_tasks = [
-            (algo_to_use, r_fn, vsl_m, i)
-            for i, (r_fn, vsl_m) in enumerate(product(reward_functions_to_test, vsl_enforcements_to_test))
+            ("DQN", r_fn, vsl_m, i)
+            for i, (r_fn, vsl_m) in enumerate(product(["mobility", "safety", "balanced"], ["electric_only", "recommend"]))
         ]
-
         num_parallel_processes = min(len(evaluation_tasks), mp.cpu_count() - 1 or 1)
         logger.info(f"Evaluating {len(evaluation_tasks)} models using up to {num_parallel_processes} parallel processes.")
 
         # Use a multiprocessing Pool to run evaluations and collect results
         with mp.Pool(processes=num_parallel_processes) as pool:
+            results = []
             # tqdm can be used here for a nice progress bar
-            results = list(tqdm(pool.imap(run_evaluation_for_combination, evaluation_tasks), total=len(evaluation_tasks), desc="Evaluating Models"))
+            with tqdm(total=len(evaluation_tasks), desc="Evaluating Models") as pbar:
+                for result in pool.imap_unordered(run_evaluation_for_combination, evaluation_tasks):
+                    results.append(result)
+                    pbar.update(1)
 
         logger.info("--- Parallel Evaluation Complete. Consolidating results... ---")
 
