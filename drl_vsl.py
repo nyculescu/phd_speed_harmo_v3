@@ -1266,7 +1266,6 @@ class TrafficDataLogger:
             default_speed_limit (int): Default speed limit for the simulation (km/h)
         """
         self.model_name = model_name
-        self.log_dir = log_dir
 
         self.default_speed_limit = 130
         self.data = []
@@ -1289,12 +1288,38 @@ class TrafficDataLogger:
         self.last_speed_limit = 0
 
         # Create output directory if it doesn't exist
-        self.output_dir = Path("./logs/traffic_data")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-
+        self.output_dir = os.path.join(log_dir, "traffic_data")
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.traffic_log_path = os.path.join(self.output_dir, f"traffic_log_{self.model_name}.csv")
         self.step_data = []
         self.episode_data = []
+
+        if hasattr(self, 'traffic_log_path') and isinstance(self.traffic_log_path, str) and self.traffic_log_path:
+            _log_dir = os.path.dirname(self.traffic_log_path)
+            _log_filename = os.path.basename(self.traffic_log_path)
+
+            # Derive summary_filename from log_filename.
+            # This attempts to replace "traffic_log_" with "summary_log_".
+            # Adjust the replacement logic if your naming convention differs.
+            if _log_filename.startswith("traffic_log_"):
+                _summary_filename = _log_filename.replace("traffic_log_", "summary_log_", 1)
+            elif _log_filename.startswith("traffic_"): # A more general case
+                _summary_filename = _log_filename.replace("traffic_", "summary_", 1)
+            else:
+                # Fallback if no "traffic_" prefix is found
+                _summary_filename = f"summary_{_log_filename}"
+            
+            self.summary_log_path = os.path.join(_log_dir, _summary_filename)
+        else:
+            # If traffic_log_path isn't available or not a string, set summary_log_path to None.
+            # The code using summary_log_path might need to handle this case.
+            self.summary_log_path = None
+            # You could add a log/print statement here if this case is unexpected:
+            # print("Warning: 'traffic_log_path' not found or invalid. 'summary_log_path' set to None.")
         
+        if hasattr(self, 'summary_log_path') and self.summary_log_path:
+            os.makedirs(os.path.dirname(self.summary_log_path), exist_ok=True)
+
         self.reset()
 
     def log_step_data(self, simulation_time, current_speed_limit, flow_upstream, 
@@ -1705,11 +1730,9 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    reward_functions_to_tune = ["mobility", "safety"] # List of options: "mobility", "safety", "balanced"
-    vsl_enforcements_to_tune = ["all_vehicles", "electric_only", "recommend"] # List of options: "all_vehicles", "electric_only", "recommend"
-
-    option = 2
+    option = 1
     
+    # Option 1: Run a single training with tuned parameters
     if option == 1:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
@@ -1725,6 +1748,7 @@ if __name__ == '__main__':
                     hyperparams=optimal_params,
                     vsl_enforcement=vsl_enforce_mode)
 
+    # Option 2: Run parallel training for all combinations of reward functions and VSL enforcement modes
     elif option == 2:
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
@@ -1771,6 +1795,7 @@ if __name__ == '__main__':
         # for res_train in training_results: # If using a results list
         #     logger.info(res_train)
     
+    # Option 3: Evaluate a trained model with tuned parameters
     elif option == 3:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
