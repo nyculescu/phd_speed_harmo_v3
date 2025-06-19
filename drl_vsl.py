@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
+    level=getattr(logging, LOG_LEVEL, logging.WARN),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -86,7 +86,7 @@ MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
 MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION = 575.0 * 3 / 7 # [vehicles], where 7 is a median vehicle length in meters, 3 is the no. of lanes and 575 is the total length in meters of 2 segments
-OBSERVATION_SPACE_SIZE = 7
+OBSERVATION_SPACE_SIZE = 8
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
 MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
 SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
@@ -102,36 +102,42 @@ TRAFFIC_ENV_SUMO_DIR = BASE_DIR / "traffic_environment" / "sumo"
 SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be written
 NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
 
+def get_linear_schedule(initial_value: float):
+    def func(progress_remaining: float) -> float:
+        return progress_remaining * initial_value
+    return func
+
 # Enhanced hyperparameters based on traffic control research
 ENHANCED_HYPERPARAMS = {
     "DQN": {
         # --- Q-Network Architecture ---
         "policy_kwargs": {
-            "net_arch": [256, 256, 128],    # Deeper network for complex traffic patterns
+            "net_arch": [256, 256, 128], # Deeper network for complex traffic patterns
             "activation_fn": nn.ReLU,
-            'normalize_images': False
+            "normalize_images": False,
+            # "dropout": 0.1               # Regularization
         },
 
         # Core DQN Parameters
-        "learning_rate": 3e-4,              # Higher than current 1e-4
-        "buffer_size": 500000,              # Reduced from 1M for better memory efficiency
-        "batch_size": 64,                   # Increased from 32 for more stable gradients
-        "gamma": 0.995,                     # Higher discount for long-term planning
-        "tau": 0.005,                       # Soft updates instead of hard updates
+        "learning_rate": get_linear_schedule(1e-4),           # Reduced learning rate for more stable learning
+        "buffer_size": int(2e5),         # Increased buffer for better experience replay
+        "batch_size": 32,                # Smaller batch size for more frequent updates
+        "gamma": 0.995,                  # Higher discount for long-term planning
+        "tau": 0.01,                     # Hard updates
 
         # Regularization
-        "max_grad_norm": 1.0,               # Stronger gradient clipping
+        "max_grad_norm": 1.0,            # Stronger gradient clipping
 
         # Exploration
-        "exploration_fraction": 0.3,        # Longer exploration phase for traffic dynamics
-        "exploration_initial_eps": 1.0,     # Start with full exploration
-        "exploration_final_eps": 0.02,      # Lower final epsilon for more exploitation
+        "exploration_fraction": 0.5,     # Longer exploration phase for traffic dynamics
+        "exploration_initial_eps": 1.0,  # Start with full exploration
+        "exploration_final_eps": 0.02,   # Lower final epsilon for more exploitation
 
         # Training Schedule
-        "learning_starts": 5000,            # Start learning earlier
-        "train_freq": (4, "step"),          # Update every 4 environment steps
-        "target_update_interval": 5000,     # Standard periodic target network updates
-        "gradient_steps": 2,                # Multiple gradient steps per update
+        "learning_starts": 2000,         # Start learning earlier
+        "train_freq": (2, "step"),       # Update every 2 environment steps
+        "target_update_interval": 2000,  # Standard periodic target network updates
+        "gradient_steps": 2,             # Multiple gradient steps per update
     }
 }
 
@@ -212,12 +218,12 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    TOTAL_TRAINING_TIMESTEPS = 100_000
-    NO_OF_HR_OF_SIM = 4 # hours for training episodes
+    TOTAL_TRAINING_TIMESTEPS = 200_000
+    NO_OF_HR_OF_SIM = 3 # hours for training episodes
     EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
-    NO_OF_HR_OF_EVAL = 1 # hours for evaluation
+    NO_OF_HR_OF_EVAL = 4 # hours for evaluation
     EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
-    EVAL_FREQ = 1800
+    EVAL_FREQ = 3600
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -232,7 +238,10 @@ def train_model(algorithm: str,
     current_eval_base_port = process_eval_base_port if process_eval_base_port is not None else BASE_EVAL_SUMO_PORT
 
     train_env = SubprocVecEnv([
-        train_env_constructor(i, model_name, EPISODE_SIM_LENGTH, num_of_episodes, reward_function, vsl_enforcement,
+        train_env_constructor(i, model_name, EPISODE_SIM_LENGTH, 
+                              num_of_episodes, 
+                              reward_function, 
+                              vsl_enforcement,
                               sumo_port_to_use=current_train_base_port + i,
                               sumo_binary_to_use=sumo_binary_to_use)
         for i in range(num_train_envs_per_model)
@@ -273,8 +282,8 @@ def train_model(algorithm: str,
     )
 
     no_improve_cb = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=1, # Allow more evaluations without improvement
-        min_evals=1,
+        max_no_improvement_evals=5,
+        min_evals=10,
         verbose=1
     )
 
@@ -291,11 +300,12 @@ def train_model(algorithm: str,
     )
 
     custom_cb = CustomMetricsCallback()
+    enhanced_cb = EnhancedMetricsCallback()
 
     # Training loop
     try:
         model.learn(total_timesteps=TOTAL_TRAINING_TIMESTEPS,
-                    callback=[checkpoint_cb, eval_cb, custom_cb],
+                    callback=[checkpoint_cb, eval_cb, custom_cb, enhanced_cb],
                     progress_bar=PROGRESS_BAR_ENABLED,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}_last.zip"))
@@ -646,10 +656,10 @@ class TrafficEnv(gym.Env):
         self.current_speed_limit = self.default_speed_limit
         
         self.observation_space = gym.spaces.Box(
-            low=np.array([0, 0, 0, 0, -np.inf, 0, 50]),
+            low=np.array([0, 0, 0, 0, -np.inf, 0, 50, 0]),
             high=np.array([
                 self.default_speed_limit/3.6,
-                np.inf, np.inf, np.inf, np.inf, 1.0, 130
+                np.inf, np.inf, np.inf, np.inf, 1.0, 130, 1.0
             ]),
             shape=(OBSERVATION_SPACE_SIZE,),
             dtype=np.float64
@@ -891,9 +901,14 @@ class TrafficEnv(gym.Env):
                 # Return a valid 5-tuple to signal a terminal state
                 # Get the last valid observation before the crash
                 last_observation = self._preprocess_state(np.array([
-                    self.avg_speed_before, self.flow_upstream, self.flow_smoothed,
-                    self.queue_length_upstream, self._calculate_speed_trend(),
-                    self.occupancy_smoothed / 100.0, self.current_speed_limit
+                    self.avg_speed_before, 
+                    self.flow_upstream, 
+                    self.flow_smoothed,
+                    self.queue_length_upstream, 
+                    self._calculate_speed_trend(),
+                    self.occupancy_smoothed / 100.0, 
+                    self.current_speed_limit,
+                    self._calculate_speed_stability()
                 ], dtype=np.float64))
                 
                 # Return a terminal observation with a large negative reward
@@ -963,15 +978,15 @@ class TrafficEnv(gym.Env):
         self.reward_window.append(reward)
         
         # Prepare observation
-        speed_trend_val = self._calculate_speed_trend()
         raw_observation = np.array([
             self.avg_speed_before,
             self.flow_upstream,
             self.flow_smoothed,
             self.queue_length_upstream,
-            speed_trend_val,
+            self._calculate_speed_trend(),
             self.occupancy_smoothed / 100.0,
-            self.current_speed_limit
+            self.current_speed_limit,
+            self._calculate_speed_stability()
         ], dtype=np.float64)
 
         # Normalize observation for DQN
@@ -1060,10 +1075,11 @@ class TrafficEnv(gym.Env):
         raw_observation = np.array([
             self.default_speed_limit / 3.6,
             0.0, 0.0, 0.0, 0.0, 0.0,
-            self.default_speed_limit
+            self.default_speed_limit,
+            0.0
         ], dtype=np.float64)
 
-        self.veh_passed_downstream = 0  # FIXME: Temp debug
+        self.veh_passed_downstream = 0
 
         observation = self._preprocess_state(raw_observation)
 
@@ -1128,26 +1144,44 @@ class TrafficEnv(gym.Env):
 
     def _reward_balanced(self, invalid_action_penalty):   
         # Base components (your existing approach)
-        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.25
+        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.3
         
-        # Enhanced safety component (higher weight based on literature)
-        speed_variance = np.var(list(self.speed_history)) if len(self.speed_history) > 2 else 0.0
-        R_safety = max(0.0, 1.0 - (speed_variance / 400.0)) * 0.35  # Increased weight
+        # Enhanced safety component with better variance handling
+        if len(self.speed_history) > 5:  # Need more samples for reliable variance
+            speed_variance = np.var(list(self.speed_history))
+            # Use exponential decay for variance penalty
+            R_safety = max(0.0, np.exp(-speed_variance / 200.0)) * 0.4  # Higher weight, smoother function
+        else:
+            R_safety = 0.2  # Default safety score during initialization
         
-        # Control smoothness (literature emphasizes this)
+        # Enhanced control smoothness with momentum consideration
         speed_change_magnitude = abs(self.current_speed_limit - getattr(self, 'previous_speed_limit', self.current_speed_limit))
-        R_smoothness = max(0.0, 1.0 - (speed_change_magnitude / 20.0)) * 0.15
+        # Penalize frequent large changes more severely
+        R_smoothness = max(0.0, 1.0 - (speed_change_magnitude / 15.0)**1.5) * 0.15
         
-        # Efficiency with target consideration
+        # Enhanced efficiency with speed target and flow consideration
         target_speed = 100.0 / 3.6  # 100 km/h optimal
-        speed_efficiency = 1.0 - abs(self.avg_speed_before - target_speed) / target_speed
-        R_efficiency = max(0.0, speed_efficiency) * 0.15
+        if self.avg_speed_before > 0:
+            speed_efficiency = 1.0 - abs(self.avg_speed_before - target_speed) / target_speed
+            # Bonus for maintaining good flow at optimal speed
+            flow_speed_synergy = min(self.flow_smoothed / MAX_FLOW, 1.0) * max(0, speed_efficiency)
+            R_efficiency = (max(0.0, speed_efficiency) * 0.1) + (flow_speed_synergy * 0.05)
+        else:
+            R_efficiency = 0.0
         
-        # Queue prevention (exponential penalty)
-        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)**1.5, 1.0) * 0.1
+        # Enhanced queue prevention with progressive penalty
+        if self.queue_length_upstream > 0:
+            queue_ratio = self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
+            queue_penalty = min(queue_ratio**2 * 0.2, 0.2)  # Quadratic penalty, capped
+        else:
+            queue_penalty = 0.0
         
-        total_reward = R_flow + R_safety + R_smoothness + R_efficiency - queue_penalty + invalid_action_penalty + self.collisions_penalty
-        
+        # Episode progress bonus (encourages longer episodes)
+        progress_bonus = min(self.simulation_step / (self.sim_length * 0.8), 1.0) * 0.05
+
+        total_reward = (R_flow + R_safety + R_smoothness + R_efficiency + progress_bonus 
+                   - queue_penalty + invalid_action_penalty + self.collisions_penalty)
+    
         # Track previous speed limit for next iteration
         self.previous_speed_limit = self.current_speed_limit
         
@@ -1194,6 +1228,23 @@ class TrafficEnv(gym.Env):
         slope = numerator / denominator
         return float(slope)
 
+    def _calculate_speed_stability(self) -> float:
+        """
+        Calculates a metric for traffic speed stability based on historical speeds.
+        Lower standard deviation implies higher stability.
+        Returns a normalized value where higher means more stable.
+        """
+        if len(self.speed_history) > 5: # Requires enough samples for meaningful standard deviation
+            historical_speeds_array = np.array(list(self.speed_history))
+            std_dev_speeds = np.std(historical_speeds_array)
+            # Normalize std_dev to a [0, 1] range where 1 is perfect stability (0 std_dev)
+            # You might need to tune the denominator '20' based on expected speed std_dev range.
+            # A common approach is 1.0 / (1.0 + std_dev) to map [0, inf) -> (0, 1].
+            # Let's use the 1/(1+std) approach as it's more robust without hardcoded max_std.
+            speed_stability = 1.0 / (1.0 + std_dev_speeds) 
+            return float(speed_stability)
+        return 0.5 # Default/neutral value if not enough history (e.g., at episode start)
+        
     def _preprocess_state(self, raw_state):
         """
         Normalize raw observation state vector to [0,1] range for DQN input.
@@ -1215,7 +1266,9 @@ class TrafficEnv(gym.Env):
         
         occupancy = np.clip(raw_state[5], 0, 1)  # already fraction
         speed_limit = np.clip(raw_state[6], 50, 130) / 130.0
-        
+
+        speed_stability_norm = raw_state[7]
+
         normalized_state = np.array([
             avg_speed,
             flow_upstream,
@@ -1223,9 +1276,10 @@ class TrafficEnv(gym.Env):
             queue_length,
             speed_trend_norm,
             occupancy,
-            speed_limit
+            speed_limit,
+            speed_stability_norm
         ], dtype=np.float32)
-        
+
         return normalized_state
 
     def _apply_vsl_enforcement(self, speed_limit_kmh):
@@ -1526,6 +1580,18 @@ class CustomMetricsCallback(BaseCallback):
 
         return True
 
+class EnhancedMetricsCallback(BaseCallback):
+    def _on_step(self) -> bool:
+        if self.n_calls % 1000 == 0:
+            # Log additional metrics
+            self.logger.record("custom/episode_progress", 
+                             self.training_env.envs[0].current_step / 
+                             self.training_env.envs[0].max_steps)
+            
+            # Log exploration rate explicitly
+            self.logger.record("custom/current_epsilon", 
+                             self.model.exploration_rate)
+        return True
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 """ Main entry point for running the DRL VSL environment with SUMO. """
@@ -1538,10 +1604,10 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    option = 1
+    OPTION = 1
     
     # Option 1: Run a single training with tuned parameters
-    if option == 1:
+    if OPTION == 1:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
@@ -1557,7 +1623,7 @@ if __name__ == '__main__':
                     vsl_enforcement=vsl_enforce_mode)
 
     # Option 2: Run parallel training for all combinations of reward functions and VSL enforcement modes
-    elif option == 2:
+    elif OPTION == 2:
         algo_to_use = "DQN"
         logger.info("Starting parallel training for all combinations using tuned or default parameters.")
         
@@ -1604,7 +1670,7 @@ if __name__ == '__main__':
         #     logger.info(res_train)
     
     # Option 3: Evaluate a trained model with tuned parameters
-    elif option == 3:
+    elif OPTION == 3:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "balanced"
@@ -1612,7 +1678,7 @@ if __name__ == '__main__':
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 
     # Option 4: Run parallel evaluations for all combinations of reward functions and VSL enforcement modes 
-    elif option == 4:
+    elif OPTION == 4:
         logger.info("--- Starting Parallel Evaluation of All Model Combinations (Option 4) ---")
         
         # Define the combinations you want to evaluate
