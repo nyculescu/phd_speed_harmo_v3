@@ -300,12 +300,11 @@ def train_model(algorithm: str,
     )
 
     custom_cb = CustomMetricsCallback()
-    enhanced_cb = EnhancedMetricsCallback()
 
     # Training loop
     try:
         model.learn(total_timesteps=TOTAL_TRAINING_TIMESTEPS,
-                    callback=[checkpoint_cb, eval_cb, custom_cb, enhanced_cb],
+                    callback=[checkpoint_cb, eval_cb, custom_cb],
                     progress_bar=PROGRESS_BAR_ENABLED,
                     reset_num_timesteps=False)
         model.save(os.path.abspath(f"./rl_models/{model_name}/{model_name}_last.zip"))
@@ -1531,20 +1530,6 @@ class TrafficDataLogger:
         self.episode_count = 0
         logger.debug(f"TrafficDataLogger for model {self.model_name} has been reset.")
 
-class TensorboardCallback(BaseCallback):
-    def __init__(self, env, model, verbose=0):
-        super(TensorboardCallback, self).__init__(verbose)
-        self.env = env  # Store the environment
-        self.model = model  # Store the model
-
-    def _on_step(self) -> bool:
-        if self.n_calls % 100 == 0:
-            env = self.training_env.envs[0]  # assuming single env or first env
-            if hasattr(env, "speed_history") and env.speed_history:
-                mean_speed = env.speed_history[-1]
-                self.logger.record("env/mean_speed", mean_speed)
-        return True
-
 class CustomMetricsCallback(BaseCallback):
     """
     A custom callback that logs key traffic metrics from the environment to TensorBoard.
@@ -1552,6 +1537,7 @@ class CustomMetricsCallback(BaseCallback):
     """
     def __init__(self, verbose=0):
         super(CustomMetricsCallback, self).__init__(verbose)
+        self.n_calls = 0
 
     def _on_step(self) -> bool:
         # 'locals' contains all local variables from the model's 'learn' method
@@ -1578,19 +1564,16 @@ class CustomMetricsCallback(BaseCallback):
                 throughput_efficiency = final_info.get('flow_downstream', 0) / MAX_FLOW
                 self.logger.record(f'custom/env_{i}/throughput_efficiency', throughput_efficiency)
 
-        return True
-
-class EnhancedMetricsCallback(BaseCallback):
-    def _on_step(self) -> bool:
-        if self.n_calls % 1000 == 0:
-            # Log additional metrics
-            self.logger.record("custom/episode_progress", 
-                             self.training_env.envs[0].current_step / 
-                             self.training_env.envs[0].max_steps)
-            
-            # Log exploration rate explicitly
-            self.logger.record("custom/current_epsilon", 
-                             self.model.exploration_rate)
+            if self.n_calls % 1000 == 0:
+                # Log additional metrics
+                self.logger.record("custom/episode_progress", 
+                                self.training_env.envs[0].current_step / 
+                                self.training_env.envs[0].max_steps)
+                
+                # Log exploration rate explicitly
+                self.logger.record("custom/current_epsilon", 
+                                self.model.exploration_rate)
+        self.n_calls += 1
         return True
 
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
