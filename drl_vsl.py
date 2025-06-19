@@ -107,25 +107,31 @@ ENHANCED_HYPERPARAMS = {
     "DQN": {
         # --- Q-Network Architecture ---
         "policy_kwargs": {
-            "net_arch": [512, 256, 128], # Deeper network for complex traffic patterns
-            "activation_fn": nn.ReLU
+            "net_arch": [256, 256, 128],    # Deeper network for complex traffic patterns
+            "activation_fn": nn.ReLU,
+            'normalize_images': False
         },
-        
-        # --- Learning and Optimization ---
-        "learning_rate": 1e-4,              # Slower, more stable learning rate
-        "gamma": 0.995,                     # High discount factor for farsightedness
-        "batch_size": 64,                   # Larger batch size for stable gradients
-        "train_freq": (4, "step"),          # Update every 4 environment steps
-        "gradient_steps": 1,                # 1 gradient step per update
-        "tau": 1.0,                         # Hard target network update
-        
-        # --- Experience Replay and Exploration ---
-        "buffer_size": 250000,              # Larger buffer for diverse traffic states
-        "learning_starts": 10000,           # Delayed start for a quality initial buffer
-        "exploration_fraction": 0.20,       # Longer exploration phase for traffic dynamics
+
+        # Core DQN Parameters
+        "learning_rate": 3e-4,              # Higher than current 1e-4
+        "buffer_size": 500000,              # Reduced from 1M for better memory efficiency
+        "batch_size": 64,                   # Increased from 32 for more stable gradients
+        "gamma": 0.995,                     # Higher discount for long-term planning
+        "tau": 0.005,                       # Soft updates instead of hard updates
+
+        # Regularization
+        "max_grad_norm": 1.0,               # Stronger gradient clipping
+
+        # Exploration
+        "exploration_fraction": 0.3,        # Longer exploration phase for traffic dynamics
         "exploration_initial_eps": 1.0,     # Start with full exploration
-        "exploration_final_eps": 0.01,      # Lower final epsilon for more exploitation
-        "target_update_interval": 10000     # Standard periodic target network updates
+        "exploration_final_eps": 0.02,      # Lower final epsilon for more exploitation
+
+        # Training Schedule
+        "learning_starts": 5000,            # Start learning earlier
+        "train_freq": (4, "step"),          # Update every 4 environment steps
+        "target_update_interval": 5000,     # Standard periodic target network updates
+        "gradient_steps": 2,                # Multiple gradient steps per update
     }
 }
 
