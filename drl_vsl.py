@@ -774,8 +774,8 @@ class TrafficEnv(gym.Env):
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
-                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
+                # timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
 
                 sumo_cmd = [
                     current_sumo_binary, "-c",
@@ -790,7 +790,7 @@ class TrafficEnv(gym.Env):
                     "--quit-on-end",
                     "--no-step-log", 
                     "--no-warnings",
-                    "--log", sumo_log_file
+                    # "--log", sumo_log_file # FIXME: check why it doesn't save anything
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1587,7 +1587,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    OPTION = 1
+    OPTION = 2
     
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
