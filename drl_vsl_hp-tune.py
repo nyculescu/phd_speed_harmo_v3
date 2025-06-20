@@ -19,10 +19,12 @@ import multiprocessing as mp
 # Import your TrafficEnv and other shared code
 from drl_vsl import (
     TrafficEnv, SUMO_CFG_TEMPLATE, BASE_TRAIN_SUMO_PORT,
-    OPTUNA_PARAMS_DIR, SUMO_EXE_GUI, flow_generation_fix_num_veh, logger,
-    SUMO_CONFIG_DIR, NORMALIZATION_BOUNDS_FILE
+    OPTUNA_PARAMS_DIR, sumoExecutable_gui, sumoExecutable_nogui, flow_generation_fix_num_veh, logger,
+    SUMO_CONFIG_DIR
 )
 from flow_gen import flow_generation, bimodal_distribution_24h
+
+SUMO_EXE_GUI = sumoExecutable_nogui
 
 # --- 1. TUNING CONFIGURATION ---
 N_OPTUNA_TRIALS = 40
@@ -63,7 +65,7 @@ def suggest_hyperparameters(trial: optuna.Trial) -> dict:
 def objective(trial: optuna.Trial,
               reward_fn: str, 
               vsl_enforcement: str,
-              tuning_files_model_name: str, 
+              combination_name: str, 
               timesteps_per_scenario: int,
               base_port: int,
               is_validation: bool = False,
@@ -93,7 +95,7 @@ def objective(trial: optuna.Trial,
             
             env_kwargs = dict(
                 port=port,
-                model_name=tuning_files_model_name,
+                model_name=combination_name,
                 model_idx=scenario_config["id"],
                 sim_length=(timesteps_per_scenario + 10) * 60,
                 base_gen_car_distrib=[scenario_config["pattern"], scenario_config["demand"]],
@@ -101,7 +103,7 @@ def objective(trial: optuna.Trial,
                 reward_fn=reward_fn, 
                 vsl_enforcement=vsl_enforcement,
                 sumo_binary_path_override=SUMO_EXE_GUI,
-                normalization_bounds_path=NORMALIZATION_BOUNDS_FILE
+                normalization_bounds_path=OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
             )
             
             env = make_vec_env(TrafficEnv, n_envs=1, env_kwargs=env_kwargs)
@@ -132,7 +134,7 @@ def objective(trial: optuna.Trial,
             if env: env.close()
             raise e
         except Exception as e:
-            logger.error(f"Trial {trial.number}, Scenario {i} for {tuning_files_model_name} failed: {e}", exc_info=False)
+            logger.error(f"Trial {trial.number}, Scenario {i} for {combination_name} failed: {e}", exc_info=False)
             if env: env.close()
             return -1e9
         finally:
@@ -143,6 +145,15 @@ def objective(trial: optuna.Trial,
 
 def save_best_params(best_trial: optuna.trial.FrozenTrial, output_path: str, algo: str):
     logger.info(f"Formatting and saving best parameters to {output_path}...")
+    
+    try:
+        with open(output_path, "r") as f:
+            existing_data = json.load(f)
+        bounds_data = existing_data.get("bounds", {}) # Preserve the bounds dict
+    except Exception as e:
+        logger.warning(f"Could not read existing bounds from {output_path}: {e}. Bounds will not be saved.")
+        bounds_data = {}
+    
     hyperparams = best_trial.params
     net_arch = [int(x.strip()) for x in hyperparams.pop("net_arch_str").split(',')]
     train_freq_val = hyperparams["train_freq"]
@@ -166,14 +177,44 @@ def save_best_params(best_trial: optuna.trial.FrozenTrial, output_path: str, alg
         "gamma": hyperparams["gamma"],
         "policy_kwargs": {"net_arch": net_arch, "activation_fn": "nn.ReLU"}
     }
-    final_json = {algo: formatted_params}
+    
+    final_json = {
+        algo: formatted_params,
+        "bounds": bounds_data 
+    }
+
     try:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "w") as f:
             json.dump(final_json, f, indent=4)
-        logger.info(f"Successfully saved best hyperparameters to: {output_path}")
+        logger.info(f"Successfully updated hyperparameters in: {output_path}")
     except Exception as e:
-        logger.error(f"Failed to save formatted hyperparameters to {output_path}: {e}")
+        logger.error(f"Failed to save final hyperparameters to {output_path}: {e}")
+
+def create_initial_hyperparameter_file(output_path: Path, combination_name: str, process_id: int):
+    """Creates a placeholder hyperparameter file with default bounds if it does not exist."""
+    if not output_path.exists():
+        logger.info(f"[Process {process_id}] Placeholder not found. Creating default for {combination_name} at: {output_path}")
+        initial_data = {
+            "DQN": {
+                 "policy_kwargs": {"net_arch": [256, 128], "activation_fn": "nn.ReLU"},
+                 "learning_rate": 1e-4, "gamma": 0.99, "batch_size": 128, "buffer_size": 100000, 
+                 "learning_starts": 10000, "train_freq": (4, "step"), "gradient_steps": 1, 
+                 "target_update_interval": 5000, "tau": 1.0, "exploration_fraction": 0.2, 
+                 "exploration_final_eps": 0.02
+            },
+            "bounds": {
+                "max_flow": 8000.0,
+                "max_occupancy": 100.0,
+                "max_queue_length": 1500.0
+            }
+        }
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                json.dump(initial_data, f, indent=4)
+        except Exception as e:
+            logger.error(f"[Process {process_id}] FAILED to create placeholder file: {e}")
+            raise e # Raise the exception to stop this worker
 
 def run_tuning_for_one_combination(args):
     """
@@ -185,6 +226,9 @@ def run_tuning_for_one_combination(args):
     
     # Each process gets a dedicated block of ports to avoid collisions
     process_base_port = BASE_TRAIN_SUMO_PORT + process_id * 1000
+
+    placeholder_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
+    create_initial_hyperparameter_file(placeholder_path, combination_name, process_id)
 
     logger.info("\n" + "="*80)
     logger.info(f"[Process {process_id}] STARTING TUNING FOR: {combination_name} on Port Base {process_base_port}")
@@ -208,7 +252,8 @@ def run_tuning_for_one_combination(args):
             f.write(cfg_content)
 
     # Stage 1: Broad Exploration
-    study_db_path = f"sqlite:///{OPTUNA_PARAMS_DIR}/{combination_name}_study.db"
+    db_filename = f"{combination_name}_study.db"
+    study_db_path = "sqlite:///" + os.path.join(OPTUNA_PARAMS_DIR, db_filename)
     study_broad = optuna.create_study(
         study_name=f"{combination_name}_broad",
         direction="maximize",
@@ -218,7 +263,7 @@ def run_tuning_for_one_combination(args):
     )
     
     objective_broad = lambda trial: objective(
-        trial, r_fn, vsl_m, tuning_files_name, BROAD_EXPLORATION_STEPS_PER_SCENARIO, process_base_port
+        trial, r_fn, vsl_m, combination_name, BROAD_EXPLORATION_STEPS_PER_SCENARIO, process_base_port
     )
     study_broad.optimize(objective_broad, n_trials=N_OPTUNA_TRIALS, n_jobs=1)
     
@@ -249,8 +294,9 @@ def run_tuning_for_one_combination(args):
     else:
         best_validated = max(validated_results, key=lambda x: x['mean_score'])
         best_overall_trial = best_validated['trial']
+
+    output_file_path = f"{OPTUNA_PARAMS_DIR}/best_optuna_hyperparams_{combination_name}.json"
     
-    output_file_path = f"{OPTUNA_PARAMS_DIR}/best_optuna_params_{combination_name}.json"
     save_best_params(best_overall_trial, output_file_path, algo_to_tune)
     
     # Cleanup
@@ -261,6 +307,7 @@ def run_tuning_for_one_combination(args):
             logger.warning(f"Could not remove temp file {f}: {e}")
 
     logger.info(f"[Process {process_id}] FINISHED TUNING FOR: {combination_name}")
+
 
 if __name__ == '__main__':
     algo_to_tune = "DQN"

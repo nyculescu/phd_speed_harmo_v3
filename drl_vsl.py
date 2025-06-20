@@ -94,12 +94,11 @@ PORTS_PER_TUNING_PROCESS = 100 # Max trials * num_scenarios_per_trial + buffer
 HYPER_PARAM_SIM_LENGTH = 3600
 HYPER_PARAM_OPTUNA_STUD_TIMEOUT = 3600
 
-OPTUNA_PARAMS_DIR = os.path.join("rl_models", "optuna_params")
-
 BASE_DIR = Path(__file__).resolve().parent
+OPTUNA_PARAMS_DIR = BASE_DIR / "rl_models" / "optuna_params"
 TRAFFIC_ENV_SUMO_DIR = BASE_DIR / "traffic_environment" / "sumo"
 SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be written
-NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
+# NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
 
 def get_linear_schedule(initial_value: float):
     def func(progress_remaining: float) -> float:
@@ -424,7 +423,7 @@ def run_training_for_combination(config_tuple):
 
     if use_hyperparams_by_optuna:
         optuna_params_dir = os.path.join("rl_models", "optuna_params")
-        specific_optuna_params_filename = f"best_optuna_params_{algo_used}_{reward_fn}_{vsl_mode}.json"
+        specific_optuna_params_filename = f"best_optuna_hyperparams_{algo_used}_{reward_fn}_{vsl_mode}.json"
         specific_optuna_params_path = os.path.join(optuna_params_dir, specific_optuna_params_filename)
 
         if os.path.exists(specific_optuna_params_path):
@@ -698,19 +697,27 @@ class TrafficEnv(gym.Env):
         if bounds_path and os.path.exists(bounds_path):
             try:
                 with open(bounds_path, 'r') as f:
-                    bounds = json.load(f)
-                self.max_flow = bounds.get("max_flow", MAX_FLOW)
-                self.max_occupancy = bounds.get("max_occupancy", MAX_OCCUPANCY)
-                self.max_queue_length = bounds.get("max_queue_length", MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)
-                logger.info(f"Port {self.port}: Successfully loaded dynamic normalization bounds from {bounds_path}.")
+                    data = json.load(f)
+                
+                # === Look for a specific 'bounds' key in the JSON file ===
+                if "bounds" in data and isinstance(data["bounds"], dict):
+                    bounds_data = data["bounds"]
+                    self.max_flow = bounds_data.get("max_flow", MAX_FLOW)
+                    self.max_occupancy = bounds_data.get("max_occupancy", MAX_OCCUPANCY)
+                    self.max_queue_length = bounds_data.get("max_queue_length", MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)
+                    logger.info(f"Port {self.port}: Successfully loaded bounds from {bounds_path}.")
+                else:
+                    logger.warning(f"Port {self.port}: 'bounds' key not found in {bounds_path}. Using defaults.")
+                    self._set_default_normalization_bounds()
+
             except (json.JSONDecodeError, KeyError) as e:
-                logger.error(f"Port {self.port}: Failed to read bounds from {bounds_path}, using defaults. Error: {e}")
+                logger.error(f"Port {self.port}: Failed to parse {bounds_path}, using defaults. Error: {e}")
                 self._set_default_normalization_bounds()
         else:
-            if bounds_path: # Path was given but not found
+            if bounds_path:
                 logger.warning(f"Port {self.port}: Bounds file not found at {bounds_path}, using defaults.")
-            else: # Path was not given
-                logger.debug(f"Port {self.port}: No bounds file path provided, using default normalization bounds.")
+            else:
+                logger.info(f"Port {self.port}: No bounds file path provided, using defaults.")
             self._set_default_normalization_bounds()
     
     def _set_default_normalization_bounds(self):
