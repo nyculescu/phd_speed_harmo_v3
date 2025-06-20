@@ -40,7 +40,7 @@ import csv
 from tqdm import tqdm
 import shutil
 from itertools import product
-
+import numpy as np
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -86,7 +86,6 @@ MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
 MAX_SPEED_DIFF = 80.0  # km/h (130 - 50)
 MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION = 575.0 * 3 / 7 # [vehicles], where 7 is a median vehicle length in meters, 3 is the no. of lanes and 575 is the total length in meters of 2 segments
-OBSERVATION_SPACE_SIZE = 8
 PROGRESS_BAR_ENABLED = True  # Enable progress bar for training
 MAX_SPEED_MPS = 130 / 3.6       # 36.11 m/s approx
 SPEED_TREND_CLIP = 1.0          # max absolute slope value for clipping
@@ -129,12 +128,12 @@ ENHANCED_HYPERPARAMS = {
         "max_grad_norm": 1.0,            # Stronger gradient clipping
 
         # Exploration
-        "exploration_fraction": 0.5,     # Longer exploration phase for traffic dynamics
+        "exploration_fraction": 0.2,     # Agent will exploit its learned policy sooner
         "exploration_initial_eps": 1.0,  # Start with full exploration
         "exploration_final_eps": 0.02,   # Lower final epsilon for more exploitation
 
         # Training Schedule
-        "learning_starts": 2000,         # Start learning earlier
+        "learning_starts": 20000,        # The agent learns from a rich, diverse set of initial experiences
         "train_freq": (2, "step"),       # Update every 2 environment steps
         "target_update_interval": 2000,  # Standard periodic target network updates
         "gradient_steps": 2,             # Multiple gradient steps per update
@@ -218,12 +217,12 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    TOTAL_TRAINING_TIMESTEPS = 200_000
+    TOTAL_TRAINING_TIMESTEPS = 80_000
     NO_OF_HR_OF_SIM = 3 # hours for training episodes
     EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
     NO_OF_HR_OF_EVAL = 4 # hours for evaluation
     EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
-    EVAL_FREQ = 3600
+    EVAL_FREQ = 1800
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -378,7 +377,7 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend", idx=0):
     
     log_filename = f"test_run_{model_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     env.logger.save_to_csv(filename=log_filename)
-    print(f"\nDetailed step-by-step log saved to: ./logs/traffic_data/{log_filename}")
+    print(f"\nDetailed step-by-step log saved to: {log_filename}")
 
     print(f"\nTest Results for {model_name}:")
     print(f"Total Steps: {step_count}")
@@ -655,12 +654,9 @@ class TrafficEnv(gym.Env):
         self.current_speed_limit = self.default_speed_limit
         
         self.observation_space = gym.spaces.Box(
-            low=np.array([0, 0, 0, 0, -np.inf, 0, 50, 0]),
-            high=np.array([
-                self.default_speed_limit/3.6,
-                np.inf, np.inf, np.inf, np.inf, 1.0, 130, 1.0
-            ]),
-            shape=(OBSERVATION_SPACE_SIZE,),
+            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            shape=(8,),
             dtype=np.float64
         )
         
@@ -737,7 +733,7 @@ class TrafficEnv(gym.Env):
                 logger.debug("TraCI connection found active, closing it...")
                 traci.close()
         except Exception as e:
-            logger.debug(f"Error while checking/closing TraCI: {e}")
+            logger.warning(f"Error while checking/closing TraCI: {e}")
         
         # Small delay to ensure connection is fully closed
         time.sleep(0.1)
@@ -749,7 +745,7 @@ class TrafficEnv(gym.Env):
         if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
             try:
                 traci.simulation.getTime()
-                logger.debug(f"SUMO ({log_id}) is already running and responsive.")
+                # logger.debug(f"SUMO ({log_id}) is already running and responsive.")
                 return
             except (FatalTraCIError, TraCIException, ConnectionResetError, BrokenPipeError):
                 logger.warning(f"SUMO process ({log_id}) exists but not responsive, restarting...")
@@ -790,6 +786,8 @@ class TrafficEnv(gym.Env):
                     "--quit-on-end",
                     "--no-step-log", 
                     "--no-warnings",
+                    "--time-to-teleport", "-1", # Disable teleporting, which can hide problems
+                    "--collision.action", "warn",
                     # "--log", sumo_log_file # FIXME: check why it doesn't save anything
                 ]
 
@@ -1247,13 +1245,19 @@ class TrafficEnv(gym.Env):
     def _preprocess_state(self, raw_state):
         """
         Normalize raw observation state vector to [0,1] range for DQN input.
-
-        Args:
-            raw_state (np.ndarray): Raw observation from environment step.
-
-        Returns:
-            np.ndarray: Normalized state vector as float32.
+        Updated for 8 features.
         """
+        # raw_state indices:
+        # 0: avg_speed_before
+        # 1: flow_upstream
+        # 2: flow_smoothed
+        # 3: queue_length_upstream
+        # 4: speed_trend
+        # 5: occupancy_smoothed (already as fraction 0-1)
+        # 6: current_speed_limit
+        # 7: speed_stability
+
+        # Using the normalization bounds loaded from file or defaults
         avg_speed = np.clip(raw_state[0], 0, MAX_SPEED_MPS) / MAX_SPEED_MPS
         flow_upstream = np.clip(raw_state[1], 0, MAX_FLOW) / MAX_FLOW
         flow_smoothed = np.clip(raw_state[2], 0, MAX_FLOW) / MAX_FLOW
@@ -1266,6 +1270,7 @@ class TrafficEnv(gym.Env):
         occupancy = np.clip(raw_state[5], 0, 1)  # already fraction
         speed_limit = np.clip(raw_state[6], 50, 130) / 130.0
 
+        # Speed stability is already normalized between [0, 1] by the 1/(1+std) formula
         speed_stability_norm = raw_state[7]
 
         normalized_state = np.array([
@@ -1277,7 +1282,7 @@ class TrafficEnv(gym.Env):
             occupancy,
             speed_limit,
             speed_stability_norm
-        ], dtype=np.float32)
+        ], dtype=np.float64)
 
         return normalized_state
 
@@ -1346,7 +1351,7 @@ class TrafficEnv(gym.Env):
         if traci.isLoaded():
             try:
                 traci.close(wait=False)
-                logger.debug(f"TraCI connection closed for {log_id}.")
+                # logger.debug(f"TraCI connection closed for {log_id}.")
             except Exception as e:
                 logger.warning(f"Exception during traci.close() for {log_id}: {e}")
         
@@ -1389,8 +1394,6 @@ class TrafficEnv(gym.Env):
     def close(self):
         """Closes the environment and its SUMO instance."""
         self._close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
-        if hasattr(self.logger, 'save_to_csv') and isinstance(self.logger, TrafficDataLogger): # If using TrafficDataLogger per env
-             self.logger.save_to_csv(filename=f"traffic_log_{self._get_sumo_log_identifier()}.csv")
 
 class TrafficDataLogger:
     """
@@ -1415,7 +1418,7 @@ class TrafficDataLogger:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # Consistently use the Path object to define the summary log path.
-        self.summary_log_path = self.output_dir / f"summary_log_{self.model_name}.csv"
+        # self.summary_log_path = self.output_dir / f"summary_log_{self.model_name}.csv"
 
         # Initialize or reset data containers
         self.data = []
@@ -1587,7 +1590,7 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    OPTION = 2
+    OPTION = 3
     
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
