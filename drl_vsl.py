@@ -80,7 +80,7 @@ num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
-SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
+SUMO_EXE_GUI = sumoExecutable_gui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
@@ -736,7 +736,7 @@ class TrafficEnv(gym.Env):
             logger.warning(f"Error while checking/closing TraCI: {e}")
         
         # Small delay to ensure connection is fully closed
-        time.sleep(0.1)
+        time.sleep(0.5)
 
     def _start_sumo(self):
         """Initialize SUMO simulation - only start if not already running properly."""
