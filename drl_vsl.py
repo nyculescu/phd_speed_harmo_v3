@@ -101,6 +101,8 @@ TRAFFIC_ENV_SUMO_DIR = BASE_DIR / "traffic_environment" / "sumo"
 SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be written
 # NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
 
+OPTION = 0
+
 def get_linear_schedule(initial_value: float):
     def func(progress_remaining: float) -> float:
         return progress_remaining * initial_value
@@ -174,6 +176,11 @@ def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_f
     def _init():
         port_for_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_TRAIN_SUMO_PORT + idx
         
+        if OPTION == 1:
+            create_sumocfg(f"{model_name}_{idx}")
+        else:
+            create_sumocfg(model_name)
+
         # This call inside the constructor is missing sim_length
         env = Monitor(TrafficEnv(port=port_for_env,
                                 model_name=model_name,
@@ -192,6 +199,11 @@ def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="rec
     def _init():
         port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
         eval_model_idx = num_envs_per_model - 1
+
+        if OPTION == 1:
+            create_sumocfg(f"{model_name}_{num_train_envs_per_model}")
+        else:
+            create_sumocfg(model_name)
 
         env = Monitor(TimeLimit(TrafficEnv(port=port_for_eval_env,
                                             model_name=model_name,
@@ -508,9 +520,7 @@ def run_training_for_combination(config_tuple):
 
     try:
         logger.info(f"Process {process_id}: Creating SUMO config for {config_model_name_for_training}...")
-        create_sumocfg(config_model_name_for_training) 
-                                           
-        logger.info(f"Process {process_id}: Training model {config_model_name_for_training} with final hyperparams: {final_hyperparams}")
+
         train_model(algorithm=algo_used,
                     reward_function=reward_fn,
                     hyperparams=final_hyperparams, # Pass the processed hyperparams
@@ -551,11 +561,6 @@ def run_evaluation_for_combination(config_tuple):
     if not model_load_path.exists():
         logger.error(f"Process {process_id}: Model not found at {model_load_path}. Skipping.")
         return {"model_name": trained_model_name, "status": "Model not found", "total_reward": 0}
-
-    # *** FIX APPLIED HERE ***
-    # Create the unique SUMO config file required for this specific evaluation process.
-    # This must be done BEFORE the TrafficEnv is initialized.
-    create_sumocfg(eval_model_name)
     
     # Assign a unique SUMO port for this evaluation process to avoid conflicts
     eval_port = BASE_EVAL_SUMO_PORT + process_id
@@ -625,8 +630,10 @@ class TrafficEnv(gym.Env):
         self.sumo_step_length = 1  # [s] SUMO step length
         self.model_name = model_name
         self.model_idx = model_idx
-        self.effective_model_name_for_files = model_name
-        self.effective_model_idx_for_files = model_idx
+        if OPTION == 1:
+            self.effective_model_name_for_files = f"{model_name}_{model_idx}"
+        else:
+            self.effective_model_name_for_files = model_name
         self.sumo_binary_path_override = sumo_binary_path_override
         self.skip_flow_generation = False
         self.aggregation_time = 60  # [s] Data aggregation duration
@@ -730,7 +737,7 @@ class TrafficEnv(gym.Env):
     def _get_sumo_log_identifier(self):
         """Helper to get a consistent identifier for SUMO instance logging."""
         # For TrafficEnvForTuning, effective_model_name_for_files includes "_tune_"
-        # and effective_model_idx_for_files is the scenario_id.
+        # and model_idx is the scenario_id.
         # For TrafficEnv, these are the main model name and sub-env index.
         return f"{self._sumo_start_context_prefix}{self.effective_model_name_for_files}"
     
@@ -773,6 +780,7 @@ class TrafficEnv(gym.Env):
                 port = self.port
                 
                 route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}.rou.xml"
+                
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
                     logger.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
 
@@ -1032,7 +1040,7 @@ class TrafficEnv(gym.Env):
         # Close existing SUMO if running
         if self.is_sumo_initialized:
             self._close_sumo("Environment reset")
-        
+
         if not self.skip_flow_generation:
             # Randomly select a scenario for the new episode
             scenario = np.random.choice(self.training_scenarios)
@@ -1043,7 +1051,6 @@ class TrafficEnv(gym.Env):
             if self.gen_car_distrib[0] == 'uniform':
                 flow_generation_fix_num_veh(
                     self.effective_model_name_for_files, 
-                    self.effective_model_idx_for_files,
                     self.gen_car_distrib[1],
                     self.sim_length,
                     1, # Each episode is now self-contained
@@ -1052,7 +1059,6 @@ class TrafficEnv(gym.Env):
             elif self.gen_car_distrib[0] == 'bimodal':
                 flow_generation(
                     self.effective_model_name_for_files, 
-                    self.effective_model_idx_for_files,
                     bimodal_distribution_24h(self.gen_car_distrib[1]), 
                     self.sim_length
                 )
@@ -1642,6 +1648,10 @@ if __name__ == '__main__':
     
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
+        num_train_envs_per_model = min(7, args.n_envs)
+        num_test_envs_per_model = min(5, num_train_envs_per_model // 2)
+        num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model # Recalculate the dependent global variable
+
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
         reward_used = "mobility"
@@ -1649,7 +1659,6 @@ if __name__ == '__main__':
 
         optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
 
-        create_sumocfg(config_model_name)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
                     reward_function=reward_used,
                     hyperparams=optimal_params,

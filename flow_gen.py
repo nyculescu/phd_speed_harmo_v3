@@ -99,18 +99,19 @@ def triangular_distribution_24h(amplitude, x=np.arange(0, 24, 1)):
     y[y < 50] = np.random.uniform(0, 50)
     return adjust_amplitude(y.astype(int)[:24], amplitude)
 
-def flow_generation(model, idx, daily_pattern, sim_length_seconds):
+def flow_generation(model, daily_pattern, sim_length_seconds):
     """
     Generate traffic flows for a given simulation length.
     
     Args:
         model: Model name for file generation
-        idx: Model index for file generation  
         daily_pattern: List of hourly vehicle counts
         sim_length_seconds: Total simulation length in seconds
     """
+    flows_file_path = f"./traffic_environment/sumo/generated_flows_{model}.rou.xml"
+
     # Open a .rou.xml file to write flows
-    with open(f"./traffic_environment/sumo/generated_flows_{model}.rou.xml", "w") as f:
+    with open(flows_file_path, "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
@@ -408,22 +409,23 @@ def flow_generation(model, idx, daily_pattern, sim_length_seconds):
 
         f.write('</routes>\n')
 
-    logging.info(f"Flow generation complete for model {model} id {idx}.")
+    logging.info(f"Flow generation complete for model {model}.")
 
-def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seconds, num_of_episodes, num_of_intervals):
+def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, num_of_episodes, num_of_intervals):
     """
     Generate traffic flows with fixed number of vehicles per hour.
     
     Args:
         model: Model name for file generation
-        idx: Model index for file generation
         base_num_veh_per_hr: Base vehicles per hour
         sim_length_seconds: Total simulation length in seconds
         num_of_episodes: Number of episodes
         num_of_intervals: Number of intervals per episode
     """
+
+    flows_file_path = f"./traffic_environment/sumo/generated_flows_{model}.rou.xml"
     # Open a .rou.xml file to write flows
-    with open(f"./traffic_environment/sumo/generated_flows_{model}.rou.xml", "w") as f:
+    with open(flows_file_path, "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
@@ -433,7 +435,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
         total_intervals = num_of_episodes * num_of_intervals
         interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
 
-        logging.info(f"Flow generation called with: model={model}, idx={idx}, sim_length={sim_length_seconds}s")
+        logging.info(f"Flow generation called with: model={model}, sim_length={sim_length_seconds}s")
         logging.info(f"Episodes={num_of_episodes}, intervals={num_of_intervals}")
 
         # Calculate interval duration
@@ -751,7 +753,7 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
 
         f.write('</routes>\n')
 
-    logging.info(f"Flow generation complete for model {model} id {idx}.")
+    logging.info(f"Flow generation complete for model {model}.")
 
 if __name__ == '__main__':
     # flow_generation_fix_num_veh("DQN", 0, 250, 8)

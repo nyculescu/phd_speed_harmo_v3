@@ -23,7 +23,7 @@
             "console": "integratedTerminal",
             "args": [
                 "--option", "1",
-                "--n_envs", "4" // number of environments
+                "--n_envs", "5" // number of environments
             ]
         },
         {
