@@ -20,7 +20,7 @@ import multiprocessing as mp
 from drl_vsl import (
     TrafficEnv, SUMO_CFG_TEMPLATE, BASE_TRAIN_SUMO_PORT,
     OPTUNA_PARAMS_DIR, sumoExecutable_gui, sumoExecutable_nogui, flow_generation_fix_num_veh, logger,
-    SUMO_CONFIG_DIR
+    SUMO_CONFIG_DIR, logging
 )
 from flow_gen import flow_generation, bimodal_distribution_24h
 
@@ -46,6 +46,24 @@ SHARED_DEMAND_SCENARIOS = [
     {"id": 103, "demand": 3000, "pattern": "bimodal"},
     {"id": 104, "demand": 4000, "pattern": "bimodal"},
 ]
+
+def setup_worker_logging():
+    """Configures logging for each worker process in the pool."""
+    # Get the root logger used by your drl_vsl.py logger
+    worker_logger = logging.getLogger() 
+    
+    # Set the level (e.g., INFO to see progress messages)
+    worker_logger.setLevel(logging.INFO)
+    
+    # Remove any existing handlers to avoid duplicates
+    if worker_logger.hasHandlers():
+        worker_logger.handlers.clear()
+        
+    # Add a handler that prints to the console (stderr or stdout)
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    worker_logger.addHandler(handler)
 
 def suggest_hyperparameters(trial: optuna.Trial) -> dict:
     net_arch_str = trial.suggest_categorical("net_arch_str", ["128,128", "256,128", "256,256", "512,256,128"])
@@ -93,6 +111,8 @@ def objective(trial: optuna.Trial,
         try:
             port = base_port + (trial.number % 40) * len(SHARED_DEMAND_SCENARIOS) + i
             
+            normalization_bounds_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
+
             env_kwargs = dict(
                 port=port,
                 model_name=combination_name,
@@ -103,9 +123,9 @@ def objective(trial: optuna.Trial,
                 reward_fn=reward_fn, 
                 vsl_enforcement=vsl_enforcement,
                 sumo_binary_path_override=SUMO_EXE_GUI,
-                normalization_bounds_path=OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
+                normalization_bounds_path=normalization_bounds_path
             )
-            
+
             env = make_vec_env(TrafficEnv, n_envs=1, env_kwargs=env_kwargs)
             env.envs[0].skip_flow_generation = True
 
@@ -241,10 +261,10 @@ def run_tuning_for_one_combination(args):
     for sc_cfg in SHARED_DEMAND_SCENARIOS:
         sim_len_sec = (DEEP_VALIDATION_STEPS_PER_SCENARIO + 10) * 60
         if sc_cfg["pattern"] == 'uniform':
-            flow_generation_fix_num_veh(tuning_files_name, sc_cfg["id"], sc_cfg["demand"], sim_len_sec, 1, 1)
+            flow_generation_fix_num_veh(combination_name, sc_cfg["id"], sc_cfg["demand"], sim_len_sec, 1, 1)
         else:
             bimodal_pattern = bimodal_distribution_24h(sc_cfg["demand"] / 1000.0)
-            flow_generation(tuning_files_name, sc_cfg["id"], bimodal_pattern, sim_len_sec)
+            flow_generation(combination_name, sc_cfg["id"], bimodal_pattern, sim_len_sec)
         
         cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=tuning_files_name)
         cfg_filepath = SUMO_CONFIG_DIR / f"3_2_merge_{tuning_files_name}.sumocfg"
@@ -296,7 +316,6 @@ def run_tuning_for_one_combination(args):
         best_overall_trial = best_validated['trial']
 
     output_file_path = f"{OPTUNA_PARAMS_DIR}/best_optuna_hyperparams_{combination_name}.json"
-    
     save_best_params(best_overall_trial, output_file_path, algo_to_tune)
     
     # Cleanup
@@ -330,7 +349,7 @@ if __name__ == '__main__':
     if sys.platform.startswith("win") or sys.platform.startswith("darwin"):
         mp.set_start_method('spawn', force=True)
         
-    with mp.Pool(processes=num_parallel_processes) as pool:
+    with mp.Pool(processes=num_parallel_processes, initializer=setup_worker_logging) as pool:
         pool.map(run_tuning_for_one_combination, tuning_tasks)
 
     logger.info("\nAll hyperparameter tuning combinations are complete.")

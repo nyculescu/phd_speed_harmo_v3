@@ -21,3 +21,4 @@ eval/rew_func/*/reward_speed_plots/*.png
 misc.py
 DQN_tune_*.db
 rl_models/*/3_2_merge_*.sumocfg
+rl_models/optuna_params/*.db
