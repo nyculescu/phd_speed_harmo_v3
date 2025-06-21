@@ -80,7 +80,7 @@ num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
-SUMO_EXE_GUI = sumoExecutable_gui # NOTE: Change this to define which SUMO executable is used
+SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
@@ -1613,17 +1613,16 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    OPTION = 3
+    OPTION = 1
     
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
-        reward_used = "balanced"
+        reward_used = "mobility"
         config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
 
         optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
-        # optimal_params["gamma"] = 0.95 # Override gamma to 0.95 for this run FIXME: Temp debug, remove later
 
         create_sumocfg(config_model_name)  # Add vsl_mode parameter
         train_model(algorithm=algo_to_use, 
