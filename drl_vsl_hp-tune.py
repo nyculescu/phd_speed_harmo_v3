@@ -27,11 +27,9 @@ from flow_gen import flow_generation, bimodal_distribution_24h
 SUMO_EXE_GUI = sumoExecutable_nogui
 
 # --- 1. TUNING CONFIGURATION ---
-N_OPTUNA_TRIALS = 40
-# *** KEY CHANGE FOR PARALLELISM ***
-# We let the outer multiprocessing Pool handle the parallelism across combinations.
-# Each individual Optuna study will run its trials sequentially (n_jobs=1) to avoid
-# CPU over-subscription (e.g., 6 processes * 6 jobs = 36 jobs).
+N_OPTUNA_TRIALS = 50
+# The outer multiprocessing Pool handles the parallelism across combinations.
+# Each individual Optuna study will run its trials sequentially (n_jobs=1) to avoid CPU over-subscription (e.g., 6 processes * 6 jobs = 36 jobs).
 N_JOBS_PER_STUDY = 1
 
 NUM_CANDIDATES_TO_VALIDATE = 3
@@ -163,50 +161,95 @@ def objective(trial: optuna.Trial,
 
     return total_performance_score / len(SHARED_DEMAND_SCENARIOS)
 
-def save_best_params(best_trial: optuna.trial.FrozenTrial, output_path: str, algo: str):
-    logger.info(f"Formatting and saving best parameters to {output_path}...")
+def save_best_params(proposed_trial: optuna.trial.FrozenTrial,
+                     output_path: str,
+                     algo: str,
+                     proposed_mean_score: float,
+                     run_timestamp: str):
     
+    logger.info(f"Gatekeeper save function initiated for {output_path} with proposed score: {proposed_mean_score:.2f}")
+
+    # --- 1. LOAD EXISTING DATA AND BEST HISTORICAL SCORE ---
     try:
         with open(output_path, "r") as f:
             existing_data = json.load(f)
-        bounds_data = existing_data.get("bounds", {}) # Preserve the bounds dict
-    except Exception as e:
-        logger.warning(f"Could not read existing bounds from {output_path}: {e}. Bounds will not be saved.")
-        bounds_data = {}
-    
-    hyperparams = best_trial.params
-    net_arch = [int(x.strip()) for x in hyperparams.pop("net_arch_str").split(',')]
-    train_freq_val = hyperparams["train_freq"]
-    if isinstance(train_freq_val, int):
-        train_freq_tuple = (train_freq_val, "step")
+        
+        validation_history = existing_data.get("validation_history", [])
+        
+        # Find the best score from all previous runs
+        if validation_history:
+            best_historical_score = max(entry['mean_score'] for entry in validation_history)
+        else:
+            best_historical_score = -float('inf') # No history, so any new score is the best
+
+    except (FileNotFoundError, json.JSONDecodeError):
+        # File doesn't exist or is invalid, start from scratch
+        existing_data = {}
+        validation_history = []
+        best_historical_score = -float('inf')
+
+    logger.info(f"Best historical score: {best_historical_score:.2f}. New proposed score: {proposed_mean_score:.2f}")
+
+    # --- 2. COMPARE AND DECIDE WHETHER TO UPDATE HYPERPARAMETERS ---
+    if proposed_mean_score > best_historical_score:
+        logger.info("New score is better! Updating the main hyperparameter block.")
+        
+        # This block is executed only if the new trial is the best one ever seen.
+        hyperparams = proposed_trial.params
+        net_arch = [int(x.strip()) for x in hyperparams.pop("net_arch_str").split(',')]
+        train_freq_val = hyperparams.get("train_freq", (4, "step"))
+        train_freq_tuple = tuple(train_freq_val) if isinstance(train_freq_val, list) else (train_freq_val, "step")
+
+        formatted_params = {
+            "learning_rate": hyperparams["learning_rate"],
+            "buffer_size": hyperparams["buffer_size"],
+            "batch_size": hyperparams["batch_size"],
+            "target_update_interval": hyperparams["target_update_interval"],
+            "exploration_fraction": hyperparams["exploration_fraction"],
+            "exploration_initial_eps": 1.0,
+            "exploration_final_eps": hyperparams["exploration_final_eps"],
+            "learning_starts": 20000,
+            "train_freq": train_freq_tuple,
+            "gradient_steps": 1,
+            "tau": 1.0,
+            "gamma": hyperparams["gamma"],
+            "policy_kwargs": {"net_arch": net_arch, "activation_fn": "nn.ReLU"}
+        }
+        # Update the algorithm's hyperparameter block in our data object
+        existing_data[algo] = formatted_params
     else:
-        train_freq_tuple = tuple(train_freq_val)
-    
-    formatted_params = {
-        "learning_rate": hyperparams["learning_rate"],
-        "buffer_size": hyperparams["buffer_size"],
-        "batch_size": hyperparams["batch_size"],
-        "target_update_interval": hyperparams["target_update_interval"],
-        "exploration_fraction": hyperparams["exploration_fraction"],
-        "exploration_initial_eps": 1.0,
-        "exploration_final_eps": hyperparams["exploration_final_eps"],
-        "learning_starts": 10000,
-        "train_freq": train_freq_tuple,
-        "gradient_steps": 1,
-        "tau": 1.0,
-        "gamma": hyperparams["gamma"],
-        "policy_kwargs": {"net_arch": net_arch, "activation_fn": "nn.ReLU"}
+        logger.info("Proposed score is not better than historical best. Main hyperparameters will not be changed.")
+        # If the 'algo' block doesn't even exist (e.g., first run was bad), create a placeholder
+        if algo not in existing_data:
+            existing_data[algo] = {} # Prevents KeyError later
+
+    # --- 3. APPEND THE CURRENT RUN TO THE HISTORY (ALWAYS) ---
+    new_validation_entry = {
+        "timestamp": run_timestamp,
+        "mean_score": round(proposed_mean_score, 4),
+        "params": proposed_trial.params # Also save the params of this run for full traceability
     }
+    validation_history.append(new_validation_entry)
+    validation_history.sort(key=lambda x: x["timestamp"]) # Keep it chronological
     
+    # Update the history in our data object
+    existing_data["validation_history"] = validation_history
+
+    # --- 4. PRESERVE BOUNDS and SAVE THE FILE ---
+    # Ensure the bounds dict is preserved or initialized
+    if "bounds" not in existing_data:
+        existing_data["bounds"] = {}
+
     final_json = {
-        algo: formatted_params,
-        "bounds": bounds_data 
+        algo: existing_data[algo],
+        "bounds": existing_data.get("bounds"),
+        "validation_history": existing_data["validation_history"]
     }
 
     try:
         with open(output_path, "w") as f:
             json.dump(final_json, f, indent=4)
-        logger.info(f"Successfully updated hyperparameters in: {output_path}")
+        logger.info(f"Successfully updated file: {output_path}")
     except Exception as e:
         logger.error(f"Failed to save final hyperparameters to {output_path}: {e}")
 
@@ -218,8 +261,8 @@ def create_initial_hyperparameter_file(output_path: Path, combination_name: str,
             "DQN": {
                  "policy_kwargs": {"net_arch": [256, 128], "activation_fn": "nn.ReLU"},
                  "learning_rate": 1e-4, "gamma": 0.99, "batch_size": 128, "buffer_size": 100000, 
-                 "learning_starts": 10000, "train_freq": (4, "step"), "gradient_steps": 1, 
-                 "target_update_interval": 5000, "tau": 1.0, "exploration_fraction": 0.2, 
+                 "learning_starts": 20000, "train_freq": (4, "step"), "gradient_steps": 1, 
+                 "target_update_interval": 2000, "tau": 1.0, "exploration_fraction": 0.2, 
                  "exploration_final_eps": 0.02
             },
             "bounds": {
@@ -308,15 +351,27 @@ def run_tuning_for_one_combination(args):
         validated_results.append({"trial": candidate_trial, "mean_score": avg_score})
         logger.info(f"[Process {process_id}] Candidate {i+1} for {combination_name} validation: Mean Score={avg_score:.2f} +/- {std_score:.2f}")
 
+    final_mean_score = 0.0
     # Final Step: Save Best
     if not validated_results:
         best_overall_trial = study_broad.best_trial
+        final_mean_score = best_overall_trial.value
     else:
         best_validated = max(validated_results, key=lambda x: x['mean_score'])
         best_overall_trial = best_validated['trial']
+        final_mean_score = best_validated['mean_score']
 
-    output_file_path = f"{OPTUNA_PARAMS_DIR}/best_optuna_hyperparams_{combination_name}.json"
-    save_best_params(best_overall_trial, output_file_path, algo_to_tune)
+    output_file_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
+    
+    # This call now proposes the result to the gatekeeper function
+    if best_overall_trial is not None:
+        save_best_params(
+            best_overall_trial,
+            str(output_file_path),
+            algo_to_tune,
+            proposed_mean_score=final_mean_score,
+            run_timestamp=run_timestamp
+        )
     
     # Cleanup
     for f in glob.glob(f"./traffic_environment/sumo/*{tuning_files_name}*"):

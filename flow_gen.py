@@ -427,6 +427,8 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"
         flows = [] # Collect flows here
 
+        max_end_time = 0
+
         # Calculate interval duration based on sim_length and intervals
         total_intervals = num_of_episodes * num_of_intervals
         interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
@@ -560,6 +562,8 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
                     end_time = min(begin_time + 60, sim_length_seconds)
 
                 logging.debug(f"Flow interval {ep}_{i}: begin={begin_time}, end={end_time}, duration={end_time-begin_time}s")
+
+                max_end_time = max(max_end_time, end_time)
 
                 # Create flows for each vehicle type based on their proportions
                 for vehicle_type in proportions:
@@ -734,9 +738,10 @@ def flow_generation_fix_num_veh(model, idx, base_num_veh_per_hr, sim_length_seco
         f.write('\n')
 
         if flows:
+            # Get the begin_time of the very first flow
             first_flow_time = flows[0][0]
-            last_flow_time = flows[-1][0] if flows else 0
-            logging.info(f"Generated {len(flows)} flows from time {first_flow_time}s to {last_flow_time}s")
+            # Use the tracked max_end_time for the last flow time
+            logging.info(f"Generated {len(flows)} flows from time {first_flow_time}s to {max_end_time}s")
         else:
             logging.warning("No flows were generated!")
     

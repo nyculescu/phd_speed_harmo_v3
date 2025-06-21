@@ -1124,26 +1124,42 @@ class TrafficEnv(gym.Env):
         # Queue penalty with exponential scaling
         queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)**2, 1.0) * 0.1
         
+        # Add a small stability penalty as a small negative term proportional to speed variance. 
+        # This acts as a regularizer, discouraging the agent from achieving high flow at the cost of extreme instability.
+        speed_variance = np.var(list(self.speed_history)) if len(self.speed_history) > 2 else 0.0
+        stability_penalty = min(speed_variance / 500.0, 1.0) * 0.05 # small weight
+        
+        return R_flow + throughput_reward + R_smooth - queue_penalty - stability_penalty + invalid_action_penalty + self.collisions_penalty
+
         return R_flow + throughput_reward + R_smooth - queue_penalty + invalid_action_penalty + self.collisions_penalty
 
     def _reward_safety_focused(self, invalid_action_penalty):
-        """
-        Safety-focused reward function emphasizing crash risk reduction and speed variance.
-        Targets 19.4% lower crash risk as shown in research.
-        """
-        # Primary: Speed harmonization (reduce variance)
-        R_smooth = self._calculate_speed_smoothness() * 0.4
+        # Primary: Speed harmonization (variance reduction)
+        # This remains the core component.
+        R_safety_variance = self._calculate_speed_smoothness() * 0.5 # Increased weight
+
+        # Secondary: Maintain speed in an optimal safety band (e.g., 80-100 km/h)
+        target_speed_lower_bound_ms = 80 / 3.6
+        target_speed_upper_bound_ms = 100 / 3.6
         
-        # Secondary: Average speed maintenance
-        avg_speed_reward = min(self.avg_speed_before / (self.default_speed_limit / 3.6), 1.0) * 0.3
-        
-        # Tertiary: Flow efficiency
-        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.2
-        
-        # Enhanced collision penalty
-        collision_penalty = self.collisions_penalty * 2  # Double weight for safety focus
-        
-        reward = R_smooth + avg_speed_reward + R_flow + collision_penalty + invalid_action_penalty
+        if target_speed_lower_bound_ms <= self.avg_speed_before <= target_speed_upper_bound_ms:
+            # Reward for being inside the optimal band
+            R_safety_speed_band = 0.3 
+        else:
+            # Penalize for being outside the band (either too fast or too slow/congested)
+            # Calculate distance from the nearest edge of the band
+            distance_from_band = min(abs(self.avg_speed_before - target_speed_lower_bound_ms),
+                                    abs(self.avg_speed_before - target_speed_upper_bound_ms))
+            # Penalty increases as you move away from the band
+            R_safety_speed_band = -min( (distance_from_band / (130/3.6))**2, 1.0 ) * 0.3
+
+        # Tertiary: A small incentive to maintain flow
+        R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.1 # Reduced weight
+
+        # Enhanced collision penalty remains critical
+        collision_penalty = self.collisions_penalty * 2
+
+        reward = R_safety_variance + R_safety_speed_band + R_flow + collision_penalty + invalid_action_penalty
         return float(reward)
 
     def _reward_balanced(self, invalid_action_penalty):   
