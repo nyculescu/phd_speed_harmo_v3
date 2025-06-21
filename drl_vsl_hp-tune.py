@@ -27,41 +27,109 @@ from flow_gen import flow_generation, bimodal_distribution_24h
 SUMO_EXE_GUI = sumoExecutable_nogui
 
 # --- 1. TUNING CONFIGURATION ---
-N_OPTUNA_TRIALS = 50
-# The outer multiprocessing Pool handles the parallelism across combinations.
-# Each individual Optuna study will run its trials sequentially (n_jobs=1) to avoid CPU over-subscription (e.g., 6 processes * 6 jobs = 36 jobs).
+N_OPTUNA_TRIALS = 30
 N_JOBS_PER_STUDY = 1
-
 NUM_CANDIDATES_TO_VALIDATE = 3
 N_VALIDATION_SEEDS = 3
-BROAD_EXPLORATION_STEPS_PER_SCENARIO = 60
-DEEP_VALIDATION_STEPS_PER_SCENARIO = 200
+BROAD_EXPLORATION_STEPS_PER_SCENARIO = 2000
+DEEP_VALIDATION_STEPS_PER_SCENARIO = 3000
 
 SHARED_DEMAND_SCENARIOS = [
-    {"id": 100, "demand": 3500, "pattern": "uniform"},
-    {"id": 101, "demand": 4500, "pattern": "uniform"},
-    {"id": 102, "demand": 5500, "pattern": "uniform"},
-    {"id": 103, "demand": 3000, "pattern": "bimodal"},
+    {"id": 100, "demand": 2500, "pattern": "uniform"},
+    {"id": 101, "demand": 3000, "pattern": "uniform"},
+    {"id": 102, "demand": 3000, "pattern": "bimodal"},
+    {"id": 103, "demand": 3500, "pattern": "uniform"},
     {"id": 104, "demand": 4000, "pattern": "bimodal"},
+    {"id": 105, "demand": 4500, "pattern": "bimodal"},
+    {"id": 106, "demand": 5000, "pattern": "bimodal"},
 ]
 
-def setup_worker_logging():
-    """Configures logging for each worker process in the pool."""
-    # Get the root logger used by your drl_vsl.py logger
-    worker_logger = logging.getLogger() 
+HYPERPARAM_FOCUSED_RUN = True  # Set to True for a focused search space, False for full exploration
+"""
+The "Sensitive" Parameters (The Search Focus)
+* "net_arch_str": trial.suggest_categorical(...)
+    What it does: Searches over three distinct network sizes.
+    Justification: The neural network's architecture dictates the agent's representational capacity. 
+    A network that is too small ([128,128]) may underfit, failing to capture the complex, 
+    non-linear dynamics of traffic flow. A network that is too large may be slow to train and prone to 
+    overfitting on the limited data from a short run. The choice of architecture is a fundamental 
+    trade-off between model capacity and learnability. Therefore, it is essential to include it in 
+    the search as it is a primary determinant of final policy quality. This aligns with the universal 
+    machine learning principle of model selection.
+* "learning_rate": trial.suggest_float(..., log=True)
+    What it does: Searches for the optimal step size for the Adam optimizer, on a logarithmic scale. 
+    The range 5e-5 to 5e-4 is a focused "sweet spot."
+    Justification: The learning rate is arguably the single most sensitive hyperparameter in training 
+    deep neural networks [Goodfellow, Bengio, & Courville, 2016, "Deep Learning"]. If it's too high, 
+    the training will be unstable and may diverge. If it's too low, learning will be prohibitively slow, 
+    especially within a constrained budget. Searching on a logarithmic scale is critical, as a change 
+    from 1e-4 to 2e-4 has a much larger impact than a change from 1e-3 to 1.1e-3. This focuses the search 
+    on the most impactful orders of magnitude.
+* "gamma": trial.suggest_categorical(...)
+    What it does: Searches over three high-value discount factors.
+    Justification: The discount factor, gamma, defines the agent's planning horizon. It determines how much 
+    weight is given to future rewards versus immediate rewards. In traffic control, the objective is to prevent 
+    future congestion, making it a "farsighted" problem. A gamma value close to 1 is theoretically necessary for 
+    the agent to learn proactive, long-term strategies. However, values very close to 1 (e.g., 0.999) can increase 
+    variance in the value estimates. Therefore, exploring this high-value range is critical to finding 
+    the optimal balance between foresight and learning stability for this specific task.
+The "Robust" Parameters (Fixed for Efficiency)
+* "buffer_size": 100000
+    Justification: The experience replay buffer is essential for breaking temporal correlations in the data. 
+    While a larger buffer can provide more diverse samples, it also means that older, potentially off-policy 
+    data persists longer. For a short run, a moderately sized buffer of 100,000 provides a good balance. 
+    It is large enough to ensure sample diversity without being so large that the agent cannot fill it 
+    with meaningful experiences within the trial's duration.
+* "batch_size": 128
+    Justification: The batch size controls the trade-off between the accuracy of the gradient estimate and 
+    the speed of updates. A size of 128 is a widely used and robust default in DRL literature that provides 
+    a stable gradient estimate without being computationally prohibitive.
+* "target_update_interval": 5000
+    Justification: This parameter determines the stability of the TD (Temporal-Difference) target. 
+    An update interval of 5,000 steps is a standard default in many successful 
+    DQN implementations (including Stable-Baselines3). It ensures the target network remains stable long enough 
+    for the Q-network to learn towards it, preventing the "moving target" problem.
+* "exploration_fraction": 0.15 and "exploration_final_eps": 0.05
+    Justification: These parameters define a linear annealing schedule for the exploration rate (epsilon). 
+    A schedule that anneals over 15% of the total timesteps to a final value of 5% exploration 
+    is a standard configuration that ensures sufficient initial exploration to discover the 
+    environment's dynamics, followed by a phase of exploitation to refine the learned policy.
+* "learning_starts": 5000
+    Justification: This parameter ensures the replay buffer is populated with a minimum number 
+    of diverse experiences before learning begins. Starting to learn from a small or correlated 
+    set of initial samples can lead to catastrophic forgetting or convergence to a poor local optimum. 
+    A value of 5,000 is a safe minimum that ensures initial learning batches are representative.
+"""
+def suggest_hyperparameters_for_short_run(trial: optuna.Trial) -> dict:
+    """
+    An informed and focused search space for a budget-constrained hyperparameter search.
+
+    To maximize the efficiency of the hyperparameter search within a limited computational budget, 
+    this function is used as a strategy of focused parameter space design. 
+    Based on a review of DRL applications in traffic control, the learning rate, network architecture, 
+    and discount factor are identified as the most critical determinants of agent performance. 
+    """
     
-    # Set the level (e.g., INFO to see progress messages)
-    worker_logger.setLevel(logging.INFO)
-    
-    # Remove any existing handlers to avoid duplicates
-    if worker_logger.hasHandlers():
-        worker_logger.handlers.clear()
-        
-    # Add a handler that prints to the console (stderr or stdout)
-    handler = logging.StreamHandler(sys.stdout)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    worker_logger.addHandler(handler)
+    # --- Define the fixed, "robust" parameters ---
+    hyperparams = {
+        "buffer_size": 100000,
+        "batch_size": 128,
+        "target_update_interval": 5000,
+        "exploration_fraction": 0.15,
+        "exploration_final_eps": 0.05,
+        "learning_starts": 5000,
+        "train_freq": 4, # This will be correctly converted to a tuple later
+        "gradient_steps": 1,
+    }
+
+    # --- Suggest the "sensitive" parameters and update the dictionary ---
+    hyperparams.update({
+        "net_arch_str": trial.suggest_categorical("net_arch_str", ["128,128", "256,128", "512,256,128"]),
+        "learning_rate": trial.suggest_float("learning_rate", 5e-5, 5e-4, log=True),
+        "gamma": trial.suggest_categorical("gamma", [0.99, 0.995, 0.999]),
+    })
+
+    return hyperparams
 
 def suggest_hyperparameters(trial: optuna.Trial) -> dict:
     net_arch_str = trial.suggest_categorical("net_arch_str", ["128,128", "256,128", "256,256", "512,256,128"])
@@ -88,13 +156,27 @@ def objective(trial: optuna.Trial,
               fixed_params: Optional[dict] = None) -> float:
     
     if is_validation:
-        hyperparams = fixed_params
+        hyperparams = {
+            "buffer_size": 100000,
+            "batch_size": 128,
+            "target_update_interval": 5000,
+            "exploration_fraction": 0.15,
+            "exploration_final_eps": 0.05,
+            "learning_starts": 5000,
+            "train_freq": 4,
+            "gradient_steps": 1,
+        }
+        hyperparams.update(fixed_params)
     else:
-        hyperparams = suggest_hyperparameters(trial)
+        if HYPERPARAM_FOCUSED_RUN:
+            logger.info(f"Using focused hyperparameter search for trial {trial.number} in {combination_name}")
+            hyperparams = suggest_hyperparameters_for_short_run(trial)
+        else:
+            logger.info(f"Using full hyperparameter search for trial {trial.number} in {combination_name}")
+            hyperparams = suggest_hyperparameters(trial)
 
     net_arch = [int(x.strip()) for x in hyperparams["net_arch_str"].split(',')]
     policy_kwargs = {"net_arch": net_arch, "activation_fn": nn.ReLU}
-    
     model_params = hyperparams.copy()
     del model_params["net_arch_str"]
     if isinstance(model_params["train_freq"], int):
@@ -107,10 +189,9 @@ def objective(trial: optuna.Trial,
     for i, scenario_config in enumerate(SHARED_DEMAND_SCENARIOS):
         env = None
         try:
-            port = base_port + (trial.number % 40) * len(SHARED_DEMAND_SCENARIOS) + i
-            
+            port = base_port + (trial.number % 100) + i
             normalization_bounds_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
-
+            
             env_kwargs = dict(
                 port=port,
                 model_name=combination_name,
@@ -129,7 +210,7 @@ def objective(trial: optuna.Trial,
 
             model = DQN("MlpPolicy", env, verbose=0, policy_kwargs=policy_kwargs, **model_params, device='cuda')
             
-            model.learn(total_timesteps=timesteps_per_scenario, progress_bar=False)
+            model.learn(total_timesteps=timesteps_per_scenario, progress_bar=True)
             
             obs = env.reset()
             cumulative_reward = 0
@@ -173,17 +254,12 @@ def save_best_params(proposed_trial: optuna.trial.FrozenTrial,
     try:
         with open(output_path, "r") as f:
             existing_data = json.load(f)
-        
         validation_history = existing_data.get("validation_history", [])
-        
-        # Find the best score from all previous runs
         if validation_history:
             best_historical_score = max(entry['mean_score'] for entry in validation_history)
         else:
-            best_historical_score = -float('inf') # No history, so any new score is the best
-
+            best_historical_score = -float('inf')
     except (FileNotFoundError, json.JSONDecodeError):
-        # File doesn't exist or is invalid, start from scratch
         existing_data = {}
         validation_history = []
         best_historical_score = -float('inf')
@@ -194,47 +270,68 @@ def save_best_params(proposed_trial: optuna.trial.FrozenTrial,
     if proposed_mean_score > best_historical_score:
         logger.info("New score is better! Updating the main hyperparameter block.")
         
-        # This block is executed only if the new trial is the best one ever seen.
-        hyperparams = proposed_trial.params
-        net_arch = [int(x.strip()) for x in hyperparams.pop("net_arch_str").split(',')]
-        train_freq_val = hyperparams.get("train_freq", (4, "step"))
-        train_freq_tuple = tuple(train_freq_val) if isinstance(train_freq_val, list) else (train_freq_val, "step")
+        # --- THIS IS THE CRITICAL FIX ---
+        # `proposed_trial.params` only contains the searched parameters.
+        # We must reconstruct the full dictionary by combining it with our fixed values.
+        
+        # Start with the base of fixed parameters (must match suggest_hyperparameters_for_short_run)
+        if HYPERPARAM_FOCUSED_RUN:
+            full_hyperparams = {
+                "buffer_size": 100000,
+                "batch_size": 128,
+                "target_update_interval": 5000,
+                "exploration_fraction": 0.15,
+                "exploration_final_eps": 0.05,
+                "learning_starts": 5000,
+                "train_freq": 4,
+                "gradient_steps": 1,
+            }
+            # Update with the values that were actually searched
+            full_hyperparams.update(proposed_trial.params)
+        else:
+            # If not a focused run, then trial.params should contain everything
+            full_hyperparams = proposed_trial.params
 
+        # --- Now, build the formatted_params dict using the complete 'full_hyperparams' ---
+        net_arch = [int(x.strip()) for x in full_hyperparams.pop("net_arch_str").split(',')]
+        
+        # Use .get() for safety, though the keys should now exist
+        train_freq_val = full_hyperparams.get("train_freq", 4)
+        train_freq_tuple = (train_freq_val, "step") if isinstance(train_freq_val, int) else tuple(train_freq_val)
+
+        # Build the final dictionary for the JSON file
         formatted_params = {
-            "learning_rate": hyperparams["learning_rate"],
-            "buffer_size": hyperparams["buffer_size"],
-            "batch_size": hyperparams["batch_size"],
-            "target_update_interval": hyperparams["target_update_interval"],
-            "exploration_fraction": hyperparams["exploration_fraction"],
-            "exploration_initial_eps": 1.0,
-            "exploration_final_eps": hyperparams["exploration_final_eps"],
-            "learning_starts": 20000,
+            "learning_rate": full_hyperparams["learning_rate"],
+            "buffer_size": full_hyperparams["buffer_size"],
+            "batch_size": full_hyperparams["batch_size"],
+            "target_update_interval": full_hyperparams["target_update_interval"],
+            "exploration_fraction": full_hyperparams["exploration_fraction"],
+            "exploration_initial_eps": 1.0, # This is a static choice
+            "exploration_final_eps": full_hyperparams["exploration_final_eps"],
+            "learning_starts": full_hyperparams.get("learning_starts", 20000), # Use .get for safety
             "train_freq": train_freq_tuple,
-            "gradient_steps": 1,
-            "tau": 1.0,
-            "gamma": hyperparams["gamma"],
+            "gradient_steps": full_hyperparams.get("gradient_steps", 1),
+            "tau": 1.0, # Static choice
+            "gamma": full_hyperparams["gamma"],
             "policy_kwargs": {"net_arch": net_arch, "activation_fn": "nn.ReLU"}
         }
-        # Update the algorithm's hyperparameter block in our data object
         existing_data[algo] = formatted_params
     else:
+        # ... (this part is unchanged) ...
         logger.info("Proposed score is not better than historical best. Main hyperparameters will not be changed.")
-        # If the 'algo' block doesn't even exist (e.g., first run was bad), create a placeholder
         if algo not in existing_data:
-            existing_data[algo] = {} # Prevents KeyError later
+            existing_data[algo] = {}
 
     # --- 3. APPEND THE CURRENT RUN TO THE HISTORY (ALWAYS) ---
     new_validation_entry = {
         "timestamp": run_timestamp,
         "mean_score": round(proposed_mean_score, 4),
-        "params": proposed_trial.params # Also save the params of this run for full traceability
+        "params": proposed_trial.params
     }
     validation_history.append(new_validation_entry)
-    validation_history.sort(key=lambda x: x["timestamp"]) # Keep it chronological
+    validation_history.sort(key=lambda x: x["timestamp"])
+    existing_data["validation_history"] = validation_history # Keep it chronological
     
-    # Update the history in our data object
-    existing_data["validation_history"] = validation_history
-
     # --- 4. PRESERVE BOUNDS and SAVE THE FILE ---
     # Ensure the bounds dict is preserved or initialized
     if "bounds" not in existing_data:
@@ -286,33 +383,26 @@ def run_tuning_for_one_combination(args):
     """
     algo_to_tune, r_fn, vsl_m, process_id = args
     combination_name = f"{algo_to_tune}_{r_fn}_{vsl_m}"
-    
-    # Each process gets a dedicated block of ports to avoid collisions
+    # Each worker process gets a dedicated block of 1000 ports to avoid any collisions.
     process_base_port = BASE_TRAIN_SUMO_PORT + process_id * 1000
-
     placeholder_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{combination_name}.json"
     create_initial_hyperparameter_file(placeholder_path, combination_name, process_id)
-
-    logger.info("\n" + "="*80)
-    logger.info(f"[Process {process_id}] STARTING TUNING FOR: {combination_name} on Port Base {process_base_port}")
-    logger.info("="*80)
-
-    run_timestamp = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
-    tuning_files_name = f"{combination_name}_tune_{process_id}_{run_timestamp}"
-
-    # Pre-generate SUMO files
+    logger.info(f"\n[Worker {process_id}] STARTING TUNING FOR: {combination_name} on Port Base {process_base_port}")
+    run_timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    # Determine the maximum simulation length needed to cover both stages
+    max_sim_len_needed = (max(BROAD_EXPLORATION_STEPS_PER_SCENARIO, DEEP_VALIDATION_STEPS_PER_SCENARIO) + 10) * 60
     for sc_cfg in SHARED_DEMAND_SCENARIOS:
-        sim_len_sec = (DEEP_VALIDATION_STEPS_PER_SCENARIO + 10) * 60
         if sc_cfg["pattern"] == 'uniform':
-            flow_generation_fix_num_veh(combination_name, sc_cfg["id"], sc_cfg["demand"], sim_len_sec, 1, 1)
+            flow_generation_fix_num_veh(combination_name, sc_cfg["id"], sc_cfg["demand"], max_sim_len_needed, 1, 1)
         else:
             bimodal_pattern = bimodal_distribution_24h(sc_cfg["demand"] / 1000.0)
-            flow_generation(combination_name, sc_cfg["id"], bimodal_pattern, sim_len_sec)
-        
-        cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=tuning_files_name)
-        cfg_filepath = SUMO_CONFIG_DIR / f"3_2_merge_{tuning_files_name}.sumocfg"
-        with open(cfg_filepath, 'w') as f:
-            f.write(cfg_content)
+            flow_generation(combination_name, sc_cfg["id"], bimodal_pattern, max_sim_len_needed)
+    # Create the single .sumocfg file that points to these flows
+    cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=combination_name)
+    cfg_filepath = SUMO_CONFIG_DIR / f"3_2_merge_{combination_name}.sumocfg"
+    with open(cfg_filepath, 'w') as f:
+        f.write(cfg_content)
+    logger.info(f"[Worker {process_id}] File generation complete.")
 
     # Stage 1: Broad Exploration
     db_filename = f"{combination_name}_study.db"
@@ -320,7 +410,8 @@ def run_tuning_for_one_combination(args):
     study_broad = optuna.create_study(
         study_name=f"{combination_name}_broad",
         direction="maximize",
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2),
+        # pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2),
+        pruner=optuna.pruners.PercentilePruner(percentile=25, n_warmup_steps=3), # [%] of trials are pruned and it will not prune before x [steps]
         storage=study_db_path,
         load_if_exists=True,
     )
@@ -328,28 +419,34 @@ def run_tuning_for_one_combination(args):
     objective_broad = lambda trial: objective(
         trial, r_fn, vsl_m, combination_name, BROAD_EXPLORATION_STEPS_PER_SCENARIO, process_base_port
     )
-    study_broad.optimize(objective_broad, n_trials=N_OPTUNA_TRIALS, n_jobs=1)
-    
+    study_broad.optimize(objective_broad, n_trials=N_OPTUNA_TRIALS, n_jobs=N_JOBS_PER_STUDY)
+    logger.info(f"[Worker {process_id}] Broad search complete. Starting deep validation...")
     top_candidates = study_broad.best_trials[:NUM_CANDIDATES_TO_VALIDATE]
-
+    
     # Stage 2: Deep Validation
     validated_results = []
     for i, candidate_trial in enumerate(top_candidates):
         seed_scores = []
+        logger.info(f"[Worker {process_id}] Validating candidate {i+1}/{len(top_candidates)}...")
         for seed in range(N_VALIDATION_SEEDS):
+            # Create a dummy trial for API compatibility
             validation_study = optuna.create_study(direction="maximize")
-            dummy_trial = validation_study.ask() # Dummy trial for API compatibility
+            dummy_trial = validation_study.ask() 
+            
+            # The objective function is called just like in Stage 1, but with different parameters.
+            # It will correctly find and use the files for `combination_name`.
             score = objective(
-                dummy_trial, r_fn, vsl_m, tuning_files_name,
+                dummy_trial, r_fn, vsl_m, combination_name, # Pass the consistent name
                 DEEP_VALIDATION_STEPS_PER_SCENARIO, process_base_port,
                 is_validation=True, fixed_params=candidate_trial.params
             )
             seed_scores.append(score)
-        
+            logger.info(f"  - Seed {seed+1}/{N_VALIDATION_SEEDS} score: {score:.2f}")
+
         avg_score = np.mean(seed_scores)
         std_score = np.std(seed_scores)
         validated_results.append({"trial": candidate_trial, "mean_score": avg_score})
-        logger.info(f"[Process {process_id}] Candidate {i+1} for {combination_name} validation: Mean Score={avg_score:.2f} +/- {std_score:.2f}")
+        logger.info(f"  -> Candidate {i+1} validation complete: Mean Score={avg_score:.2f} +/- {std_score:.2f}")
 
     final_mean_score = 0.0
     # Final Step: Save Best
@@ -373,16 +470,44 @@ def run_tuning_for_one_combination(args):
             run_timestamp=run_timestamp
         )
     
-    # Cleanup
-    for f in glob.glob(f"./traffic_environment/sumo/*{tuning_files_name}*"):
+    # --- Cleanup ---
+    logger.info(f"[Worker {process_id}] Cleaning up files for {combination_name}...")
+    for f in glob.glob(f"./traffic_environment/sumo/*{combination_name}*"):
         try:
             os.remove(f)
         except Exception as e:
             logger.warning(f"Could not remove temp file {f}: {e}")
 
-    logger.info(f"[Process {process_id}] FINISHED TUNING FOR: {combination_name}")
+    logger.info(f"[Worker {process_id}] FINISHED TUNING FOR: {combination_name}")
 
+def setup_worker_logging():
+    """Configures logging for each worker process in the pool."""
+    # Get the root logger used by your drl_vsl.py logger
+    worker_logger = logging.getLogger() 
+    
+    # Set the level (e.g., INFO to see progress messages)
+    worker_logger.setLevel(logging.INFO)
+    
+    # Remove any existing handlers to avoid duplicates
+    if worker_logger.hasHandlers():
+        worker_logger.handlers.clear()
+        
+    # Add a handler that prints to the console (stderr or stdout)
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    worker_logger.addHandler(handler)
 
+def get_safe_port(base_port, worker_id, trial_number):
+    """
+    Calculates a unique, safe port for a SUMO instance to avoid collisions.
+    Each worker gets its own large block of ports.
+    """
+    worker_port_block = base_port + worker_id * 1000
+    port = worker_port_block + (trial_number % 100)
+    return port
+
+"""==============================================================================================="""
 if __name__ == '__main__':
     algo_to_tune = "DQN"
     reward_functions_to_tune = ["mobility", "safety", "balanced"]
