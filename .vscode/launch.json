@@ -14,6 +14,47 @@
                 "PYTHONUNBUFFERED": "1"
             },
             "envFile": "${workspaceFolder}/.py310_tf_env"
+        },
+        {
+            "name": "Run: Option 1 (Single Train)", // Renamed for clarity
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/drl_vsl.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--option", "1",
+                "--n_envs", "4" // number of environments
+            ]
+        },
+        {
+            "name": "Run: Option 2 (Parallel Combo Train)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/drl_vsl.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--option", "2"
+            ]
+        },
+        {
+            "name": "Run: Option 3 (Single Eval)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/drl_vsl.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--option", "3"
+            ]
+        },
+        {
+            "name": "Run: Option 4 (Parallel Eval)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/drl_vsl.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--option", "4"
+            ]
         }
     ]
 }

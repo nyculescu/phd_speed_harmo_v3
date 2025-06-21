@@ -41,6 +41,7 @@ from tqdm import tqdm
 import shutil
 from itertools import product
 import numpy as np
+import argparse
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -1613,7 +1614,31 @@ if __name__ == '__main__':
     else:
         logger.info("SUMO environment is not set up correctly.")
 
-    OPTION = 1
+    parser = argparse.ArgumentParser(
+        description="Run DRL-VSL training and evaluation scripts.",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument(
+        '--option',
+        type=int,
+        required=True,
+        choices=[1, 2, 3, 4],
+        help="Execution mode:\n"
+             "1: Single training run. Use --n_envs to parallelize.\n"
+             "2: Parallel training of all reward/VSL combinations.\n"
+             "3: Single model evaluation.\n"
+             "4: Parallel evaluation of all trained models."
+    )
+    parser.add_argument(
+        '--n_envs',
+        type=int,
+        # A safe default: leaves one core for the main process and one for the OS.
+        default=max(1, mp.cpu_count() - 2),
+        help="Number of parallel environments for training (used in Option 1).\n"
+             "Defaults to the number of CPU cores minus 2."
+    )
+    args = parser.parse_args()
+    OPTION = args.option
     
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
