@@ -71,7 +71,7 @@ loops_after = ["loop_seg_0_after_1", "loop_seg_0_after_0"]
 detectors_after = ["detector_seg_0_after_1", "detector_seg_0_after_0"]
 detector_length = 50 # meters
 BASE_TRAIN_SUMO_PORT = 8000
-BASE_EVAL_SUMO_PORT = 9000
+BASE_EVAL_SUMO_PORT = 10000
 """ Curriculum learning for the DQN agent, which means gradually increasing the difficulty of the training scenarios. """
 interval_length_h = 2 # hours
 num_of_intervals = 10
@@ -102,6 +102,7 @@ SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be 
 # NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
 
 OPTION = 0
+MAX_ALLOWED_ENVS_IN_OPTION_1 = 30
 
 def get_linear_schedule(initial_value: float):
     def func(progress_remaining: float) -> float:
@@ -198,10 +199,10 @@ def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_f
 def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
-        eval_model_idx = num_envs_per_model - 1
+        eval_model_idx = num_envs_per_model + 1
 
         if OPTION == 1:
-            create_sumocfg(f"{model_name}_{num_train_envs_per_model}")
+            create_sumocfg(f"{model_name}_{eval_model_idx}")
         else:
             create_sumocfg(model_name)
 
@@ -229,12 +230,14 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    TOTAL_TRAINING_TIMESTEPS = 80_000
-    NO_OF_HR_OF_SIM = 3 # hours for training episodes
+    TOTAL_TRAINING_TIMESTEPS = 10_000 # Recommended: 500k | Probe: 40k
+    EVAL_FREQ = 100 # [steps/env] -> EVAL_FREQ = steps/env * n_envs | Recommended: 25k | Probe: 4k
+    NO_OF_HR_OF_SIM = 3 # [h] for training episodes
     EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
-    NO_OF_HR_OF_EVAL = 4 # hours for evaluation
+    NO_OF_HR_OF_EVAL = 2 # [h] for evaluation | Probe: 2
     EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
-    EVAL_FREQ = 1800
+    EVAL_NO_IMPROVE_EVALS = 3 # Recommended: 10 | Probe: 3
+    EVALS_MIN_EVALS = 4 # Recommended: 15 | Probe: 4
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -293,8 +296,8 @@ def train_model(algorithm: str,
     )
 
     no_improve_cb = StopTrainingOnNoModelImprovement(
-        max_no_improvement_evals=5,
-        min_evals=10,
+        max_no_improvement_evals=EVAL_NO_IMPROVE_EVALS,
+        min_evals=EVALS_MIN_EVALS,
         verbose=1
     )
 
@@ -657,13 +660,19 @@ class TrafficEnv(gym.Env):
         # Action and observation spaces
         self._load_or_set_normalization_bounds(normalization_bounds_path)
 
-        self.action_space = gym.spaces.Discrete(5)
+        # self.action_space = gym.spaces.Discrete(5)
+        self.SPEED_ACTIONS = {
+            0: 60, 1: 70, 2: 80, 3: 90, 
+            4: 100, 5: 110, 6: 120, 7: 130
+        } # Define absolute speed limit actions
+        self.action_space = gym.spaces.Discrete(len(self.SPEED_ACTIONS))
+
         self.current_speed_limit = self.default_speed_limit
         
         self.observation_space = gym.spaces.Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            shape=(8,),
+            low=np.zeros(9, dtype=np.float64),
+            high=np.ones(9, dtype=np.float64),
+            shape=(9,),
             dtype=np.float64
         )
         
@@ -699,6 +708,10 @@ class TrafficEnv(gym.Env):
             {"demand": 5000, "pattern": "uniform"},
         ]
         self.gen_car_distrib = base_gen_car_distrib 
+
+        self.time_since_last_action = 0
+        self.current_action = 0  # Track the last action taken
+        self.invalid_action_penalty = 0
 
     def _load_or_set_normalization_bounds(self, bounds_path: Optional[str]):
         """Loads normalization bounds from a file or falls back to hardcoded defaults."""
@@ -852,6 +865,8 @@ class TrafficEnv(gym.Env):
         # Initialize SUMO if not already done
         if not self.is_sumo_initialized:
             self._start_sumo()
+
+        self.current_action = action
         
         # Check SUMO responsiveness
         try:
@@ -862,26 +877,31 @@ class TrafficEnv(gym.Env):
             self._start_sumo()
             current_time = traci.simulation.getTime()
         
+        """ # Original code snippet for action application
         # Apply action: gradual speed limit changes
         speed_changes = [-10, -5, 0, +5, +10]  # Larger action space
+        if speed_changes[action] != 0:
+            self.time_since_last_action = 0  # Reset counter on a speed-changing action
+        else:
+            self.time_since_last_action += 1 # Increment counter if action is "do nothing"
+
         previous_speed_limit = self.current_speed_limit
         proposed_speed_limit = self.current_speed_limit + speed_changes[action]
         
-        # Invalid action penalty and clamping
-        invalid_action_penalty = 0
-        
+        self.invalid_action_penalty = 0 # Invalid action penalty and clamping
+
         # Safety constraint: limit consecutive changes
         if hasattr(self, 'recent_changes') and len(self.recent_changes) >= 3:
             if all(abs(change) >= 5 for change in list(self.recent_changes)[-3:]):
                 # Prevent excessive consecutive changes
                 proposed_speed_limit = previous_speed_limit
-                invalid_action_penalty = -2.0
+                self.invalid_action_penalty = -2.0
         
         # Comfort constraint: maximum 20 km/h change as per literature
         max_change = 20
         if abs(proposed_speed_limit - previous_speed_limit) > max_change:
             proposed_speed_limit = previous_speed_limit + np.sign(proposed_speed_limit - previous_speed_limit) * max_change
-            invalid_action_penalty = -1.0
+            self.invalid_action_penalty = -1.0
         
         # Apply bounds
         self.current_speed_limit = max(50, min(130, proposed_speed_limit))
@@ -890,6 +910,15 @@ class TrafficEnv(gym.Env):
         if not hasattr(self, 'recent_changes'):
             self.recent_changes = deque(maxlen=5)
         self.recent_changes.append(self.current_speed_limit - previous_speed_limit)
+        """
+        
+        # New method of applying the action and handling speed limits
+        proposed_speed_limit = self.SPEED_ACTIONS.get(action, self.current_speed_limit) # Apply action: SET absolute speed limit
+        self.invalid_action_penalty = 0
+        speed_change = abs(proposed_speed_limit - self.current_speed_limit)
+        if speed_change > 20: # Penalize jumps larger than 20 km/h
+            self.invalid_action_penalty = -0.2 * (speed_change / 10) # Scale penalty by magnitude
+        self.current_speed_limit = proposed_speed_limit # Apply the new speed limit        
         
         # Apply VSL enforcement using the new method
         self._apply_vsl_enforcement(self.current_speed_limit)
@@ -921,7 +950,8 @@ class TrafficEnv(gym.Env):
                     self._calculate_speed_trend(),
                     self.occupancy_smoothed / 100.0, 
                     self.current_speed_limit,
-                    self._calculate_speed_stability()
+                    self._calculate_speed_stability(),
+                    self.time_since_last_action
                 ], dtype=np.float64))
                 
                 # Return a terminal observation with a large negative reward
@@ -986,7 +1016,7 @@ class TrafficEnv(gym.Env):
         self.collisions_penalty = -5 if len(self.collisions) > 2 else 0
         
         # Calculate reward
-        reward = self._calculate_reward(invalid_action_penalty)
+        reward = self._calculate_reward()
 
         self.reward_window.append(reward)
         
@@ -999,7 +1029,8 @@ class TrafficEnv(gym.Env):
             self._calculate_speed_trend(),
             self.occupancy_smoothed / 100.0,
             self.current_speed_limit,
-            self._calculate_speed_stability()
+            self._calculate_speed_stability(),
+            self.time_since_last_action
         ], dtype=np.float64)
 
         # Normalize observation for DQN
@@ -1087,10 +1118,13 @@ class TrafficEnv(gym.Env):
             self.default_speed_limit / 3.6,
             0.0, 0.0, 0.0, 0.0, 0.0,
             self.default_speed_limit,
-            0.0
+            0.0,
+            0
         ], dtype=np.float64)
 
         self.veh_passed_downstream = 0
+
+        self.invalid_action_penalty = 0
 
         observation = self._preprocess_state(raw_observation)
 
@@ -1102,45 +1136,128 @@ class TrafficEnv(gym.Env):
         
         return observation, info
 
-    def _calculate_reward(self, invalid_action_penalty):
+    def _calculate_reward(self):
         """
         Calculate reward based on selected reward function.
         Implements multi-objective reward functions from recent research.
         """
         if self.reward_fn == "mobility":
-            return self._reward_mobility_focused(invalid_action_penalty)
+            return self._reward_mobility_focused()
         elif self.reward_fn == "safety":
-            return self._reward_safety_focused(invalid_action_penalty)
+            return self._reward_safety_focused()
         elif self.reward_fn == "balanced":
-            return self._reward_balanced(invalid_action_penalty)
+            return self._reward_balanced()
         else:
-            return self._reward_balanced(invalid_action_penalty)  # Default
+            return self._reward_balanced()  # Default
 
-    def _reward_mobility_focused(self, invalid_action_penalty):
-        """Enhanced mobility reward incorporating capacity utilization metrics."""
-        # Flow efficiency with capacity consideration
-        capacity_utilization = min(self.flow_smoothed / MAX_FLOW, 1.0)
-        R_flow = capacity_utilization * 0.5
+    def _reward_mobility_focused(self):
+        """
+        Second revision of the mobility reward, with dynamic penalties to aggressively
+        prevent the onset of congestion collapse observed in training.
         
-        # Throughput reward (vehicles processed per hour)
-        throughput_reward = min(self.flow_downstream / MAX_FLOW, 1.0) * 0.2
-        
-        # Speed harmonization (reduce variance)
-        R_smooth = self._calculate_speed_smoothness() * 0.2
-        
-        # Queue penalty with exponential scaling
-        queue_penalty = min((self.queue_length_upstream / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION)**2, 1.0) * 0.1
-        
-        # Add a small stability penalty as a small negative term proportional to speed variance. 
-        # This acts as a regularizer, discouraging the agent from achieving high flow at the cost of extreme instability.
-        speed_variance = np.var(list(self.speed_history)) if len(self.speed_history) > 2 else 0.0
-        stability_penalty = min(speed_variance / 500.0, 1.0) * 0.05 # small weight
-        
-        return R_flow + throughput_reward + R_smooth - queue_penalty - stability_penalty + invalid_action_penalty + self.collisions_penalty
+        # --- 1. The Primary Objective: Sustainable Throughput ---
+        R_throughput = (self.flow_smoothed / MAX_FLOW) * 0.7 # Slightly increase weight
 
-        return R_flow + throughput_reward + R_smooth - queue_penalty + invalid_action_penalty + self.collisions_penalty
+        # --- 2. DYNAMICALLY-WEIGHTED Instability Guardrails ---
+        critical_occupancy_threshold = 35.0
+        
+        # Calculate base penalties for occupancy and variance
+        if self.occupancy_smoothed > critical_occupancy_threshold:
+            excess_occupancy = self.occupancy_smoothed - critical_occupancy_threshold
+            occupancy_penalty_base = (excess_occupancy / (100.0 - critical_occupancy_threshold))**2
+        else:
+            occupancy_penalty_base = 0.0
+        
+        speed_variance = np.var(list(self.speed_history)) if len(self.speed_history) > 5 else 0.0
+        variance_penalty_base = min(speed_variance / 100.0, 1.0)
 
-    def _reward_safety_focused(self, invalid_action_penalty):
+        # As the system becomes more unstable (high occupancy), the importance of
+        # penalizing speed variance increases. This prevents the agent from creating
+        # fast-moving but turbulent platoons in a dense environment.
+        variance_penalty_weight = 0.4 + (self.occupancy_smoothed / 100.0) * 0.6 # Weight scales from 0.4 to 1.0
+        occupancy_penalty_weight = 1.0 - variance_penalty_weight
+
+        # The total penalty is now context-aware.
+        instability_penalty = (occupancy_penalty_base * occupancy_penalty_weight +
+                            variance_penalty_base * variance_penalty_weight)
+        
+        # The penalty itself is also scaled by how bad the situation is.
+        # This creates an "oh shit" factor for the agent.
+        total_penalty_scaler = 1.0 + (self.occupancy_smoothed / 100.0)**2
+        final_instability_penalty = instability_penalty * total_penalty_scaler * 0.5 # Overall weight
+
+        # --- 3. Control Smoothness Incentive ---
+        is_stable = self.occupancy_smoothed < critical_occupancy_threshold
+        R_control_smoothness = 0.1 if self.current_action == 2 and is_stable else 0.0
+
+        total_reward = R_throughput - final_instability_penalty + R_control_smoothness + self.collisions_penalty + self.invalid_action_penalty
+        
+        return float(total_reward)
+        """
+
+        """
+        Calculates a mobility-focused reward based on maintaining the bottleneck 
+        density near the critical density, inspired by the methodology in 
+        Zheng et al. (2023) [14] and Wang et al. (2019) [38].
+
+        This approach is more robust than direct throughput maximization as it
+        provides a clearer, more immediate signal to the agent and is grounded in
+        fundamental traffic flow theory. The goal is to keep the system in its
+        most productive state, just before the onset of congestion.
+        """
+        # --- Parameters based on traffic flow theory and the literature ---
+        
+        # Critical density (as occupancy %) where throughput is maximal.
+        # This is a key parameter to tune, but values between 20-35% are typical.
+        # Let's start with a value informed by the literature.
+        CRITICAL_OCCUPANCY = 28.0  # [%]
+        TARGET_OCCUPANCY_UPPER_BOUND = 32.0 # [%] # The upper bound of desired occupancy. A small buffer above critical.
+        CONGESTION_THRESHOLD = 50.0 # [%] # The density at which the system is considered heavily congested (jam density).
+        REWARD_SCALE = 0.02 # A scaling factor for the base reward.
+        BONUS_REWARD = 0.6 # An explicit bonus for keeping the occupancy in the optimal range.
+        CONGESTION_PENALTY = -0.6 # A significant penalty for allowing the system to enter a deep jam state.
+
+        # --- Reward Calculation ---
+        current_occupancy = self.occupancy_smoothed
+        base_reward = 0.0
+
+        # 1. Base reward: A triangular function peaking at CRITICAL_OCCUPANCY.
+        # This encourages the agent to move towards the optimal state from either side.
+        if current_occupancy < CRITICAL_OCCUPANCY:
+            # Linearly increasing reward as occupancy approaches critical
+            base_reward = REWARD_SCALE * current_occupancy
+        else:
+            # Linearly decreasing reward as occupancy moves past critical towards jam
+            # The slope is steeper to strongly discourage over-saturation.
+            denominator = (CONGESTION_THRESHOLD - CRITICAL_OCCUPANCY)
+            if denominator > 0:
+                 # This formula creates a line from (CRITICAL_OCCUPANCY, max_reward) to (CONGESTION_THRESHOLD, 0)
+                 max_reward = REWARD_SCALE * CRITICAL_OCCUPANCY
+                 base_reward = max_reward - (max_reward * (current_occupancy - CRITICAL_OCCUPANCY) / denominator)
+            else: # Should not happen if constants are set correctly
+                 base_reward = -REWARD_SCALE * current_occupancy
+        
+        # Clamp base_reward to be non-negative before applying bonuses/penalties
+        base_reward = max(0.0, base_reward)
+        
+        # 2. Additive Bonus: A significant bonus for being in the "sweet spot".
+        # This provides a strong learning signal to stay in the most productive state.
+        if CRITICAL_OCCUPANCY <= current_occupancy <= TARGET_OCCUPANCY_UPPER_BOUND:
+            base_reward += BONUS_REWARD
+
+        # 3. Additive Penalty: A clear penalty for severe congestion.
+        # This teaches the agent to avoid catastrophic flow breakdown.
+        if current_occupancy > CONGESTION_THRESHOLD:
+            base_reward += CONGESTION_PENALTY
+
+        # 4. Combine with penalties for invalid actions and collisions.
+        # These are kept from your original structure as they are important for stability.
+        total_reward = base_reward + self.collisions_penalty + self.invalid_action_penalty
+        
+        return float(total_reward)
+
+
+    def _reward_safety_focused(self):
         # Primary: Speed harmonization (variance reduction)
         # This remains the core component.
         R_safety_variance = self._calculate_speed_smoothness() * 0.5 # Increased weight
@@ -1166,10 +1283,10 @@ class TrafficEnv(gym.Env):
         # Enhanced collision penalty remains critical
         collision_penalty = self.collisions_penalty * 2
 
-        reward = R_safety_variance + R_safety_speed_band + R_flow + collision_penalty + invalid_action_penalty
+        reward = R_safety_variance + R_safety_speed_band + R_flow + collision_penalty + self.invalid_action_penalty
         return float(reward)
 
-    def _reward_balanced(self, invalid_action_penalty):   
+    def _reward_balanced(self):   
         # Base components (your existing approach)
         R_flow = min(self.flow_smoothed / MAX_FLOW, 1.0) * 0.3
         
@@ -1207,7 +1324,7 @@ class TrafficEnv(gym.Env):
         progress_bonus = min(self.simulation_step / (self.sim_length * 0.8), 1.0) * 0.05
 
         total_reward = (R_flow + R_safety + R_smoothness + R_efficiency + progress_bonus 
-                   - queue_penalty + invalid_action_penalty + self.collisions_penalty)
+                   - queue_penalty + self.invalid_action_penalty + self.collisions_penalty)
     
         # Track previous speed limit for next iteration
         self.previous_speed_limit = self.current_speed_limit
@@ -1303,6 +1420,8 @@ class TrafficEnv(gym.Env):
         # Speed stability is already normalized between [0, 1] by the 1/(1+std) formula
         speed_stability_norm = raw_state[7]
 
+        time_since_change_norm = min(raw_state[8] / 10.0, 1.0)
+
         normalized_state = np.array([
             avg_speed,
             flow_upstream,
@@ -1311,7 +1430,8 @@ class TrafficEnv(gym.Env):
             speed_trend_norm,
             occupancy,
             speed_limit,
-            speed_stability_norm
+            speed_stability_norm,
+            time_since_change_norm
         ], dtype=np.float64)
 
         return normalized_state
@@ -1643,26 +1763,44 @@ if __name__ == '__main__':
         help="Number of parallel environments for training (used in Option 1).\n"
              "Defaults to the number of CPU cores minus 2."
     )
+    parser.add_argument('--algo', type=str, default='DQN', help="RL Algorithm to use.")
+    parser.add_argument('--reward_fn', type=str, default='mobility', help="Reward function (mobility, safety, balanced).")
+    parser.add_argument('--vsl_mode', type=str, default='electric_only', help="VSL enforcement mode (recommend, electric_only).")
+    parser.add_argument('--use_tuned_hp', action='store_true', help="Flag to load hyperparameters from Optuna JSON file.")
     args = parser.parse_args()
     OPTION = args.option
-    
+
     # Option 1: Run a single training with tuned parameters
     if OPTION == 1:
-        num_train_envs_per_model = min(7, args.n_envs)
-        num_test_envs_per_model = min(5, num_train_envs_per_model // 2)
+        num_train_envs_per_model = min(MAX_ALLOWED_ENVS_IN_OPTION_1, args.n_envs)
+        num_test_envs_per_model = 5 # Override the value
         num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model # Recalculate the dependent global variable
 
-        algo_to_use = "DQN"
-        vsl_enforce_mode = "electric_only" 
-        reward_used = "mobility"
-        config_model_name = f"{algo_to_use}_{reward_used}_{vsl_enforce_mode}"
+        model_name = f"{args.algo}_{args.reward_fn}_{args.vsl_mode}"
+        # optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
+        if args.use_tuned_hp:
+            hp_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{model_name}.json"
+            logger.info(f"Attempting to load tuned hyperparameters from: {hp_path}")
+            try:
+                with open(hp_path, 'r') as f:
+                    # This loads the full, processed hyperparameter dictionary
+                    params_from_json = json.load(f)[args.algo]
+                    # The JSON stores activation_fn as a string, convert it back
+                    if params_from_json["policy_kwargs"]["activation_fn"] == "nn.ReLU":
+                        params_from_json["policy_kwargs"]["activation_fn"] = nn.ReLU
+                    hyperparams_to_use = params_from_json
+            except (FileNotFoundError, KeyError) as e:
+                logger.error(f"Could not load tuned HP: {e}. Falling back to default ENHANCED_HYPERPARAMS.")
+                hyperparams_to_use = ENHANCED_HYPERPARAMS[args.algo]
+        else:
+            logger.info("Using default ENHANCED_HYPERPARAMS.")
+            hyperparams_to_use = ENHANCED_HYPERPARAMS[args.algo]
 
-        optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
-
-        train_model(algorithm=algo_to_use, 
-                    reward_function=reward_used,
-                    hyperparams=optimal_params,
-                    vsl_enforcement=vsl_enforce_mode)
+        train_model(algorithm=args.algo,
+                    reward_function=args.reward_fn,
+                    vsl_enforcement=args.vsl_mode,
+                    hyperparams=hyperparams_to_use
+                )
 
     # Option 2: Run parallel training for all combinations of reward functions and VSL enforcement modes
     elif OPTION == 2:
@@ -1715,7 +1853,7 @@ if __name__ == '__main__':
     elif OPTION == 3:
         algo_to_use = "DQN"
         vsl_enforce_mode = "electric_only" 
-        reward_used = "balanced"
+        reward_used = "mobility"
         # Evaluate the trained model
         test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
 

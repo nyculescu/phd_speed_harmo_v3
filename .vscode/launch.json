@@ -23,7 +23,11 @@
             "console": "integratedTerminal",
             "args": [
                 "--option", "1",
-                "--n_envs", "5" // number of environments
+                "--n_envs", "30", // number of environments
+                "--algo", "DQN",
+                "--reward_fn", "mobility",
+                "--vsl_mode", "electric_only",
+                // "--use_tuned_hp"
             ]
         },
         {
