@@ -147,7 +147,9 @@ def suggest_hyperparameters(trial: optuna.Trial) -> dict:
     return hyperparams
 
 def objective(trial: optuna.Trial,
-              reward_fn: str, 
+              reward_fn: str,
+              action_strategy: str,
+              state_representation: str,
               vsl_enforcement: str,
               combination_name: str, 
               timesteps_per_scenario: int,
@@ -199,7 +201,9 @@ def objective(trial: optuna.Trial,
                 sim_length=(timesteps_per_scenario + 10) * 60,
                 base_gen_car_distrib=[scenario_config["pattern"], scenario_config["demand"]],
                 num_of_episodes=1,
-                reward_fn=reward_fn, 
+                reward_fn=reward_fn,
+                action_strategy=action_strategy,
+                state_representation=state_representation,
                 vsl_enforcement=vsl_enforcement,
                 sumo_binary_path_override=SUMO_EXE_GUI,
                 normalization_bounds_path=normalization_bounds_path
@@ -417,7 +421,7 @@ def run_tuning_for_one_combination(args):
     )
     
     objective_broad = lambda trial: objective(
-        trial, r_fn, vsl_m, combination_name, BROAD_EXPLORATION_STEPS_PER_SCENARIO, process_base_port
+        trial, r_fn, vsl_m, "absolute_speed", "full_metrics", combination_name, BROAD_EXPLORATION_STEPS_PER_SCENARIO, process_base_port
     )
     study_broad.optimize(objective_broad, n_trials=N_OPTUNA_TRIALS, n_jobs=N_JOBS_PER_STUDY)
     logger.info(f"[Worker {process_id}] Broad search complete. Starting deep validation...")
@@ -436,7 +440,10 @@ def run_tuning_for_one_combination(args):
             # The objective function is called just like in Stage 1, but with different parameters.
             # It will correctly find and use the files for `combination_name`.
             score = objective(
-                dummy_trial, r_fn, vsl_m, combination_name, # Pass the consistent name
+                dummy_trial, r_fn, vsl_m, 
+                "absolute_speed",
+                "full_metrics",
+                combination_name, # Pass the consistent name
                 DEEP_VALIDATION_STEPS_PER_SCENARIO, process_base_port,
                 is_validation=True, fixed_params=candidate_trial.params
             )

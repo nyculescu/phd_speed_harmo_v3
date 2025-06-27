@@ -189,10 +189,11 @@ def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_f
         env = Monitor(TrafficEnv(port=port_for_env,
                                 model_name=model_name,
                                 model_idx=idx,
-                                sim_length=sim_length, # <-- This was the missing link
-                                op_mode="train",
+                                sim_length=sim_length,
                                 base_gen_car_distrib=["uniform", 2000],
                                 num_of_episodes=num_of_episodes,
+                                action_strategy="absolute_speed",
+                                state_representation="full_metrics",
                                 reward_fn=reward_fn,
                                 vsl_enforcement=vsl_enforcement,
                                 sumo_binary_path_override=sumo_binary_to_use))
@@ -213,10 +214,11 @@ def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="rec
                                             model_name=model_name,
                                             model_idx=eval_model_idx,
                                             sim_length=sim_length, # <-- PASS sim_length HERE
-                                            op_mode="eval",
                                             base_gen_car_distrib=["uniform", 3000],
                                             num_of_episodes=1,
                                             reward_fn=reward_fn,
+                                            action_strategy="absolute_speed",
+                                            state_representation="full_metrics",
                                             vsl_enforcement=vsl_enforcement,
                                             sumo_binary_path_override=sumo_binary_to_use),
                                 max_episode_steps=interval_length))
@@ -361,6 +363,8 @@ def test_model(algorithm, reward_function, vsl_enforcement, base_gen_car_distrib
                      base_gen_car_distrib=base_gen_car_distrib,
                      num_of_episodes=1,
                      reward_fn=reward_function,
+                     action_strategy="absolute_speed",
+                     state_representation="full_metrics",
                      vsl_enforcement=vsl_enforcement,
                      sumo_binary_path_override=sumoBinary) # Use the globally defined sumoBinary
 
@@ -624,7 +628,8 @@ class TrafficEnv(gym.Env):
     
     def __init__(self, port, model_name, model_idx, sim_length, base_gen_car_distrib, 
                  num_of_episodes, 
-                 op_mode: str = "train", # FIXME: remove it
+                 action_strategy: str = "absolute_speed",
+                 state_representation: str = "full_metrics",
                  reward_fn="balanced", 
                  vsl_enforcement: str = "recommend",
                  sumo_binary_path_override: Optional[str] = None, 
@@ -651,24 +656,14 @@ class TrafficEnv(gym.Env):
         self.gen_car_distrib = base_gen_car_distrib
         self.logger = TrafficDataLogger(model_name=model_name, log_dir=Path(f"./logs/{model_name}_{reward_fn}_{vsl_enforcement}"))
         self.num_of_episodes = num_of_episodes
-        self.reward_fn = reward_fn
         
-        # Historical data for analysis
-        self.flow_downstream_history = deque(maxlen=5)
-        self.occupancy_downstream_history = deque(maxlen=5)
-        self.speed_history = deque(maxlen=15)
-        self.flow_smoothed = 0.0
-        self.occupancy_smoothed = 0.0
-        
-        # Action and observation spaces
         self._load_or_set_normalization_bounds(normalization_bounds_path)
 
-        # self.action_space = gym.spaces.Discrete(5)
-        self.SPEED_ACTIONS = {
-            0: 60, 1: 70, 2: 80, 3: 90, 
-            4: 100, 5: 110, 6: 120, 7: 130
-        } # Define absolute speed limit actions
-        self.action_space = gym.spaces.Discrete(len(self.SPEED_ACTIONS))
+        self.reward_fn = reward_fn
+        self.action_strategy = action_strategy
+        self.state_representation = state_representation
+        self._initialize_action_space()
+        self._initialize_observation_space()
 
         self.current_speed_limit = self.default_speed_limit
         
@@ -712,9 +707,49 @@ class TrafficEnv(gym.Env):
         ]
         self.gen_car_distrib = base_gen_car_distrib 
 
+        # Historical data for analysis
+        self.flow_downstream_history = deque(maxlen=5)
+        self.occupancy_downstream_history = deque(maxlen=5)
+        self.speed_history = deque(maxlen=15)
+        self.flow_smoothed = 0.0
+        self.occupancy_smoothed = 0.0
+
         self.time_since_last_action = 0
         self.current_action = 0  # Track the last action taken
         self.invalid_action_penalty = 0
+
+    def _initialize_action_space(self):
+        """Initializes the action space based on the chosen strategy."""
+        if self.action_strategy == "absolute_speed":
+            self.SPEED_ACTIONS = {
+                0: 60, 1: 70, 2: 80, 3: 90, 
+                4: 100, 5: 110, 6: 120, 7: 130
+            }
+            self.action_space = gym.spaces.Discrete(len(self.SPEED_ACTIONS))
+        elif self.action_strategy == "relative_speed":
+            self.SPEED_CHANGES = {-10, -5, 0, 5, 10}
+            self.action_space = gym.spaces.Discrete(len(self.SPEED_CHANGES))
+        else:
+            raise ValueError(f"Unknown action strategy: {self.action_strategy}")
+        logger.info(f"Initialized with action strategy: '{self.action_strategy}'")
+
+    def _initialize_observation_space(self):
+        """Initializes the observation space based on the chosen representation."""
+        if self.state_representation == "full_metrics":
+            num_features = 9
+        elif self.state_representation == "minimalist":
+            # Future implementation: fewer features
+            num_features = 3
+        else:
+            raise ValueError(f"Unknown state representation: {self.state_representation}")
+
+        self.observation_space = gym.spaces.Box(
+            low=np.zeros(num_features, dtype=np.float64),
+            high=np.ones(num_features, dtype=np.float64),
+            shape=(num_features,),
+            dtype=np.float64
+        )
+        logger.info(f"Initialized with state representation: '{self.state_representation}' ({num_features} features)")
 
     def _load_or_set_normalization_bounds(self, bounds_path: Optional[str]):
         """Loads normalization bounds from a file or falls back to hardcoded defaults."""
@@ -883,51 +918,8 @@ class TrafficEnv(gym.Env):
             self.is_sumo_initialized = False
             self._start_sumo()
             current_time = traci.simulation.getTime()
-        
-        """ # Original code snippet for action application
-        # Apply action: gradual speed limit changes
-        speed_changes = [-10, -5, 0, +5, +10]  # Larger action space
-        if speed_changes[action] != 0:
-            self.time_since_last_action = 0  # Reset counter on a speed-changing action
-        else:
-            self.time_since_last_action += 1 # Increment counter if action is "do nothing"
 
-        previous_speed_limit = self.current_speed_limit
-        proposed_speed_limit = self.current_speed_limit + speed_changes[action]
-        
-        self.invalid_action_penalty = 0 # Invalid action penalty and clamping
-
-        # Safety constraint: limit consecutive changes
-        if hasattr(self, 'recent_changes') and len(self.recent_changes) >= 3:
-            if all(abs(change) >= 5 for change in list(self.recent_changes)[-3:]):
-                # Prevent excessive consecutive changes
-                proposed_speed_limit = previous_speed_limit
-                self.invalid_action_penalty = -2.0
-        
-        # Comfort constraint: maximum 20 km/h change as per literature
-        max_change = 20
-        if abs(proposed_speed_limit - previous_speed_limit) > max_change:
-            proposed_speed_limit = previous_speed_limit + np.sign(proposed_speed_limit - previous_speed_limit) * max_change
-            self.invalid_action_penalty = -1.0
-        
-        # Apply bounds
-        self.current_speed_limit = max(50, min(130, proposed_speed_limit))
-        
-        # Track recent changes
-        if not hasattr(self, 'recent_changes'):
-            self.recent_changes = deque(maxlen=5)
-        self.recent_changes.append(self.current_speed_limit - previous_speed_limit)
-        """
-        
-        # New method of applying the action and handling speed limits
-        proposed_speed_limit = self.SPEED_ACTIONS.get(action, self.current_speed_limit) # Apply action: SET absolute speed limit
-        self.invalid_action_penalty = 0
-        speed_change = abs(proposed_speed_limit - self.current_speed_limit)
-        if speed_change > 20: # Penalize jumps larger than 20 km/h
-            self.invalid_action_penalty = -0.2 * (speed_change / 10) # Scale penalty by magnitude
-        self.current_speed_limit = proposed_speed_limit # Apply the new speed limit        
-        
-        # Apply VSL enforcement using the new method
+        self._handle_action(action)
         self._apply_vsl_enforcement(self.current_speed_limit)
         
         # Initialize data collection variables
@@ -949,17 +941,7 @@ class TrafficEnv(gym.Env):
                 logger.error("Lost connection during simulation steps. Terminating episode.")
                 # Return a valid 5-tuple to signal a terminal state
                 # Get the last valid observation before the crash
-                last_observation = self._preprocess_state(np.array([
-                    self.avg_speed_before, 
-                    self.flow_upstream, 
-                    self.flow_smoothed,
-                    self.queue_length_upstream, 
-                    self._calculate_speed_trend(),
-                    self.occupancy_smoothed / 100.0, 
-                    self.current_speed_limit,
-                    self._calculate_speed_stability(),
-                    self.time_since_last_action
-                ], dtype=np.float64))
+                last_observation = self._get_observation()
                 
                 # Return a terminal observation with a large negative reward
                 return last_observation, -10.0, True, False, {} 
@@ -1026,22 +1008,8 @@ class TrafficEnv(gym.Env):
         reward = self._calculate_reward()
 
         self.reward_window.append(reward)
-        
-        # Prepare observation
-        raw_observation = np.array([
-            self.avg_speed_before,
-            self.flow_upstream,
-            self.flow_smoothed,
-            self.queue_length_upstream,
-            self._calculate_speed_trend(),
-            self.occupancy_smoothed / 100.0,
-            self.current_speed_limit,
-            self._calculate_speed_stability(),
-            self.time_since_last_action
-        ], dtype=np.float64)
 
-        # Normalize observation for DQN
-        observation = self._preprocess_state(raw_observation)
+        observation = self._get_observation()
                 
         # Check termination conditions
         # End when simulation time reaches limit OR no more vehicles expected
@@ -1122,21 +1090,9 @@ class TrafficEnv(gym.Env):
         
         # Start fresh SUMO instance
         self._start_sumo()
-                
-        raw_observation = np.array([
-            self.default_speed_limit / 3.6,
-            0.0, 0.0, 0.0, 0.0, 0.0,
-            self.default_speed_limit,
-            0.0,
-            0
-        ], dtype=np.float64)
-
         self.veh_passed_downstream = 0
-
         self.invalid_action_penalty = 0
-
-        observation = self._preprocess_state(raw_observation)
-
+        observation = self._get_observation()
         info = {
             'flow_upstream': 0, 'flow_downstream': 0, 'occupancy': 0,
             'queue_length': 0, 'speed_limit': self.default_speed_limit,
@@ -1264,7 +1220,6 @@ class TrafficEnv(gym.Env):
         total_reward = base_reward + self.collisions_penalty + self.invalid_action_penalty
         
         return float(total_reward)
-
 
     def _reward_safety_focused(self):
         # Primary: Speed harmonization (variance reduction)
@@ -1401,8 +1356,8 @@ class TrafficEnv(gym.Env):
     def _preprocess_state(self, raw_state):
         """
         Normalize raw observation state vector to [0,1] range for DQN input.
-        Updated for 8 features.
-        """
+        This method currently supports the 'full_metrics' state representation.
+
         # raw_state indices:
         # 0: avg_speed_before
         # 1: flow_upstream
@@ -1412,38 +1367,44 @@ class TrafficEnv(gym.Env):
         # 5: occupancy_smoothed (already as fraction 0-1)
         # 6: current_speed_limit
         # 7: speed_stability
+        """
 
-        # Using the normalization bounds loaded from file or defaults
-        avg_speed = np.clip(raw_state[0], 0, MAX_SPEED_MPS) / MAX_SPEED_MPS
-        flow_upstream = np.clip(raw_state[1], 0, MAX_FLOW) / MAX_FLOW
-        flow_smoothed = np.clip(raw_state[2], 0, MAX_FLOW) / MAX_FLOW
-        queue_length = np.clip(raw_state[3], 0, MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION) / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
-        
-        # Speed trend normalization: clip to [-1,1], then scale to [0,1]
-        speed_trend = np.clip(raw_state[4], -SPEED_TREND_CLIP, SPEED_TREND_CLIP)
-        speed_trend_norm = (speed_trend + SPEED_TREND_CLIP) / (2 * SPEED_TREND_CLIP)
-        
-        occupancy = np.clip(raw_state[5], 0, 1)  # already fraction
-        speed_limit = np.clip(raw_state[6], 50, 130) / 130.0
+        if self.state_representation == "full_metrics":
+            # raw_state indices for 'full_metrics':
+            # 0: avg_speed_before, 1: flow_upstream, 2: flow_smoothed,
+            # 3: queue_length_upstream, 4: speed_trend, 5: occupancy_smoothed (0-1),
+            # 6: current_speed_limit, 7: speed_stability, 8: time_since_last_action
+            if len(raw_state) != 9:
+                logger.error("Mismatched raw_state length for 'full_metrics' representation.")
+                return np.zeros(9, dtype=np.float64)
 
-        # Speed stability is already normalized between [0, 1] by the 1/(1+std) formula
-        speed_stability_norm = raw_state[7]
+            avg_speed = np.clip(raw_state[0], 0, MAX_SPEED_MPS) / MAX_SPEED_MPS
+            flow_upstream = np.clip(raw_state[1], 0, MAX_FLOW) / MAX_FLOW
+            flow_smoothed = np.clip(raw_state[2], 0, MAX_FLOW) / MAX_FLOW
+            queue_length = np.clip(raw_state[3], 0, MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION) / MAX_QUEUE_LENGTH_FOR_CRITICAL_SECTION
+            
+            speed_trend = np.clip(raw_state[4], -SPEED_TREND_CLIP, SPEED_TREND_CLIP)
+            speed_trend_norm = (speed_trend + SPEED_TREND_CLIP) / (2 * SPEED_TREND_CLIP)
+            
+            occupancy = np.clip(raw_state[5], 0, 1)
+            speed_limit = np.clip(raw_state[6], 50, 130) / 130.0
+            speed_stability_norm = raw_state[7]
+            time_since_change_norm = min(raw_state[8] / 10.0, 1.0)
 
-        time_since_change_norm = min(raw_state[8] / 10.0, 1.0)
+            return np.array([
+                avg_speed, flow_upstream, flow_smoothed, queue_length,
+                speed_trend_norm, occupancy, speed_limit, speed_stability_norm,
+                time_since_change_norm
+            ], dtype=np.float64)
 
-        normalized_state = np.array([
-            avg_speed,
-            flow_upstream,
-            flow_smoothed,
-            queue_length,
-            speed_trend_norm,
-            occupancy,
-            speed_limit,
-            speed_stability_norm,
-            time_since_change_norm
-        ], dtype=np.float64)
+        elif self.state_representation == "minimalist":
+            # Placeholder for future normalization logic for a minimalist state
+            # NOTE: This must match the shape defined in _initialize_observation_space
+            return np.zeros(3, dtype=np.float64)
 
-        return normalized_state
+        else:
+            # Fallback for unknown state representation
+            return np.zeros_like(self.observation_space.low)
 
     def _apply_vsl_enforcement(self, speed_limit_kmh):
         """
@@ -1498,6 +1459,108 @@ class TrafficEnv(gym.Env):
             # Fallback to recommend
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
+
+    def _handle_action(self, action: int):
+        """Wrapper to call the appropriate action-handling logic based on strategy."""
+        if self.action_strategy == "absolute_speed":
+            self._action_absolute_speed(action)
+        elif self.action_strategy == "relative_change":
+            self._action_relative_change(action)
+        else:
+            logger.warning(f"Unknown action strategy: {self.action_strategy}. Defaulting to 'absolute_speed'.")
+            self._action_absolute_speed(action)
+
+    def _action_absolute_speed(self, action: int):
+        """ # Original code snippet for action application
+        # Apply action: gradual speed limit changes
+        speed_changes = [-10, -5, 0, +5, +10]  # Larger action space
+        if speed_changes[action] != 0:
+            self.time_since_last_action = 0  # Reset counter on a speed-changing action
+        else:
+            self.time_since_last_action += 1 # Increment counter if action is "do nothing"
+
+        previous_speed_limit = self.current_speed_limit
+        proposed_speed_limit = self.current_speed_limit + speed_changes[action]
+        
+        self.invalid_action_penalty = 0 # Invalid action penalty and clamping
+
+        # Safety constraint: limit consecutive changes
+        if hasattr(self, 'recent_changes') and len(self.recent_changes) >= 3:
+            if all(abs(change) >= 5 for change in list(self.recent_changes)[-3:]):
+                # Prevent excessive consecutive changes
+                proposed_speed_limit = previous_speed_limit
+                self.invalid_action_penalty = -2.0
+        
+        # Comfort constraint: maximum 20 km/h change as per literature
+        max_change = 20
+        if abs(proposed_speed_limit - previous_speed_limit) > max_change:
+            proposed_speed_limit = previous_speed_limit + np.sign(proposed_speed_limit - previous_speed_limit) * max_change
+            self.invalid_action_penalty = -1.0
+        
+        # Apply bounds
+        self.current_speed_limit = max(50, min(130, proposed_speed_limit))
+        
+        # Track recent changes
+        if not hasattr(self, 'recent_changes'):
+            self.recent_changes = deque(maxlen=5)
+        self.recent_changes.append(self.current_speed_limit - previous_speed_limit)
+        """
+
+        """Handles action as an absolute speed limit selection."""
+        proposed_speed_limit = self.SPEED_ACTIONS.get(action, self.current_speed_limit)
+        
+        self.invalid_action_penalty = 0
+        speed_change = abs(proposed_speed_limit - self.current_speed_limit)
+        if speed_change > 20: # Penalize jumps larger than 20 km/h
+            self.invalid_action_penalty = -0.2 * (speed_change / 10) # Scale penalty by magnitude
+        
+        self.current_speed_limit = proposed_speed_limit # Apply the new speed limit
+
+    def _action_relative_change(self, action: int):
+        """Placeholder for handling action as a relative speed change."""
+        logger.warning("Action strategy 'relative_change' is not yet implemented.")
+        pass
+
+    def _get_observation(self):
+        """
+        Wrapper that builds the raw observation based on the chosen strategy,
+        then preprocesses (normalizes) it.
+        """
+        if self.state_representation == "full_metrics":
+            raw_obs = self._build_state_full_metrics()
+        elif self.state_representation == "minimalist":
+            raw_obs = self._build_state_minimalist()
+        else:
+            logger.warning(f"Unknown state representation: {self.state_representation}. Defaulting to 'full_metrics'.")
+            raw_obs = self._build_state_full_metrics()
+        
+        return self._preprocess_state(raw_obs)
+
+    def _build_state_full_metrics(self):
+        """Builds the 9-feature raw observation array."""
+        return np.array([
+            self.avg_speed_before,
+            self.flow_upstream,
+            self.flow_smoothed,
+            self.queue_length_upstream,
+            self._calculate_speed_trend(),
+            self.occupancy_smoothed / 100.0,
+            self.current_speed_limit,
+            self._calculate_speed_stability(),
+            self.time_since_last_action
+        ], dtype=np.float64)
+    
+    def _build_state_minimalist(self):
+        """Placeholder for a simpler state representation."""
+        logger.warning("State representation 'minimalist' is not yet implemented.")
+        # Future logic would go here, for example:
+        # return np.array([
+        #     self.flow_smoothed,
+        #     self.occupancy_smoothed / 100.0,
+        #     self.current_speed_limit,
+        # ], dtype=np.float64)
+        # For now, return a zero array of the correct shape to avoid crashes.
+        return np.zeros(3, dtype=np.float64)
 
     def _close_sumo(self, reason: str):
         """Safely closes the TraCI connection and terminates the SUMO process."""
