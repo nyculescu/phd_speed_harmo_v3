@@ -381,7 +381,7 @@ def run_tuning_for_one_combination(args):
     Worker function that encapsulates the entire tuning process for one combination.
     This function will be run in parallel by multiprocessing.Pool.
     """
-    algo_to_tune, r_fn, vsl_m, process_id = args
+    algo_to_tune, r_fn, vsl_m, process_id, cavs_perc = args
     combination_name = f"{algo_to_tune}_{r_fn}_{vsl_m}"
     # Each worker process gets a dedicated block of 1000 ports to avoid any collisions.
     process_base_port = BASE_TRAIN_SUMO_PORT + process_id * 1000
@@ -393,10 +393,10 @@ def run_tuning_for_one_combination(args):
     max_sim_len_needed = (max(BROAD_EXPLORATION_STEPS_PER_SCENARIO, DEEP_VALIDATION_STEPS_PER_SCENARIO) + 10) * 60
     for sc_cfg in SHARED_DEMAND_SCENARIOS:
         if sc_cfg["pattern"] == 'uniform':
-            flow_generation_fix_num_veh(combination_name, sc_cfg["demand"], max_sim_len_needed, 1, 1)
+            flow_generation_fix_num_veh(combination_name, sc_cfg["demand"], max_sim_len_needed, 1, 1, cavs_perc)
         else:
             bimodal_pattern = bimodal_distribution_24h(sc_cfg["demand"] / 1000.0)
-            flow_generation(combination_name, bimodal_pattern, max_sim_len_needed)
+            flow_generation(combination_name, bimodal_pattern, max_sim_len_needed, cavs_perc)
     # Create the single .sumocfg file that points to these flows
     cfg_content = SUMO_CFG_TEMPLATE.format(file_postfix=combination_name)
     cfg_filepath = SUMO_CONFIG_DIR / f"3_2_merge_{combination_name}.sumocfg"
@@ -498,27 +498,19 @@ def setup_worker_logging():
     handler.setFormatter(formatter)
     worker_logger.addHandler(handler)
 
-def get_safe_port(base_port, worker_id, trial_number):
-    """
-    Calculates a unique, safe port for a SUMO instance to avoid collisions.
-    Each worker gets its own large block of ports.
-    """
-    worker_port_block = base_port + worker_id * 1000
-    port = worker_port_block + (trial_number % 100)
-    return port
-
 """==============================================================================================="""
 if __name__ == '__main__':
     algo_to_tune = "DQN"
     reward_functions_to_tune = ["mobility", "safety", "balanced"]
-    vsl_enforcements_to_tune = ["recommend", "electric_only"]
+    vsl_enforcements_to_tune = ["recommend", "cavs_only"]
+    CAVS_PERCENTAGE = 20
 
     os.makedirs(OPTUNA_PARAMS_DIR, exist_ok=True)
     
     # Create a list of all combination arguments for our worker function
     tuning_tasks = []
     for i, (r_fn, vsl_m) in enumerate(product(reward_functions_to_tune, vsl_enforcements_to_tune)):
-        tuning_tasks.append((algo_to_tune, r_fn, vsl_m, i))
+        tuning_tasks.append((algo_to_tune, r_fn, vsl_m, i, CAVS_PERCENTAGE))
 
     # Determine the number of parallel processes to run
     num_parallel_processes = min(len(tuning_tasks), max(1, os.cpu_count() - 1))

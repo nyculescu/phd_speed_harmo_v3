@@ -99,7 +99,7 @@ def triangular_distribution_24h(amplitude, x=np.arange(0, 24, 1)):
     y[y < 50] = np.random.uniform(0, 50)
     return adjust_amplitude(y.astype(int)[:24], amplitude)
 
-def flow_generation(model, daily_pattern, sim_length_seconds):
+def flow_generation(model, daily_pattern, sim_length_seconds, CAV_percent):
     """
     Generate traffic flows for a given simulation length.
     
@@ -197,14 +197,20 @@ def flow_generation(model, daily_pattern, sim_length_seconds):
                     electric_truck_proportion = 0
                     electric_trailer_proportion = 0
 
+                cav_normal_car_proportion = CAV_percent * normal_car / 100
+                cav_van_proportion = CAV_percent * van / 100
+                cav_bus_proportion = CAV_percent * bus / 100
+                cav_truck_proportion = CAV_percent * truck / 100
+                cav_trailer_proportion = CAV_percent * trailer / 100
+
                 proportions = {
-                    "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion),
+                    "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion-cav_normal_car_proportion),
                     "passenger/hatchback": (fast_car-disobedient_fast_car_proportion-electric_fast_car_proportion),
-                    "passenger/van": (van-disobedient_van_proportion-electric_van_proportion),
-                    "bus": (bus-disobedient_bus_proportion-electric_bus_proportion),
+                    "passenger/van": (van-disobedient_van_proportion-electric_van_proportion-cav_van_proportion),
+                    "bus": (bus-disobedient_bus_proportion-electric_bus_proportion-cav_bus_proportion),
                     "motorcycle": (motorcycle-disobedient_motorcycle_proportion-electric_motorcycle_proportion),
-                    "truck": (truck-disobedient_truck_proportion-electric_truck_proportion),
-                    "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion),
+                    "truck": (truck-disobedient_truck_proportion-electric_truck_proportion-cav_truck_proportion),
+                    "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion-cav_trailer_proportion),
 
                     # Disobedient proportions:
                     "disobedient_passenger": disobedient_normal_car_proportion,
@@ -223,6 +229,13 @@ def flow_generation(model, daily_pattern, sim_length_seconds):
                     "electric_motorcycle": electric_motorcycle_proportion,
                     "electric_truck": electric_truck_proportion,
                     "electric_truck/trailer": electric_trailer_proportion,
+
+                    # CAV proportions:
+                    "CAV_passenger": cav_normal_car_proportion,
+                    "CAV_passenger/van": cav_van_proportion,
+                    "CAV_bus": cav_bus_proportion,
+                    "CAV_truck": cav_truck_proportion,
+                    "CAV_truck/trailer": cav_trailer_proportion,
                 }
 
                 # Calculate start and end times for each flow
@@ -246,6 +259,11 @@ def flow_generation(model, daily_pattern, sim_length_seconds):
                                             f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                             f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                             f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
+                            elif "CAV" in vehicle_type and CAV_percent > 1:
+                                flows.append((begin_time,
+                                            f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                            f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                            f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("CAV_")}"/>\n'))
                             else:
                                 flows.append((begin_time,
                                             f'    <flow id="{vehicle_type}_flow_{i}_day_{day_index}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
@@ -398,6 +416,39 @@ def flow_generation(model, daily_pattern, sim_length_seconds):
         decel = np.random.uniform(3.0, 3.4)
         f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
 
+        """ CAV vehicle types """
+        lcCooperative = 1.0 # CAVs are fully cooperative
+        speedFactor = 1.0   # CAVs perfectly obey speed limits
+        speedDev = 0.05     # Very small deviation
+        sigma = 0.1         # Very low driver imperfection
+        emissionClass = "PHEMlight/zero" # Assuming CAVs are electric
+        # NOTE: Using a distinct color for CAVs, e.g., green
+        accel = np.random.uniform(2.4, 2.8)
+        decel = np.random.uniform(4.3, 4.7)
+        length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
+        f.write(f'    <vType id="CAV_passenger" vClass="passenger" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(3.0, 3.4)
+        decel = np.random.uniform(4.5, 5.0)
+        length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
+        f.write(f'    <vType id="CAV_passenger/hatchback" vClass="passenger" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{240/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.5, 2.0)
+        decel = np.random.uniform(3.0, 3.4)
+        length = np.random.triangular(3.7, 4.5, 5.0) * np.random.uniform(0.98, 1.02)
+        f.write(f'    <vType id="CAV_passenger/van" vClass="passenger" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.0, 1.5)
+        decel = np.random.uniform(3.5, 4.1)
+        length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
+        f.write(f'    <vType id="CAV_bus" vClass="bus" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(3.5, 4.1)
+        decel = np.random.uniform(5.0, 6.4)
+        length = np.random.uniform(2.2, 2.6)
+        f.write(f'    <vType id="CAV_motorcycle" vClass="motorcycle" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{180/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.4, 1.8)
+        decel = np.random.uniform(3.3, 3.8)
+        f.write(f'    <vType id="CAV_truck" vClass="truck" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.0, 1.4)
+        decel = np.random.uniform(3.0, 3.4)
+        f.write(f'    <vType id="CAV_truck/trailer" vClass="truck" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
 
         f.write('\n')
         f.write(f'    <route id="{route_id}" edges="{edges}"/>\n') # Replace {your_edges_here} with actual edges
@@ -409,9 +460,9 @@ def flow_generation(model, daily_pattern, sim_length_seconds):
 
         f.write('</routes>\n')
 
-    logging.info(f"Flow generation complete for model {model}.")
+    print(f"Flow generation complete for model {model}.")
 
-def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, num_of_episodes, num_of_intervals):
+def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, num_of_episodes, num_of_intervals, CAV_percent):
     """
     Generate traffic flows with fixed number of vehicles per hour.
     
@@ -435,21 +486,21 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
         total_intervals = num_of_episodes * num_of_intervals
         interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
 
-        logging.info(f"Flow generation called with: model={model}, sim_length={sim_length_seconds}s")
-        logging.info(f"Episodes={num_of_episodes}, intervals={num_of_intervals}")
+        print(f"Flow generation called with: model={model}, sim_length={sim_length_seconds}s")
+        print(f"Episodes={num_of_episodes}, intervals={num_of_intervals}")
 
         # Calculate interval duration
         total_intervals = num_of_episodes * num_of_intervals
         interval_duration = sim_length_seconds / total_intervals if total_intervals > 0 else sim_length_seconds
         
-        logging.info(f"Calculated: total_intervals={total_intervals}, interval_duration={interval_duration}s")
+        print(f"Calculated: total_intervals={total_intervals}, interval_duration={interval_duration}s")
 
         # Iterate over each pair of rates
         for ep in range(num_of_episodes):
             for i in range(num_of_intervals):
                 current_time = ep * (sim_length_seconds / num_of_episodes) + i * interval_duration
                 if current_time >= sim_length_seconds:
-                    logging.warning(f"Breaking early: current_time={current_time} >= sim_length={sim_length_seconds}")
+                    print(f"Breaking early: current_time={current_time} >= sim_length={sim_length_seconds}")
                     break
 
                 num_veh_per_hr_temp = base_num_veh_per_hr + (i * 100)
@@ -529,14 +580,20 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
                     electric_truck_proportion = 0
                     electric_trailer_proportion = 0
 
+                cav_normal_car_proportion = CAV_percent * normal_car / 100
+                cav_van_proportion = CAV_percent * van / 100
+                cav_bus_proportion = CAV_percent * bus / 100
+                cav_truck_proportion = CAV_percent * truck / 100
+                cav_trailer_proportion = CAV_percent * trailer / 100
+
                 proportions = {
-                    "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion),
+                    "passenger": (normal_car-disobedient_normal_car_proportion-electric_normal_car_proportion-cav_normal_car_proportion),
                     "passenger/hatchback": (fast_car-disobedient_fast_car_proportion-electric_fast_car_proportion),
-                    "passenger/van": (van-disobedient_van_proportion-electric_van_proportion),
-                    "bus": (bus-disobedient_bus_proportion-electric_bus_proportion),
+                    "passenger/van": (van-disobedient_van_proportion-electric_van_proportion-cav_van_proportion),
+                    "bus": (bus-disobedient_bus_proportion-electric_bus_proportion-cav_bus_proportion),
                     "motorcycle": (motorcycle-disobedient_motorcycle_proportion-electric_motorcycle_proportion),
-                    "truck": (truck-disobedient_truck_proportion-electric_truck_proportion),
-                    "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion),
+                    "truck": (truck-disobedient_truck_proportion-electric_truck_proportion-cav_truck_proportion),
+                    "truck/trailer": (trailer-disobedient_trailer_proportion-electric_trailer_proportion-cav_trailer_proportion),
 
                     # Disobedient proportions:
                     "disobedient_passenger": disobedient_normal_car_proportion,
@@ -555,6 +612,13 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
                     "electric_motorcycle": electric_motorcycle_proportion,
                     "electric_truck": electric_truck_proportion,
                     "electric_truck/trailer": electric_trailer_proportion,
+
+                    # CAV proportions:
+                    "CAV_passenger": cav_normal_car_proportion,
+                    "CAV_passenger/van": cav_van_proportion,
+                    "CAV_bus": cav_bus_proportion,
+                    "CAV_truck": cav_truck_proportion,
+                    "CAV_truck/trailer": cav_trailer_proportion,
                 }
 
                 # Calculate start and end times for each flow
@@ -563,7 +627,7 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
                 if end_time - begin_time < 60:  # Minimum 60 seconds
                     end_time = min(begin_time + 60, sim_length_seconds)
 
-                logging.debug(f"Flow interval {ep}_{i}: begin={begin_time}, end={end_time}, duration={end_time-begin_time}s")
+                print(f"Flow interval {ep}_{i}: begin={begin_time}, end={end_time}, duration={end_time-begin_time}s")
 
                 max_end_time = max(max_end_time, end_time)
 
@@ -583,6 +647,11 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
                                         f'    <flow id="{vehicle_type}_flow_{i}_ep_{ep}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
                                         f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
                                         f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("electric_")}"/>\n'))
+                        elif "CAV" in vehicle_type and CAV_percent > 0:
+                            flows.append((begin_time,
+                                        f'    <flow id="{vehicle_type}_flow_{i}_ep_{ep}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
+                                        f'departLane="{depart_lane}" departPos="{depart_pos}" departSpeed="{depart_speed}" '
+                                        f'route="{route_id}" vehsPerHour="{vehs_gen}" guiShape="{vehicle_type.removeprefix("CAV_")}"/>\n'))
                         else:
                             flows.append((begin_time,
                                         f'    <flow id="{vehicle_type}_flow_{i}_ep_{ep}" type="{vehicle_type}" begin="{begin_time}" end="{end_time}" '
@@ -734,6 +803,32 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
         decel = np.random.uniform(3.0, 3.4)
         f.write(f'    <vType id="electric_truck/trailer" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color=".4,.4,.4" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{np.random.uniform(0.1, 0.3)}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
 
+        """ CAV vehicle types """
+        lcCooperative = 1.0 # CAVs are fully cooperative
+        speedFactor = 1.0   # CAVs perfectly obey speed limits
+        speedDev = 0.05     # Very small deviation
+        sigma = 0.1         # Very low driver imperfection
+        emissionClass = "PHEMlight/zero" # Assuming CAVs are electric
+        # NOTE: Using a distinct color for CAVs, e.g., green
+        accel = np.random.uniform(2.4, 2.8)
+        decel = np.random.uniform(4.3, 4.7)
+        length = np.random.triangular(3.7, 4.75, 5.7) * np.random.uniform(0.97, 1.07)
+        f.write(f'    <vType id="CAV_passenger" vClass="passenger" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{200/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 5))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(3.0, 3.4)
+        decel = np.random.uniform(4.5, 5.0)
+        length = np.random.triangular(3.7, 4.4, 5.0) * np.random.uniform(0.98, 1.02)
+        f.write(f'    <vType id="CAV_passenger/van" vClass="passenger" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{130/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 12))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.0, 1.5)
+        decel = np.random.uniform(3.5, 4.1)
+        length = np.random.triangular(12.0, 12.5, 18.0) * np.random.uniform(0.98, 1.02)
+        f.write(f'    <vType id="CAV_bus" vClass="bus" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="{length}" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 40))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(3.5, 4.1)
+        decel = np.random.uniform(5.0, 6.4)
+        length = np.random.uniform(2.2, 2.6)
+        f.write(f'    <vType id="CAV_truck" vClass="truck" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="6" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 3))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
+        accel = np.random.uniform(1.0, 1.4)
+        decel = np.random.uniform(3.0, 3.4)
+        f.write(f'    <vType id="CAV_truck/trailer" vClass="truck" carFollowModel= "{car_following_model}" tau="{tau}" minGap="{minGap}" accel="{accel}" decel="{decel}" length="10.5" maxSpeed="{100/3.6}" color="0,1,0" personNumber="{(int)(np.random.uniform(1, 2))}" sigma="{sigma}" speedFactor="{speedFactor}" speedDev="{speedDev}" emissionClass="{emissionClass}" lcDuration="{lcDuration}" lcCooperative="{lcCooperative}" lcSpeedGain="{lcSpeedGain}" lcStrategic="{lcStrategic}"/>\n')
 
         f.write('\n')
         f.write(f'    <route id="{route_id}" edges="{edges}"/>\n') # Replace {your_edges_here} with actual edges
@@ -743,9 +838,9 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
             # Get the begin_time of the very first flow
             first_flow_time = flows[0][0]
             # Use the tracked max_end_time for the last flow time
-            logging.info(f"Generated {len(flows)} flows from time {first_flow_time}s to {max_end_time}s")
+            print(f"Generated {len(flows)} flows from time {first_flow_time}s to {max_end_time}s")
         else:
-            logging.warning("No flows were generated!")
+            print("No flows were generated!")
     
         # Write sorted flows to file
         for _, flow_text in flows:
@@ -753,9 +848,9 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
 
         f.write('</routes>\n')
 
-    logging.info(f"Flow generation complete for model {model}.")
+    print(f"Flow generation complete for model {model}.")
 
 if __name__ == '__main__':
-    # flow_generation_fix_num_veh("DQN", 0, 250, 8)
+    flow_generation_fix_num_veh("DQN_test_0", 2000, 1440, 1, 1, 5)
     # flow_generation_fix_num_veh("DQN", num_envs_per_model + 1, 500, episode_length)
-    logging.info("Flow generation ran individually")
+    print("Flow generation ran individually")

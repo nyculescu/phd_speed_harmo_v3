@@ -1,8 +1,8 @@
 import logging
 import os
-LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARN").upper()
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "DEBUG").upper()
 logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.WARN),
+    level=getattr(logging, LOG_LEVEL, logging.DEBUG),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -35,13 +35,14 @@ import pandas as pd
 import time
 import json
 import copy
-import multiprocessing as mp # Added for parallel processing
+import multiprocessing as mp
 import csv
 from tqdm import tqdm
 import shutil
 from itertools import product
 import numpy as np
 import argparse
+from random import randint
 # from itertools import product # Added for generating combinations
 
 """ SUMO configuration """
@@ -81,7 +82,7 @@ num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model
 interval_length = 60 * interval_length_h
 sumoExecutable_gui = 'sumo-gui.exe' if os.name == 'nt' else 'sumo-gui'
 sumoExecutable_nogui = 'sumo.exe' if os.name == 'nt' else 'sumo'
-SUMO_EXE_GUI = sumoExecutable_nogui # NOTE: Change this to define which SUMO executable is used
+SUMO_EXE_GUI = sumoExecutable_gui # NOTE: Change this to define which SUMO executable is used
 sumoBinary = os.path.join(os.environ['SUMO_HOME'], 'bin', SUMO_EXE_GUI) # Default to GUI
 MAX_OCCUPANCY = 100.0  # Occupancy percentage
 MAX_FLOW = 10000.0    # vehicles/hour (theoretical maximum for 2.5 lanes)
@@ -100,9 +101,11 @@ OPTUNA_PARAMS_DIR = BASE_DIR / "rl_models" / "optuna_params"
 TRAFFIC_ENV_SUMO_DIR = BASE_DIR / "traffic_environment" / "sumo"
 SUMO_CONFIG_DIR = TRAFFIC_ENV_SUMO_DIR # Directory where .sumocfg files will be written
 # NORMALIZATION_BOUNDS_FILE = BASE_DIR / "rl_models" / "optuna_params" / "normalization_bounds.json"
-
+NO_OF_HR_OF_TEST = 4 # hours for testing
+TEST_SIM_LENGTH = 3600 * NO_OF_HR_OF_TEST
 OPTION = 0
 MAX_ALLOWED_ENVS_IN_OPTION_1 = 30
+CAVS_PRESENCE_PERCENTAGE = 10 # Percentage of CAVs in the traffic flow
 
 def get_linear_schedule(initial_value: float):
     def func(progress_remaining: float) -> float:
@@ -199,7 +202,7 @@ def train_env_constructor(idx, model_name, sim_length, num_of_episodes, reward_f
 def eval_env_constructor(model_name, sim_length, reward_fn, vsl_enforcement="recommend", sumo_port_to_use=None, sumo_binary_to_use=None):
     def _init():
         port_for_eval_env = sumo_port_to_use if sumo_port_to_use is not None else BASE_EVAL_SUMO_PORT
-        eval_model_idx = num_envs_per_model + 1
+        eval_model_idx = num_train_envs_per_model
 
         if OPTION == 1:
             create_sumocfg(f"{model_name}_{eval_model_idx}")
@@ -230,14 +233,14 @@ def train_model(algorithm: str,
                 sumo_binary_to_use: Optional[str] = None):
     """Trains a model using the specified algorithm and parameters."""
 
-    TOTAL_TRAINING_TIMESTEPS = 10_000 # Recommended: 500k | Probe: 40k
+    TOTAL_TRAINING_TIMESTEPS = 100_000 # Recommended: 500k | Probe: 40k
     EVAL_FREQ = 100 # [steps/env] -> EVAL_FREQ = steps/env * n_envs | Recommended: 25k | Probe: 4k
-    NO_OF_HR_OF_SIM = 3 # [h] for training episodes
+    NO_OF_HR_OF_SIM = 2 # [h] for training episodes
     EPISODE_SIM_LENGTH = 3600 * NO_OF_HR_OF_SIM
-    NO_OF_HR_OF_EVAL = 2 # [h] for evaluation | Probe: 2
+    NO_OF_HR_OF_EVAL = 4 # [h] for evaluation | Probe: 2
     EVAL_SIM_LENGTH = 3600 * NO_OF_HR_OF_EVAL
-    EVAL_NO_IMPROVE_EVALS = 3 # Recommended: 10 | Probe: 3
-    EVALS_MIN_EVALS = 4 # Recommended: 15 | Probe: 4
+    EVAL_NO_IMPROVE_EVALS = 5 # Recommended: 10 | Probe: 3
+    EVALS_MIN_EVALS = 5 # Recommended: 15 | Probe: 4
 
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     log_dir = f"./logs/{model_name}/"
@@ -331,7 +334,7 @@ def train_model(algorithm: str,
         env_eval.close()
         logger.info(f"Finished training for {model_name}")
 
-def test_model(algorithm, reward_function, vsl_enforcement="recommend", idx=0):
+def test_model(algorithm, reward_function, vsl_enforcement, base_gen_car_distrib = ["uniform", 2000], idx=0):
     """Test a trained DQN model with comprehensive evaluation."""
     model_name = f"{algorithm}_{reward_function}_{vsl_enforcement}"
     model_load_path = Path(f"rl_models/{model_name}/best_model.zip")
@@ -348,14 +351,14 @@ def test_model(algorithm, reward_function, vsl_enforcement="recommend", idx=0):
         logger.error(f"Error loading model from {model_load_path}: {e}. Exiting test.")
         return
 
-    NO_OF_HR_OF_TEST = 4 # hours for testing
-    TEST_SIM_LENGTH = 3600 * NO_OF_HR_OF_TEST
+    model_name = f"{model_name}_test"
+    create_sumocfg(model_name)
 
     env = TrafficEnv(port=BASE_EVAL_SUMO_PORT + idx,
                      model_name=model_name,
                      model_idx=0,
                      sim_length=TEST_SIM_LENGTH,
-                     base_gen_car_distrib=["bimodal", 3],
+                     base_gen_car_distrib=base_gen_car_distrib,
                      num_of_episodes=1,
                      reward_fn=reward_function,
                      vsl_enforcement=vsl_enforcement,
@@ -578,7 +581,7 @@ def run_evaluation_for_combination(config_tuple):
                          model_name=eval_model_name, # Use the unique eval name
                          model_idx=process_id,
                          sim_length=TEST_SIM_LENGTH,
-                         base_gen_car_distrib=["bimodal", 4000], # Your custom test scenario
+                         base_gen_car_distrib=["bimodal", randint(1500, 2500)],
                          num_of_episodes=1,
                          reward_fn=reward_fn,
                          vsl_enforcement=vsl_mode,
@@ -689,7 +692,7 @@ class TrafficEnv(gym.Env):
         self.reward_threshold = -5 # Threshold for early termination in tuning
 
         # VSL Enforcement Mode Configuration
-        # Options: "all_vehicles", "electric_only", "recommend"
+        # Options: "all_vehicles", "cavs_only", "recommend"
         self.vsl_enforcement = vsl_enforcement
         
         # Aattributes for start_sumo customization
@@ -799,8 +802,8 @@ class TrafficEnv(gym.Env):
 
                 current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
                 
-                # timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                # sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
 
                 sumo_cmd = [
                     current_sumo_binary, "-c",
@@ -812,12 +815,12 @@ class TrafficEnv(gym.Env):
                     f"--step-length={self.sumo_step_length}",
                     "--default.action-step-length=0.2",
                     f"--end={self.sim_length}",
-                    "--quit-on-end",
+                    # "--quit-on-end",
                     "--no-step-log", 
                     "--no-warnings",
                     "--time-to-teleport", "-1", # Disable teleporting, which can hide problems
                     "--collision.action", "warn",
-                    # "--log", sumo_log_file # FIXME: check why it doesn't save anything
+                    "--log", sumo_log_file
                 ]
 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -862,6 +865,10 @@ class TrafficEnv(gym.Env):
 
     def step(self, action: int):
         """Execute one step in the environment."""
+
+        if isinstance(action, np.ndarray):
+            action = action.item()
+
         # Initialize SUMO if not already done
         if not self.is_sumo_initialized:
             self._start_sumo()
@@ -1085,13 +1092,15 @@ class TrafficEnv(gym.Env):
                     self.gen_car_distrib[1],
                     self.sim_length,
                     1, # Each episode is now self-contained
-                    1
+                    1,
+                    CAVS_PRESENCE_PERCENTAGE
                 )
             elif self.gen_car_distrib[0] == 'bimodal':
                 flow_generation(
                     self.effective_model_name_for_files, 
                     bimodal_distribution_24h(self.gen_car_distrib[1]), 
-                    self.sim_length
+                    self.sim_length,
+                    CAVS_PRESENCE_PERCENTAGE
                 )
 
         # Reset state variables
@@ -1449,7 +1458,7 @@ class TrafficEnv(gym.Env):
             # Option 3: Only set maximum allowed speed for the lane
             for segId in seg_1_before:
                 traci.lane.setMaxSpeed(segId, speed_limit_ms)
-            logger.debug(f"VSL Mode {self.vsl_enforcement}: Set lane max speed to {speed_limit_kmh} km/h")
+                logger.debug(f"VSL Mode {self.vsl_enforcement}: Set lane max speed to {speed_limit_kmh} km/h")
             
         elif self.vsl_enforcement == "all_vehicles":
             # Option 1: Force all vehicles to obey speed limit immediately
@@ -1463,12 +1472,11 @@ class TrafficEnv(gym.Env):
                     try:
                         # Set vehicle speed to the new speed limit
                         traci.vehicle.setSpeed(veh_id, speed_limit_ms)
+                        logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced all vehicles to {speed_limit_kmh} km/h")
                     except Exception as e:
                         logger.debug(f"Could not set speed for vehicle {veh_id}: {e}")
             
-            logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced all vehicles to {speed_limit_kmh} km/h")
-            
-        elif self.vsl_enforcement == "electric_only":
+        elif self.vsl_enforcement == "cavs_only":
             # Option 2: Force only electric_passenger vehicles to obey speed limit
             for segId in seg_1_before:
                 # Set lane max speed
@@ -1480,13 +1488,11 @@ class TrafficEnv(gym.Env):
                     try:
                         # Check if vehicle type is electric_passenger
                         veh_type = traci.vehicle.getTypeID(veh_id)
-                        if veh_type == "electric_passenger":
+                        if veh_type == "CAV_passenger" or veh_type == "CAV_passenger/van" or veh_type == "CAV_bus" or veh_type == "CAV_truck" or veh_type == "CAV_truck/trailer":
                             traci.vehicle.setSpeed(veh_id, speed_limit_ms)
+                            logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced CAVs to {speed_limit_kmh} km/h")
                     except Exception as e:
                         logger.debug(f"Could not check/set speed for vehicle {veh_id}: {e}")
-            
-            logger.debug(f"VSL Mode {self.vsl_enforcement}: Forced electric_passenger vehicles to {speed_limit_kmh} km/h")
-            
         else:
             logger.warning(f"Unknown VSL enforcement mode: {self.vsl_enforcement}. Using recommend.")
             # Fallback to recommend
@@ -1765,7 +1771,7 @@ if __name__ == '__main__':
     )
     parser.add_argument('--algo', type=str, default='DQN', help="RL Algorithm to use.")
     parser.add_argument('--reward_fn', type=str, default='mobility', help="Reward function (mobility, safety, balanced).")
-    parser.add_argument('--vsl_mode', type=str, default='electric_only', help="VSL enforcement mode (recommend, electric_only).")
+    parser.add_argument('--vsl_mode', type=str, default='cavs_only', help="VSL enforcement mode (recommend, cavs_only).")
     parser.add_argument('--use_tuned_hp', action='store_true', help="Flag to load hyperparameters from Optuna JSON file.")
     args = parser.parse_args()
     OPTION = args.option
@@ -1774,7 +1780,7 @@ if __name__ == '__main__':
     if OPTION == 1:
         num_train_envs_per_model = min(MAX_ALLOWED_ENVS_IN_OPTION_1, args.n_envs)
         num_test_envs_per_model = 5 # Override the value
-        num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model # Recalculate the dependent global variable
+        # num_envs_per_model = num_train_envs_per_model + num_test_envs_per_model # Recalculate the dependent global variable
 
         model_name = f"{args.algo}_{args.reward_fn}_{args.vsl_mode}"
         # optimal_params = ENHANCED_HYPERPARAMS["DQN"].copy()
@@ -1811,7 +1817,7 @@ if __name__ == '__main__':
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         reward_functions = ["mobility", "safety", "balanced"] # ["mobility", "safety", "balanced"]
-        vsl_enforcements = ["electric_only", "recommend"] # ["all_vehicles", "electric_only", "recommend"]
+        vsl_enforcements = ["cavs_only", "recommend"] # ["all_vehicles", "cavs_only", "recommend"]
 
         use_hyperparams_by_optuna = False
         all_combinations_params_for_training = []
@@ -1851,11 +1857,25 @@ if __name__ == '__main__':
     
     # Option 3: Evaluate a trained model with tuned parameters
     elif OPTION == 3:
-        algo_to_use = "DQN"
-        vsl_enforce_mode = "electric_only" 
-        reward_used = "mobility"
+        if args.use_tuned_hp:
+            hp_path = OPTUNA_PARAMS_DIR / f"best_optuna_hyperparams_{args.algo}_{args.reward_fn}_{args.vsl_mode}.json"
+            logger.info(f"Attempting to load tuned hyperparameters from: {hp_path}")
+            try:
+                with open(hp_path, 'r') as f:
+                    # This loads the full, processed hyperparameter dictionary
+                    params_from_json = json.load(f)[args.algo]
+                    # The JSON stores activation_fn as a string, convert it back
+                    if params_from_json["policy_kwargs"]["activation_fn"] == "nn.ReLU":
+                        params_from_json["policy_kwargs"]["activation_fn"] = nn.ReLU
+                    hyperparams_to_use = params_from_json
+            except (FileNotFoundError, KeyError) as e:
+                logger.error(f"Could not load tuned HP: {e}. Falling back to default ENHANCED_HYPERPARAMS.")
+                hyperparams_to_use = ENHANCED_HYPERPARAMS[args.algo]
+        else:
+            logger.info("Using default ENHANCED_HYPERPARAMS.")
+            hyperparams_to_use = ENHANCED_HYPERPARAMS[args.algo]
         # Evaluate the trained model
-        test_model(algorithm=algo_to_use, reward_function=reward_used, vsl_enforcement=vsl_enforce_mode)  # Add vsl_mode parameter
+        test_model(algorithm=args.algo, reward_function=args.reward_fn, vsl_enforcement=args.vsl_mode, base_gen_car_distrib = ["bimodal", 3000])  # Add vsl_mode parameter
 
     # Option 4: Run parallel evaluations for all combinations of reward functions and VSL enforcement modes 
     elif OPTION == 4:
@@ -1865,12 +1885,12 @@ if __name__ == '__main__':
         # These should match the models you trained with Option 2
         algo_to_use = "DQN"
         reward_functions_to_test = ["mobility", "safety", "balanced"]
-        vsl_enforcements_to_test = ["electric_only", "recommend"]
+        vsl_enforcements_to_test = ["cavs_only", "recommend"]
 
         # Generate a list of configuration tuples for the worker function
         evaluation_tasks = [
             ("DQN", r_fn, vsl_m, i)
-            for i, (r_fn, vsl_m) in enumerate(product(["mobility", "safety", "balanced"], ["electric_only", "recommend"]))
+            for i, (r_fn, vsl_m) in enumerate(product(["mobility", "safety", "balanced"], ["cavs_only", "recommend"]))
         ]
         num_parallel_processes = min(len(evaluation_tasks), mp.cpu_count() - 1 or 1)
         logger.info(f"Evaluating {len(evaluation_tasks)} models using up to {num_parallel_processes} parallel processes.")

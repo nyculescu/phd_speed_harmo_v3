@@ -1,38 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- generated on 2025-06-25 16:11:03 by Eclipse SUMO netedit Version 1.21.0
-<neteditConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/neteditConfiguration.xsd">
-
-    <input>
-        <sumo-net-file value="D:\phd_ws\speed_harmo\phd_speed_harmo_v3\traffic_environment\sumo\3_2_merge_v1.net.xml"/>
-    </input>
-
-    <output>
-        <output-file value="D:\phd_ws\speed_harmo\phd_speed_harmo_v3\traffic_environment\sumo\3_2_merge_v1.net.xml"/>
-    </output>
-
-    <processing>
-        <geometry.min-radius.fix.railways value="false"/>
-        <geometry.max-grade.fix value="false"/>
-        <offset.disable-normalization value="true"/>
-        <lefthand value="0"/>
-    </processing>
-
-    <junctions>
-        <no-turnarounds value="true"/>
-        <junctions.corner-detail value="5"/>
-        <junctions.limit-turn-speed value="5.50"/>
-        <rectangular-lane-cut value="0"/>
-    </junctions>
-
-    <pedestrian>
-        <walkingareas value="0"/>
-    </pedestrian>
-
-</neteditConfiguration>
--->
-
-<net version="1.20" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
+<net version="1.9" junctionCornerDetail="5" limitTurnSpeed="5.50" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/net_file.xsd">
 
     <location netOffset="0.00,0.00" convBoundary="-1884.30,41.12,2430.90,76.56" origBoundary="-10000000000.00,-10000000000.00,10000000000.00,10000000000.00" projParameter="!"/>
 
@@ -91,14 +59,13 @@
         <lane id=":J22_0_2" index="2" speed="33.33" length="0.30" shape="-1451.98,64.80 -1451.66,64.80"/>
     </edge>
     <edge id=":J25_0" function="internal">
-        <lane id=":J25_0_0" index="0" speed="33.33" length="100.54" shape="162.13,68.51 262.61,71.40"/>
-        <lane id=":J25_0_1" index="1" speed="33.33" length="100.54" shape="162.09,71.71 262.61,71.40"/>
-        <lane id=":J25_0_2" index="2" speed="33.33" length="100.54" shape="162.05,74.91 262.62,74.60"/>
+        <lane id=":J25_0_0" index="0" speed="33.33" length="8.00" shape="162.09,71.71 170.06,71.74"/>
+        <lane id=":J25_0_1" index="1" speed="33.33" length="8.00" shape="162.05,74.91 170.08,74.94"/>
     </edge>
 
     <edge id="seg_0_after" from="J25" to="J2" priority="-1" length="500.00">
-        <lane id="seg_0_after_0" index="0" speed="33.33" length="500.00" shape="262.61,71.40 761.72,69.52"/>
-        <lane id="seg_0_after_1" index="1" speed="33.33" length="500.00" shape="262.62,74.60 761.74,72.72"/>
+        <lane id="seg_0_after_0" index="0" speed="33.33" length="500.00" shape="170.06,71.74 761.72,69.52"/>
+        <lane id="seg_0_after_1" index="1" speed="33.33" length="500.00" shape="170.08,74.94 761.74,72.72"/>
     </edge>
     <edge id="seg_0_before" from="J0" to="J25" priority="-1" length="275.00">
         <lane id="seg_0_before_0" index="0" speed="33.33" length="275.00" shape="-213.41,63.95 162.13,68.51"/>
@@ -216,18 +183,17 @@
     </junction>
     <junction id="J23" type="dead_end" x="-1545.99" y="65.66" incLanes="" intLanes="" shape="-1545.99,65.66 -1545.91,56.06"/>
     <junction id="J24" type="dead_end" x="788.40" y="74.41" incLanes="seg_1_after_0 seg_1_after_1" intLanes="" shape="788.42,68.01 788.40,74.41"/>
-    <junction id="J25" type="priority" x="166.05" y="76.56" incLanes="seg_0_before_0 seg_0_before_1 seg_0_before_2" intLanes=":J25_0_0 :J25_0_1 :J25_0_2" shape="262.62,76.15 262.61,69.92 162.15,66.91 162.03,76.51" customShape="1">
-        <request index="0" response="010" foes="010" cont="0"/>
-        <request index="1" response="000" foes="001" cont="0"/>
-        <request index="2" response="000" foes="000" cont="0"/>
+    
+    <junction id="J25" type="zipper" x="166.05" y="76.56" incLanes="seg_0_before_0 seg_0_before_1 seg_0_before_2" intLanes=":J25_0_0 :J25_0_1" shape="170.08,76.54 170.06,70.14 167.06,69.33 166.10,68.55 165.15,67.78 163.92,67.17 162.15,66.91 162.03,76.51">
+        <request index="0" response="00" foes="00" cont="0"/>
+        <request index="1" response="00" foes="00" cont="0"/>
     </junction>
     <junction id="J3" type="dead_end" x="2430.90" y="62.68" incLanes="" intLanes="" shape="2430.90,62.68"/>
 
     <connection from="seg_0_after" to="seg_1_after" fromLane="0" toLane="0" via=":J2_0_0" dir="s" state="M"/>
     <connection from="seg_0_after" to="seg_1_after" fromLane="1" toLane="1" via=":J2_0_1" dir="s" state="M"/>
-    <connection from="seg_0_before" to="seg_0_after" fromLane="0" toLane="0" via=":J25_0_0" dir="s" state="m"/>
-    <connection from="seg_0_before" to="seg_0_after" fromLane="1" toLane="0" via=":J25_0_1" dir="s" state="M"/>
-    <connection from="seg_0_before" to="seg_0_after" fromLane="2" toLane="1" keepClear="0" via=":J25_0_2" dir="s" state="M"/>
+    <connection from="seg_0_before" to="seg_0_after" fromLane="1" toLane="0" via=":J25_0_0" dir="s" state="M"/>
+    <connection from="seg_0_before" to="seg_0_after" fromLane="2" toLane="1" via=":J25_0_1" dir="s" state="M"/>
     <connection from="seg_10_before" to="seg_9_before" fromLane="0" toLane="0" via=":J22_0_0" dir="s" state="M"/>
     <connection from="seg_10_before" to="seg_9_before" fromLane="1" toLane="1" via=":J22_0_1" dir="s" state="M"/>
     <connection from="seg_10_before" to="seg_9_before" fromLane="2" toLane="2" via=":J22_0_2" dir="s" state="M"/>
@@ -292,7 +258,6 @@
     <connection from=":J22_0" to="seg_9_before" fromLane="1" toLane="1" dir="s" state="M"/>
     <connection from=":J22_0" to="seg_9_before" fromLane="2" toLane="2" dir="s" state="M"/>
     <connection from=":J25_0" to="seg_0_after" fromLane="0" toLane="0" dir="s" state="M"/>
-    <connection from=":J25_0" to="seg_0_after" fromLane="1" toLane="0" dir="s" state="M"/>
-    <connection from=":J25_0" to="seg_0_after" fromLane="2" toLane="1" dir="s" state="M"/>
+    <connection from=":J25_0" to="seg_0_after" fromLane="1" toLane="1" dir="s" state="M"/>
 
 </net>
