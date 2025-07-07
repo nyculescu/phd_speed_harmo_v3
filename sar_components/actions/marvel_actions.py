@@ -41,3 +41,17 @@ class MARVELSpeedAction(ActionStrategy):
             if speed > downstream_speed_limit + self.max_step_down:
                 invalid_actions.append(action)
         return invalid_actions
+    
+    def get_valid_actions(self, current_speed_limit: float, 
+                         downstream_speed_limit: float) -> np.ndarray:
+        """
+        Return mask of valid actions.
+        This is optional - the environment doesn't need to know about it.
+        """
+        mask = np.ones(len(self.speed_actions), dtype=bool)
+        
+        for action, speed in self.speed_actions.items():
+            if speed > downstream_speed_limit + self.max_step_down:
+                mask[action] = False
+                
+        return mask

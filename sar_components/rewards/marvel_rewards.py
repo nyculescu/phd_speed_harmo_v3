@@ -23,6 +23,15 @@ class MARVELReward(RewardFunction):
         self.congestion_threshold = 56.3 / 3.6  # 35 mph in m/s (converted from km/h)
         self.max_step_down = 16.1  # 10 mph in km/h
         self.downstream_action = 112.7  # Default 70 mph in km/h
+
+        # Internal metrics tracking
+        self._metrics_history = {
+            'violations': [],
+            'congestion_adaptations': [],
+            'reward_components': [],
+            'speeds': [],
+            'occupancies': []
+        }
         
     def set_downstream_action(self, action: float):
         """Set downstream agent's action for safety reward calculation"""
@@ -67,4 +76,49 @@ class MARVELReward(RewardFunction):
         # Total reward
         total_reward = self.w1 * r1 + self.w2 * r2 + self.w3 * r3
         
+        self._log_internal_metrics(metrics, r1, r2, r3)
+
         return float(total_reward + action_penalty + collision_penalty)
+    
+    def _log_internal_metrics(self, metrics: TrafficMetrics, r1: float, r2: float, r3: float):
+        """Internal metrics tracking."""
+        # Track violations
+        violation = metrics.current_speed_limit > metrics.downstream_speed_limit + self.max_step_down
+        self._metrics_history['violations'].append(violation)
+        
+        # Track congestion adaptations
+        in_congestion = metrics.avg_speed_before <= self.congestion_threshold
+        adapted = in_congestion and metrics.current_speed_limit == 48.3
+        self._metrics_history['congestion_adaptations'].append(adapted)
+        
+        # Track components
+        self._metrics_history['reward_components'].append({
+            'r1': r1, 'r2': r2, 'r3': r3
+        })
+        
+        # Track conditions
+        self._metrics_history['speeds'].append(metrics.avg_speed_before)
+        self._metrics_history['occupancies'].append(metrics.occupancy_upstream)
+    
+    def get_episode_summary(self) -> Dict[str, float]:
+        """Get summary statistics for the episode."""
+        if not self._metrics_history['violations']:
+            return {}
+        
+        n_steps = len(self._metrics_history['violations'])
+        components = self._metrics_history['reward_components']
+        
+        return {
+            'violation_rate': sum(self._metrics_history['violations']) / n_steps,
+            'adaptation_rate': sum(self._metrics_history['congestion_adaptations']) / n_steps,
+            'avg_r1': np.mean([c['r1'] for c in components]),
+            'avg_r2': np.mean([c['r2'] for c in components]),
+            'avg_r3': np.mean([c['r3'] for c in components]),
+            'avg_speed': np.mean(self._metrics_history['speeds']),
+            'avg_occupancy': np.mean(self._metrics_history['occupancies'])
+        }
+    
+    def reset_metrics(self):
+        """Reset internal metrics for new episode."""
+        for key in self._metrics_history:
+            self._metrics_history[key].clear()

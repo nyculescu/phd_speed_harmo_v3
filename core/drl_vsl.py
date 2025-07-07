@@ -261,6 +261,8 @@ class TrafficEnv(gym.Env):
         mean_speeds_downstream = 0
         mean_speeds_upstream = 0
         occupancy_upstream_temp = 0
+        upstream_speed_temp = 0
+        upstream_occupancy_temp = 0
         
         # Simulation steps and data aggregation
         num_sumo_steps = int(self.aggregation_time / self.sumo_step_length)
@@ -301,7 +303,27 @@ class TrafficEnv(gym.Env):
             collisions_in_step = traci.simulation.getCollidingVehiclesNumber()
             if collisions_in_step > 0:
                 self.collisions.append(current_time)
+
+            # Collect upstream data (seg_2_before is upstream of seg_1_before)
+            if len(segments_before) > 2:
+                upstream_segment = segments_before[2]  # seg_2_before
+                for lane_id in upstream_segment:
+                    upstream_speed_temp += traci.lane.getLastStepMeanSpeed(lane_id)
+
+            # Upstream occupancy from loops
+            if len(loops_before) > 2:
+                upstream_loops = loops_before[2]
+                for loop_id in upstream_loops:
+                    upstream_occupancy_temp += traci.inductionloop.getLastStepOccupancy(loop_id)
         
+        # Update metrics with upstream data
+        self.metrics.upstream_speed = upstream_speed_temp / (self.aggregation_time * 3)  # 3 lanes
+        self.metrics.upstream_occupancy = upstream_occupancy_temp / (self.aggregation_time * len(loops_before[2]))
+        
+        # Pass downstream action to metrics
+        if hasattr(self.state_repr, 'downstream_action'):
+            self.metrics.downstream_speed_limit = self.state_repr.downstream_action
+            
         # Update metrics
         self.metrics.avg_speed_before = mean_speeds_downstream / self.aggregation_time
         self.metrics.flow_upstream = (flow_upstream_temp / self.aggregation_time) * 3600
@@ -421,6 +443,9 @@ class TrafficEnv(gym.Env):
             'collisions': 0, 'simulation_time': 0, 'simulation_step': 0
         }
         
+        if hasattr(self.reward_func, 'reset_metrics'):
+            self.reward_func.reset_metrics()
+
         return observation, info
 
     def _apply_vsl_enforcement(self, speed_limit_kmh: float):
@@ -620,6 +645,11 @@ class TrafficEnv(gym.Env):
         self.is_sumo_initialized = False
 
     def close(self):
+        if hasattr(self.reward_func, 'get_episode_summary'):
+            summary = self.reward_func.get_episode_summary()
+            if summary:
+                logger.info(f"Episode Summary: {summary}")
+
         """Closes the environment and its SUMO instance."""
         self._close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
     

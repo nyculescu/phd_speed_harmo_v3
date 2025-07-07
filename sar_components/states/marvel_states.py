@@ -37,18 +37,13 @@ class MARVELState(StateRepresentation):
         """Set the action from downstream agent for spatially sequential decision-making"""
         self.downstream_action = action
     
-    def build_state(self, metrics: TrafficMetrics) -> np.ndarray:
-        # For upstream sensor data, you might need to extend TrafficMetrics
-        # or pass additional data. For now, using placeholder
-        upstream_speed = metrics.avg_speed_before * 0.9  # Placeholder
-        upstream_occupancy = metrics.occupancy_upstream * 0.9  # Placeholder
-        
+    def build_state(self, metrics: TrafficMetrics) -> np.ndarray:       
         return np.array([
             self.downstream_action,
             metrics.avg_speed_before,
             metrics.occupancy_upstream,
-            upstream_speed,
-            upstream_occupancy
+            metrics.upstream_speed,
+            metrics.upstream_occupancy
         ], dtype=np.float64)
     
     def preprocess_state(self, raw_state: np.ndarray) -> np.ndarray:

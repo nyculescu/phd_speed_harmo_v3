@@ -31,6 +31,9 @@ class TrafficMetrics:
     simulation_step: int = 0
     simulation_time: float = 0.0
     collisions_count: int = 0
+    upstream_speed: float = 0.0
+    upstream_occupancy: float = 0.0
+    downstream_speed_limit: float = 130.0
     
     # Historical data
     flow_downstream_history: deque = None
