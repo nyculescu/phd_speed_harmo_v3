@@ -110,7 +110,7 @@ class TrafficEnv(gym.Env):
                  vsl_enforcement: str = "recommend",
                  sumo_binary_path_override: Optional[str] = None,
                  sar_config: Optional[Dict[str, Any]] = None,
-                 sumo_config: Optional[Union[str, Path, SumoConfig, Dict[str, Any]]] = None,
+                 sumo_config: Optional[Union[str, Path, Dict[str, Any], Any]] = None,
                  sumo_preset: Optional[str] = None):
         
         super(TrafficEnv, self).__init__()
@@ -183,7 +183,7 @@ class TrafficEnv(gym.Env):
         self._sumo_retry_sleep_func = lambda attempt, max_retries: max_retries + attempt
     
     def _init_sumo_config(self, 
-                         sumo_config: Optional[Union[str, Path, SumoConfig, Dict[str, Any]]] = None,
+                         sumo_config: Optional[Union[str, Path, Dict[str, Any], Any]] = None,
                          sumo_preset: Optional[str] = None):
         """Initialize SUMO configuration."""
         if SumoConfig is None:

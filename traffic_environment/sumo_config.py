@@ -69,6 +69,7 @@ class SumoConfig:
             'lateral_resolution': 0.2,
             'no_step_log': True,
             'no_warnings': True,
+            'quit_on_end': True,
             'verbose': False,
             'additional_options': []
         }
@@ -181,6 +182,8 @@ class SumoConfig:
             cmd.append('--no-warnings')
         if sumo_cfg.get('verbose', False):
             cmd.append('--verbose')
+        if sumo_cfg.get('quit_on_end', True):
+            cmd.append("--quit-on-end")
             
         # Add log file if provided
         if log_file:
@@ -346,6 +349,7 @@ def get_default_sumo_config() -> SumoConfig:
                 'lateral_resolution': 0.2,
                 'no_step_log': True,
                 'no_warnings': True,
+                'quit_on_end': True,
                 'verbose': False,
                 'additional_options': []
             },

@@ -1,0 +1,266 @@
+# DRL-VSL Training Configuration File
+# This configuration file defines all parameters needed for training the DRL-based
+# Variable Speed Limit control system using the modular SAR framework.
+
+# ========================================================================
+# SAR (State-Action-Reward) Framework Configuration
+# ========================================================================
+sar_config:
+  # State Representation
+  # Defines how the environment state is represented to the agent
+  # Options:
+  #   - "full_metrics": Complete traffic metrics including flow, occupancy, queue length
+  #   - "minimal": Reduced state space with essential metrics only
+  state_representation: "full_metrics"
+  
+  # Action Strategy
+  # Defines how the agent's actions are interpreted
+  # Options:
+  #   - "absolute_speed": Direct speed limit values (e.g., 30, 50, 70 km/h)
+  #   - "relative_speed": Speed changes relative to current limit (e.g., -10, 0, +10 km/h)
+  action_strategy: "absolute_speed"
+  
+  # Reward Function
+  # Defines the optimization objective
+  # Options:
+  #   - "mobility": Maximize traffic flow and minimize travel time
+  #   - "safety": Minimize speed variance and sudden changes
+  #   - "balanced": Weighted combination of mobility and safety
+  reward_function: "balanced"
+
+# ========================================================================
+# Model Configuration
+# ========================================================================
+model:
+  # RL Algorithm
+  # Currently supported: "DQN" (Deep Q-Network)
+  # Future options: "PPO", "SAC", "TD3"
+  algorithm: "DQN"
+  
+  # VSL Enforcement Mode
+  # Defines how speed limits are applied to vehicles
+  # Options:
+  #   - "recommend": Speed limits as recommendations (drivers may not comply)
+  #   - "all_vehicles": Mandatory for all vehicles
+  #   - "cavs_only": Only Connected Autonomous Vehicles (CAVs) follow limits
+  vsl_enforcement: "recommend"
+  
+  # Model naming convention (optional, auto-generated if not specified)
+  # Format: {algorithm}_{reward}_{enforcement}_{state}_{action}
+  # model_name: "custom_model_name"
+
+# ========================================================================
+# Training Configuration
+# ========================================================================
+training:
+  # Total number of environment steps for training
+  # Typical values: 500k-2M for initial training, 5M+ for final models
+  total_timesteps: 500000
+  
+  # Number of parallel training environments
+  # More environments = faster training but more CPU/memory usage
+  # Recommended: 4-8 for most systems
+  num_train_envs: 4
+  
+  # Number of episodes per training environment
+  # Each episode represents one traffic scenario
+  num_episodes: 200
+  
+  # Evaluation frequency (steps per environment)
+  # Model is evaluated on a separate environment every N steps
+  eval_freq: 25000
+  
+  # Checkpoint save frequency (steps)
+  # Model weights are saved every N steps for recovery
+  checkpoint_freq: 25000
+  
+  # Simulation lengths (seconds)
+  # Duration of each training/evaluation episode
+  train_sim_length: 7200  # 2 hours
+  eval_sim_length: 14400  # 4 hours
+
+# ========================================================================
+# Hyperparameter Configuration
+# ========================================================================
+hyperparameters:
+  # Use Optuna-tuned hyperparameters if available
+  # If true, loads optimized parameters from previous tuning runs
+  use_optuna: true
+  
+  # Manual hyperparameter overrides
+  # These values override both default and Optuna parameters
+  # Set to null to use defaults
+  overrides:
+    learning_rate: null  # e.g., 0.0001
+    batch_size: null     # e.g., 64
+    buffer_size: null    # e.g., 200000
+    gamma: null          # e.g., 0.99 (discount factor)
+    tau: null            # e.g., 0.01 (soft update coefficient)
+    
+  # Default DQN hyperparameters (used if Optuna params not available)
+  defaults:
+    policy_kwargs:
+      net_arch: [256, 256, 128]  # Neural network architecture
+      activation_fn: "ReLU"       # Activation function
+    learning_rate: 0.0001
+    buffer_size: 200000
+    batch_size: 32
+    gamma: 0.995
+    tau: 0.01
+    exploration_fraction: 0.2
+    exploration_initial_eps: 1.0
+    exploration_final_eps: 0.02
+    learning_starts: 20000
+    train_freq: [2, "step"]  # Train every 2 steps
+    target_update_interval: 2000
+    gradient_steps: 2
+
+# ========================================================================
+# Execution Options
+# ========================================================================
+execution:
+  # Run multiple configurations in parallel
+  # Useful for comparing different SAR combinations
+  parallel: false
+  
+  # Number of parallel processes (null = CPU count - 1)
+  num_processes: null
+  
+  # Train all reward functions with current state/action config
+  # Creates models for mobility, safety, and balanced rewards
+  all_rewards: false
+  
+  # Train all possible SAR combinations
+  # Creates 9 models covering all state/action/reward combinations
+  all_combinations: false
+  
+  # Clean up temporary SUMO files after training
+  # Removes route files and configs to save disk space
+  cleanup: true
+  
+  # Enable progress bar for training
+  progress_bar: true
+  
+  # Device for training ("cuda", "cpu", or "auto")
+  device: "auto"
+
+# ========================================================================
+# Environment Configuration
+# ========================================================================
+environment:
+  # Base ports for SUMO instances
+  # Each parallel environment uses base_port + env_index
+  train_base_port: 8000
+  eval_base_port: 10000
+  
+  # SUMO binary path (null to use system default)
+  sumo_binary: 'sumo' # or 'sumo-gui' for GUI mode
+  
+  # Traffic normalization bounds
+  # Used for state normalization and reward scaling
+  normalization:
+    max_flow: 10000.0        # vehicles/hour
+    max_occupancy: 100.0     # percentage
+    max_queue_length: 246.4  # meters (default: 575m * 3/7)
+    
+  # CAV penetration rate (percentage)
+  cavs_percentage: 10
+
+# ========================================================================
+# SUMO Configuration
+# ========================================================================
+sumo:
+  # SUMO configuration mode
+  # Options:
+  #   - "preset": Use a predefined SUMO configuration preset
+  #   - "file": Load configuration from a file
+  #   - "custom": Define configuration directly in this file
+  #   - "default": Use default SUMO settings
+  config_mode: "default"
+  
+  # Preset name (used when config_mode is "preset")
+  # Available presets depend on your sumo_config.py implementation
+  # Examples: "urban", "highway", "rural", "test"
+  preset_name: "highway"
+  
+  # Configuration file path (used when config_mode is "file")
+  # Path to a JSON/YAML file containing SUMO configuration
+  config_file: "config/drl_vsl_config.yaml"
+  
+  # Custom SUMO configuration (used when config_mode is "custom")
+  # These settings override defaults when using custom mode
+  custom_config:
+    # Simulation parameters
+    step_length: 1.0  # Simulation step length in seconds
+    lateral_resolution: 0.2  # Lateral resolution for sublane model
+    
+    # Vehicle behavior parameters
+    default_emergencydecel: 7.0  # Maximum emergency deceleration (m/s²)
+    time_to_teleport: -1  # Time before teleporting stuck vehicles (-1 = disabled)
+    collision_action: "warn"  # Action on collision: "none", "warn", "remove"
+    
+    # Randomization
+    random_depart_offset: 3600  # Random offset for vehicle departures (seconds)
+    
+    # Action control
+    default_action_step_length: 0.2  # How often vehicles can react (seconds)
+    
+    # Logging
+    no_step_log: true  # true: Disable step-by-step logging
+    no_warnings: true  # true: Disable warnings
+    
+    # Additional SUMO options (key-value pairs)
+    # These are passed directly to SUMO command line
+    additional_options:
+      # Example additional options:
+      # lateral-resolution: "0.8"
+      # collision.mingap-factor: "0"
+      # collision.check-junctions: "true"
+    
+    # GUI settings (only used when running with sumo-gui)
+    gui_settings:
+      delay: 100  # Visualization delay in ms
+      viewport: ""  # Initial viewport settings
+      scheme: ""  # GUI coloring scheme
+
+    quit_on_end: true  # Automatically quit SUMO when simulation ends
+
+# ========================================================================
+# Logging and Output Configuration
+# ========================================================================
+logging:
+  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Base directories for outputs
+  log_dir: "./logs"
+  model_dir: "./rl_models"
+  
+  # TensorBoard logging
+  tensorboard: true
+  
+  # CSV logging for metrics
+  csv_logging: true
+  
+  # Verbose output from Stable Baselines
+  verbose: 1
+
+# ========================================================================
+# Advanced Configuration
+# ========================================================================
+advanced:
+  # Random seed for reproducibility (null for random)
+  seed: null
+  
+  # Early stopping configuration
+  early_stopping:
+    enabled: true
+    max_no_improvement_evals: 10
+    min_evals: 5
+    
+  # Custom SAR configuration paths (optional)
+  # Allows loading custom state/action/reward implementations
+  custom_sar_modules:
+    state_module: null
+    action_module: null
+    reward_module: null
