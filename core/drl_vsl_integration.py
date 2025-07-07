@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, Union
 from pathlib import Path
 import logging
 
-from .drl_vsl_refactored import TrafficEnv
+from .drl_vsl import TrafficEnv, create_sumocfg  # Added create_sumocfg import
 from core.sar_framework import (
     create_state_representation,
     create_action_strategy,

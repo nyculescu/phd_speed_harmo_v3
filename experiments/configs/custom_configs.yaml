@@ -1,0 +1,156 @@
+# custom_configs.yaml
+# Custom experiment configurations for specific scenarios
+
+# Single experiment example
+name: "balanced_robust"
+state: "full_metrics"
+action: "relative_speed"
+reward: "balanced"
+algorithm: "DQN"
+vsl_mode: "recommend"
+timesteps: 150000
+n_train_envs: 2
+n_eval_episodes: 5
+description: "Balanced approach for general-purpose deployment"
+eval_scenarios:
+  - name: "morning_commute"
+    demand: 3000
+  - name: "afternoon_peak"
+    demand: 4500
+  - name: "evening_moderate"
+    demand: 2500
+
+---
+# Multiple experiments example
+experiments:
+  # Emission-focused configuration
+  - name: "eco_driving"
+    state: "full_metrics"
+    action: "absolute_speed"
+    reward: "emission"  # From sar_components
+    description: "Optimize for reduced emissions"
+    timesteps: 200000
+    eval_scenarios:
+      - name: "steady_flow"
+        demand: 3000
+      - name: "stop_and_go"
+        demand: 4500
+        
+  # Passenger comfort focus
+  - name: "comfort_priority"
+    state: "full_metrics"
+    action: "gradual_change"
+    reward: "passenger_comfort"  # From sar_components
+    description: "Prioritize passenger comfort with smooth transitions"
+    vsl_mode: "all_vehicles"
+    
+  # Fuel efficiency optimization
+  - name: "fuel_saver"
+    state: "minimal"
+    action: "momentum_based"
+    reward: "fuel_efficiency"  # From sar_components
+    description: "Minimize fuel consumption through optimal speed profiles"
+    
+  # Multi-objective optimization
+  - name: "multi_objective_1"
+    state: "full_metrics"
+    action: "traffic_adaptive"
+    reward: "balanced"
+    description: "Adaptive strategy balancing multiple objectives"
+    hyperparams:
+      learning_rate: 0.0003
+      exploration_fraction: 0.25
+      
+  # Robustness testing with minimal sensing
+  - name: "robust_minimal"
+    state: "minimal"
+    action: "absolute_speed"
+    reward: "balanced"
+    description: "Test robustness with limited state information"
+    timesteps: 300000  # Extra training for challenging setup
+    eval_scenarios:
+      - name: "sensor_failure"
+        demand: 3500
+      - name: "limited_visibility"
+        demand: 3000
+        
+  # Time-of-day specialist
+  - name: "rush_hour_specialist"
+    state: "queue_dynamics"
+    action: "occupancy_based"
+    reward: "mobility"
+    description: "Specialized for rush hour conditions"
+    eval_scenarios:
+      - name: "morning_rush"
+        demand: 5500
+      - name: "evening_rush"
+        demand: 6000
+        
+  # Weather-adaptive (simulation of adverse conditions)
+  - name: "adverse_weather"
+    state: "full_metrics"
+    action: "gradual_change"
+    reward: "safety"
+    description: "Conservative strategy for adverse conditions"
+    vsl_mode: "all_vehicles"
+    hyperparams:
+      exploration_final_eps: 0.01  # Very conservative
+      
+# Ablation study configurations
+ablation_study:
+  base_config:
+    algorithm: "DQN"
+    timesteps: 100000
+    n_train_envs: 2
+    
+  variations:
+    # Test each component independently
+    - name: "ablation_state_only"
+      state: "full_metrics"
+      action: "absolute_speed"
+      reward: "balanced"
+      description: "Baseline with full state"
+      
+    - name: "ablation_minimal_state"
+      state: "minimal"
+      action: "absolute_speed"
+      reward: "balanced"
+      description: "Impact of reduced state information"
+      
+    - name: "ablation_action_relative"
+      state: "full_metrics"
+      action: "relative_speed"
+      reward: "balanced"
+      description: "Impact of action strategy"
+      
+    - name: "ablation_reward_mobility"
+      state: "full_metrics"
+      action: "absolute_speed"
+      reward: "mobility"
+      description: "Impact of reward function"
+      
+    - name: "ablation_reward_safety"
+      state: "full_metrics"
+      action: "absolute_speed"
+      reward: "safety"
+      description: "Impact of safety-focused reward"
+
+# Quick test configurations (for development)
+quick_tests:
+  - name: "test_basic"
+    state: "minimal"
+    action: "absolute_speed"
+    reward: "balanced"
+    timesteps: 10000
+    n_train_envs: 1
+    n_eval_episodes: 2
+    description: "Quick test for development"
+    
+  - name: "test_extended_state"
+    state: "density_focused"
+    action: "traffic_adaptive"
+    reward: "mobility"
+    timesteps: 10000
+    n_train_envs: 1
+    n_eval_episodes: 2
+    description: "Test extended SAR components"

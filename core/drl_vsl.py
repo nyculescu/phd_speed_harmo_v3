@@ -14,7 +14,7 @@ from traci import FatalTraCIError, TraCIException
 import subprocess
 import numpy as np
 import gymnasium as gym
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from pathlib import Path
 from collections import deque
 import psutil
@@ -26,6 +26,15 @@ from core.sar_framework import (
     TrafficMetrics, create_state_representation, 
     create_action_strategy, create_reward_function
 )
+
+# Import SUMO configuration
+try:
+    from traffic_environment.sumo_config import SumoConfig, load_sumo_config, get_preset_config
+except ImportError:
+    # Fallback if sumo_config module doesn't exist yet
+    SumoConfig = None
+    load_sumo_config = None
+    get_preset_config = None
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +89,10 @@ def create_sumocfg(file_postfix):
 
 class TrafficEnv(gym.Env):
     """
-    Refactored Traffic Environment with modular SAR components.
+    Refactored Traffic Environment with modular SAR components and configurable SUMO.
     
     This environment now delegates state representation, action handling,
-    and reward calculation to pluggable components.
+    and reward calculation to pluggable components, and uses configurable SUMO parameters.
     """
     
     metadata = {"render_modes": ["human"], "render_fps": 30}
@@ -100,14 +109,15 @@ class TrafficEnv(gym.Env):
                  reward_function: Optional[RewardFunction] = None,
                  vsl_enforcement: str = "recommend",
                  sumo_binary_path_override: Optional[str] = None,
-                 sar_config: Optional[Dict[str, Any]] = None):
+                 sar_config: Optional[Dict[str, Any]] = None,
+                 sumo_config: Optional[Union[str, Path, Dict[str, Any], Any]] = None,
+                 sumo_preset: Optional[str] = None):
         
         super(TrafficEnv, self).__init__()
         
         # Basic environment parameters
         self.port = port
         self.sim_length = sim_length
-        self.sumo_step_length = 1
         self.model_name = model_name
         self.model_idx = model_idx
         self.effective_model_name_for_files = f"{model_name}_{model_idx}"
@@ -145,6 +155,12 @@ class TrafficEnv(gym.Env):
         # Initialize traffic metrics
         self.metrics = TrafficMetrics()
         
+        # Initialize SUMO configuration
+        self._init_sumo_config(sumo_config, sumo_preset)
+        
+        # Get step length from SUMO config
+        self.sumo_step_length = self.sumo_config.config['sumo'].get('step_length', 1.0)
+        
         # Training scenarios
         self.training_scenarios = [
             {"demand": 2500, "pattern": "uniform"},
@@ -163,9 +179,39 @@ class TrafficEnv(gym.Env):
         
         # SUMO context
         self._sumo_start_context_prefix = ""
-        self._default_sumo_binary_for_env = os.path.join(os.environ['SUMO_HOME'], 'bin', 
-                                                         'sumo-gui' if os.name != 'nt' else 'sumo-gui.exe')
+        self._default_sumo_binary_for_env = self.sumo_config.get_sumo_binary(self.sumo_binary_path_override)
         self._sumo_retry_sleep_func = lambda attempt, max_retries: max_retries + attempt
+    
+    def _init_sumo_config(self, 
+                         sumo_config: Optional[Union[str, Path, Dict[str, Any], Any]] = None,
+                         sumo_preset: Optional[str] = None):
+        """Initialize SUMO configuration."""
+        if SumoConfig is None:
+            # Fallback to old behavior if sumo_config module not available
+            logger.warning("SUMO config module not available, using legacy configuration")
+            self.sumo_config = None
+            return
+        
+        # Determine configuration source
+        if sumo_preset:
+            # Use preset configuration
+            self.sumo_config = get_preset_config(sumo_preset)
+            logger.info(f"Using SUMO preset configuration: {sumo_preset}")
+        elif isinstance(sumo_config, SumoConfig):
+            # Already a SumoConfig instance
+            self.sumo_config = sumo_config
+        elif isinstance(sumo_config, dict):
+            # Create from dictionary
+            from traffic_environment.sumo_config import create_sumo_config_from_dict
+            self.sumo_config = create_sumo_config_from_dict(sumo_config)
+        elif isinstance(sumo_config, (str, Path)):
+            # Load from file
+            self.sumo_config = load_sumo_config(sumo_config)
+        else:
+            # Use default configuration
+            from traffic_environment.sumo_config import get_default_sumo_config
+            self.sumo_config = get_default_sumo_config()
+            logger.info("Using default SUMO configuration")
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute one step in the environment using modular components."""
@@ -424,7 +470,7 @@ class TrafficEnv(gym.Env):
         time.sleep(0.5)
 
     def _start_sumo(self):
-        """Initialize SUMO simulation."""
+        """Initialize SUMO simulation using configuration."""
         log_id = self._get_sumo_log_identifier()
         
         if self.is_sumo_initialized and self.sumo_process and psutil.pid_exists(self.sumo_process.pid):
@@ -452,27 +498,42 @@ class TrafficEnv(gym.Env):
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
                     logger.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
                 
-                current_sumo_binary = self.sumo_binary_path_override if self.sumo_binary_path_override else self._default_sumo_binary_for_env
+                # Get SUMO binary
+                current_sumo_binary = self._default_sumo_binary_for_env
                 
+                # Create log file
                 timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                 sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
 
+                # Get config path
                 config_path = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_configs", f"3_2_merge_{self.effective_model_name_for_files}.sumocfg"))
-                sumo_cmd = [
-                    current_sumo_binary, "-c", config_path,
-                    '--start',
-                    "--default.emergencydecel=7",
-                    '--random-depart-offset=3600',
-                    "--remote-port", str(port),
-                    f"--step-length={self.sumo_step_length}",
-                    "--default.action-step-length=0.2",
-                    f"--end={self.sim_length}",
-                    "--no-step-log",
-                    "--no-warnings",
-                    "--time-to-teleport", "-1",
-                    "--collision.action", "warn",
-                    "--log", sumo_log_file
-                ]
+                
+                # Build SUMO command using configuration
+                if self.sumo_config:
+                    sumo_cmd = self.sumo_config.get_sumo_cmd(
+                        port=port,
+                        sim_length=self.sim_length,
+                        config_file=config_path,
+                        log_file=sumo_log_file,
+                        binary_override=current_sumo_binary
+                    )
+                else:
+                    # Fallback to legacy command building
+                    sumo_cmd = [
+                        current_sumo_binary, "-c", config_path,
+                        '--start',
+                        "--default.emergencydecel=7",
+                        '--random-depart-offset=3600',
+                        "--remote-port", str(port),
+                        f"--step-length={self.sumo_step_length}",
+                        "--default.action-step-length=0.2",
+                        f"--end={self.sim_length}",
+                        "--no-step-log",
+                        "--no-warnings",
+                        "--time-to-teleport", "-1",
+                        "--collision.action", "warn",
+                        "--log", sumo_log_file
+                    ]
                 
                 self.sumo_process = subprocess.Popen(sumo_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
@@ -555,7 +616,27 @@ class TrafficEnv(gym.Env):
     def close(self):
         """Closes the environment and its SUMO instance."""
         self._close_sumo(f"env.close() called for {self._get_sumo_log_identifier()}")
-
+    
+    def update_sumo_config(self, updates: Dict[str, Any]):
+        """Update SUMO configuration at runtime."""
+        if self.sumo_config:
+            self.sumo_config.update_config(updates)
+            # Update step length if changed
+            if 'sumo' in updates and 'step_length' in updates['sumo']:
+                self.sumo_step_length = updates['sumo']['step_length']
+            logger.info(f"Updated SUMO configuration: {updates}")
+        else:
+            logger.warning("Cannot update SUMO config - no config object available")
+    
+    def set_sumo_preset(self, preset_name: str):
+        """Switch to a preset SUMO configuration."""
+        if get_preset_config:
+            self.sumo_config = get_preset_config(preset_name)
+            self.sumo_step_length = self.sumo_config.config['sumo'].get('step_length', 1.0)
+            self._default_sumo_binary_for_env = self.sumo_config.get_sumo_binary(self.sumo_binary_path_override)
+            logger.info(f"Switched to SUMO preset: {preset_name}")
+        else:
+            logger.warning("Cannot switch preset - SUMO config module not available")
 
 # Keep the TrafficDataLogger class as is
 class TrafficDataLogger:

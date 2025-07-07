@@ -20,3 +20,5 @@ DQN_tune_*.db
 rl_models/optuna_params/*.db
 traffic_environment/sumo/generated_flows/*.rou.xml
 traffic_environment/sumo/generated_configs/*.sumocfg
+traffic_environment/sumo/sumo_configs/*.yaml
+traffic_environment/sumo/loop_detector_metrics.xml

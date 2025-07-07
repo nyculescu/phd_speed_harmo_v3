@@ -33,7 +33,7 @@ from .sar_framework import (
 )
 
 # Import refactored environment
-from .drl_vsl_refactored import (
+from .drl_vsl import (
     TrafficEnv,
     TrafficDataLogger,
 )
@@ -51,9 +51,27 @@ from .drl_vsl_integration import (
 )
 
 # SUMO configuration utilities
-from .drl_vsl_refactored import create_sumocfg
+from .drl_vsl import create_sumocfg
 
 # Expose main classes at package level
+
+# SUMO configuration
+try:
+    from ..traffic_environment.sumo_config import (
+        SumoConfig,
+        load_sumo_config,
+        get_default_sumo_config,
+        get_preset_config,
+        PRESETS
+    )
+except ImportError:
+    # Sumo config module not available yet
+    SumoConfig = None
+    load_sumo_config = None
+    get_default_sumo_config = None
+    get_preset_config = None
+    PRESETS = None
+
 __all__ = [
     # Version
     "__version__",

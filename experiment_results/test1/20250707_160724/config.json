@@ -1,0 +1,27 @@
+{
+  "name": "test1",
+  "state": "full_metrics",
+  "action": "absolute_speed",
+  "reward": "balanced",
+  "algorithm": "DQN",
+  "vsl_mode": "recommend",
+  "timesteps": 50000,
+  "n_train_envs": 2,
+  "n_eval_episodes": 5,
+  "eval_scenarios": [
+    {
+      "demand": 2000,
+      "name": "low_traffic"
+    },
+    {
+      "demand": 3500,
+      "name": "medium_traffic"
+    },
+    {
+      "demand": 5000,
+      "name": "high_traffic"
+    }
+  ],
+  "hyperparams": null,
+  "description": ""
+}
