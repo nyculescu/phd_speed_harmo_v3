@@ -32,9 +32,9 @@ from core.sar_framework import (
     create_action_strategy,
     create_reward_function
 )
-from core.drl_vsl_refactored import TrafficEnv
+from core.drl_vsl import TrafficEnv
 from core.drl_vsl_integration import TrafficEnvCompat
-from core.drl_vsl_refactored import create_sumocfg
+from core.drl_vsl import create_sumocfg
 from traffic_environment.flow_gen import flow_generation_fix_num_veh, flow_generation, bimodal_distribution_24h
 
 # Setup logging

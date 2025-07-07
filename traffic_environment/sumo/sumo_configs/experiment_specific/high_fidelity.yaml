@@ -1,0 +1,22 @@
+extends: ../default_sumo_config.yaml
+sumo:
+  binary: sumo-gui
+  step_length: 0.1
+  default_action_step_length: 0.1
+  default_emergencydecel: 9.0
+  time_to_teleport: -1
+  collision_action: warn
+  lateral_resolution: 0.1
+  no_step_log: false
+  no_warnings: false
+  verbose: true
+  additional_options:
+  - --device.emissions.probability=1.0
+  - --device.fcd.probability=1.0
+  - --fcd-output=fcd.xml
+  - --emission-output=emissions.xml
+  - --full-output=full.xml
+  - --collision.check-junctions
+  - --collision.mingap-factor=1.0
+  - --pedestrian.model=striping
+  - --lateral-resolution-sublanes=0.5

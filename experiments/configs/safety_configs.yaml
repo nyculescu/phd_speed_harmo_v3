@@ -1,0 +1,96 @@
+# safety_configs.yaml
+# Experiment configurations optimized for traffic safety
+
+base_config:
+  algorithm: "DQN"
+  vsl_mode: "all_vehicles"  # Stricter enforcement for safety
+  timesteps: 250000  # More training for safety-critical behavior
+  n_train_envs: 4
+  n_eval_episodes: 10  # More evaluation for reliability
+  eval_scenarios:
+    - name: "variable_traffic"
+      demand: 2500
+    - name: "rush_hour"
+      demand: 4000
+    - name: "incident_prone"
+      demand: 4500
+    - name: "night_traffic"
+      demand: 1500
+
+variations:
+  # Conservative speed changes for safety
+  - name: "safety_full_gradual"
+    state: "full_metrics"
+    action: "gradual_change"  # From sar_components
+    reward: "safety"
+    description: "Gradual speed changes for passenger comfort and safety"
+    
+  # Relative speed with safety constraints
+  - name: "safety_full_relative"
+    state: "full_metrics"
+    action: "relative_speed"
+    reward: "safety"
+    description: "Incremental adjustments with built-in safety limits"
+    
+  # Minimal state with safety focus
+  - name: "safety_minimal_conservative"
+    state: "minimal"
+    action: "relative_speed"
+    reward: "safety"
+    description: "Simple state with conservative actions"
+    hyperparams:
+      exploration_final_eps: 0.01  # Less exploration for safety
+      
+  # Queue-aware safety management
+  - name: "safety_queue_aware"
+    state: "queue_length"  # From sar_components
+    action: "gradual_change"
+    reward: "safety"
+    description: "Focus on queue management for rear-end collision prevention"
+    
+  # Speed harmonization specialist
+  - name: "safety_harmonization"
+    state: "full_metrics"
+    action: "momentum_based"  # From sar_components
+    reward: "smooth_flow"  # From sar_components
+    description: "Optimize for smooth, predictable traffic flow"
+    
+  # Multi-segment awareness for safety
+  - name: "safety_spatial_aware"
+    state: "multi_segment_density"  # From sar_components
+    action: "gradual_change"
+    reward: "safety"
+    description: "Spatial awareness for proactive safety management"
+    timesteps: 300000
+    
+  # CAV-focused safety (connected vehicles only)
+  - name: "safety_cav_coordination"
+    state: "full_metrics"
+    action: "absolute_speed"
+    reward: "safety"
+    vsl_mode: "cavs_only"
+    description: "Coordinate connected vehicles for system-wide safety"
+
+# Safety-critical hyperparameters
+safety_tuned_experiments:
+  - name: "safety_risk_averse"
+    state: "full_metrics"
+    action: "relative_speed"
+    reward: "safety"
+    description: "Risk-averse configuration with careful exploration"
+    hyperparams:
+      gamma: 0.99  # Long-term safety focus
+      exploration_fraction: 0.15
+      exploration_final_eps: 0.01
+      tau: 0.005  # Slower target network updates
+      
+  - name: "safety_stable_learning"
+    state: "full_metrics"
+    action: "gradual_change"
+    reward: "safety"
+    description: "Stable learning for consistent safety performance"
+    hyperparams:
+      learning_rate: 0.0001  # Slower learning
+      batch_size: 64  # Larger batches
+      buffer_size: 500000  # Larger buffer
+      target_update_interval: 5000  # Less frequent updates

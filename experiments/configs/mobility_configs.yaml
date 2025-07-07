@@ -1,0 +1,93 @@
+# mobility_configs.yaml
+# Experiment configurations optimized for traffic mobility
+
+# Base configuration for mobility experiments
+base_config:
+  algorithm: "DQN"
+  vsl_mode: "recommend"
+  timesteps: 200000
+  n_train_envs: 4
+  n_eval_episodes: 5
+  eval_scenarios:
+    - name: "low_traffic"
+      demand: 2000
+    - name: "medium_traffic" 
+      demand: 3500
+    - name: "high_traffic"
+      demand: 5000
+    - name: "peak_hour"
+      demand: 5500
+
+# Variations focusing on mobility optimization
+variations:
+  # Full state with absolute speed control
+  - name: "mobility_full_absolute"
+    state: "full_metrics"
+    action: "absolute_speed"
+    reward: "mobility"
+    description: "Full observability with direct speed control for maximum flow"
+    
+  # Full state with relative speed for smoother transitions
+  - name: "mobility_full_relative"
+    state: "full_metrics"
+    action: "relative_speed"
+    reward: "mobility"
+    description: "Full observability with incremental speed changes"
+    
+  # Minimal state for computational efficiency
+  - name: "mobility_minimal_absolute"
+    state: "minimal"
+    action: "absolute_speed"
+    reward: "mobility"
+    description: "Lightweight state representation focusing on key metrics"
+    
+  # Density-focused state (if using extended components)
+  - name: "mobility_density_absolute"
+    state: "density_focused"  # From sar_components
+    action: "absolute_speed"
+    reward: "mobility"
+    description: "Density-based state for congestion management"
+    
+  # Traffic-adaptive actions
+  - name: "mobility_full_adaptive"
+    state: "full_metrics"
+    action: "traffic_adaptive"  # From sar_components
+    reward: "mobility"
+    description: "Actions that adapt to current traffic regime"
+    
+  # High-demand scenario specialist
+  - name: "mobility_congestion_specialist"
+    state: "queue_dynamics"  # From sar_components
+    action: "occupancy_based"  # From sar_components
+    reward: "mobility"
+    description: "Specialized for high-demand/congestion scenarios"
+    timesteps: 300000  # Extra training for complex scenarios
+    eval_scenarios:
+      - name: "high_traffic"
+        demand: 5000
+      - name: "very_high_traffic"
+        demand: 6000
+      - name: "congested"
+        demand: 7000
+
+# Hyperparameter variations for mobility
+hyperparameter_experiments:
+  - name: "mobility_high_exploration"
+    state: "full_metrics"
+    action: "absolute_speed"
+    reward: "mobility"
+    description: "Increased exploration for discovering optimal flow patterns"
+    hyperparams:
+      exploration_fraction: 0.3
+      exploration_final_eps: 0.05
+      learning_rate: 0.0005
+      
+  - name: "mobility_fast_learning"
+    state: "full_metrics"
+    action: "absolute_speed"
+    reward: "mobility"
+    description: "Faster learning rate for quick adaptation"
+    hyperparams:
+      learning_rate: 0.001
+      train_freq: [1, "step"]
+      gradient_steps: 4
