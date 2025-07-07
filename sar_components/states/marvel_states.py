@@ -20,15 +20,15 @@ class MARVELState(StateRepresentation):
     
     def _setup(self):
         self.num_features = 5
-        self.max_speed_mps = 70 / 2.237  # 70 mph in m/s
+        self.max_speed_mps = 112.7 / 3.6  # 70 mph in m/s (converted to km/h first)
         self.max_occupancy = 100.0
-        self.downstream_action = 70  # Default for most downstream agent
+        self.downstream_action = 112.7  # Default 70 mph in km/h
         
     def get_observation_space(self) -> gym.spaces.Space:
         return gym.spaces.Box(
-            low=np.array([30, 0, 0, 0, 0], dtype=np.float64),
-            high=np.array([70, self.max_speed_mps, self.max_occupancy, 
-                          self.max_speed_mps, self.max_occupancy], dtype=np.float64),
+            low=np.array([48.3, 0, 0, 0, 0], dtype=np.float64),  # 30 mph in km/h
+            high=np.array([112.7, self.max_speed_mps, self.max_occupancy,  # 70 mph in km/h
+                        self.max_speed_mps, self.max_occupancy], dtype=np.float64),
             shape=(self.num_features,),
             dtype=np.float64
         )
@@ -54,7 +54,7 @@ class MARVELState(StateRepresentation):
     def preprocess_state(self, raw_state: np.ndarray) -> np.ndarray:
         # Normalize each component
         normalized = np.zeros_like(raw_state)
-        normalized[0] = (raw_state[0] - 30) / 40  # Action: 30-70 mph
+        normalized[0] = (raw_state[0] - 48.3) / 64.4  # Action: 30-70 mph range in km/h
         normalized[1] = raw_state[1] / self.max_speed_mps  # Speed
         normalized[2] = raw_state[2] / self.max_occupancy  # Occupancy
         normalized[3] = raw_state[3] / self.max_speed_mps  # Upstream speed

@@ -1,7 +1,8 @@
 # sar_components/actions/speed_actions.py
-"""Basic speed control action strategies"""
+"""
+Basic action strategies (AbsoluteSpeedAction and RelativeSpeedAction) are defined
+in core.sar_framework. Please import them directly from there or use the
+factory function create_action_strategy().
+"""
 
-# Re-export from core framework
-from core.sar_framework import AbsoluteSpeedAction, RelativeSpeedAction
-
-__all__ = ["AbsoluteSpeedAction", "RelativeSpeedAction"]
+# This file is intentionally empty to avoid circular imports

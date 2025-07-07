@@ -15,13 +15,13 @@ class MARVELSpeedAction(ActionStrategy):
     
     def _setup(self):
         self.speed_actions = {
-            0: 30,  # mph
-            1: 40,
-            2: 50,
-            3: 60,
-            4: 70
+            0: 48.3,  # 30 mph in km/h
+            1: 64.4,  # 40 mph
+            2: 80.5,  # 50 mph
+            3: 96.6,  # 60 mph
+            4: 112.7  # 70 mph
         }
-        self.max_step_down = 10  # mph - MUTCD constraint
+        self.max_step_down = 16.1  # 10 mph in km/h - MUTCD constraint
         
     def get_action_space(self) -> gym.spaces.Space:
         return gym.spaces.Discrete(len(self.speed_actions))

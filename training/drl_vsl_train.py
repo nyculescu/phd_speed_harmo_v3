@@ -79,18 +79,20 @@ class Config:
     def _validate(self):
         """Validate configuration structure and values."""
         required_sections = ['sar_config', 'model', 'training', 'hyperparameters', 
-                           'execution', 'environment', 'logging']
+                        'execution', 'environment', 'logging']
         
         for section in required_sections:
             if section not in self.data:
                 raise ValueError(f"Missing required configuration section: {section}")
         
         # Validate SAR options
-        valid_states = ['full_metrics', 'minimal']
-        valid_actions = ['absolute_speed', 'relative_speed']
-        valid_rewards = ['mobility', 'safety', 'balanced']
+        valid_states = ['full_metrics', 'minimal', 'marvel']
+        valid_actions = ['absolute_speed', 'relative_speed', 'marvel_speed']
+        valid_rewards = ['mobility', 'safety', 'balanced', 'marvel']
         valid_enforcement = ['recommend', 'all_vehicles', 'cavs_only']
+        valid_training_modes = ['single', 'selected', 'all_custom', 'all_rewards']
         
+        # Validate default SAR config
         if self.data['sar_config']['state_representation'] not in valid_states:
             raise ValueError(f"Invalid state representation: {self.data['sar_config']['state_representation']}")
         if self.data['sar_config']['action_strategy'] not in valid_actions:
@@ -99,6 +101,46 @@ class Config:
             raise ValueError(f"Invalid reward function: {self.data['sar_config']['reward_function']}")
         if self.data['model']['vsl_enforcement'] not in valid_enforcement:
             raise ValueError(f"Invalid VSL enforcement: {self.data['model']['vsl_enforcement']}")
+        
+        # Validate training mode
+        training_mode = self.data.get('execution', {}).get('training_mode', 'single')
+        if training_mode not in valid_training_modes:
+            raise ValueError(f"Invalid training_mode: {training_mode}. Valid options: {valid_training_modes}")
+        
+        # Validate custom combinations if present
+        if 'custom_combinations' in self.data['sar_config']:
+            for i, combo in enumerate(self.data['sar_config']['custom_combinations']):
+                if 'name' not in combo or 'state' not in combo or 'action' not in combo or 'reward' not in combo:
+                    raise ValueError(f"Invalid custom combination at index {i}: missing required fields")
+                if combo['state'] not in valid_states:
+                    raise ValueError(f"Invalid state '{combo['state']}' in custom combination '{combo['name']}'")
+                if combo['action'] not in valid_actions:
+                    raise ValueError(f"Invalid action '{combo['action']}' in custom combination '{combo['name']}'")
+                if combo['reward'] not in valid_rewards:
+                    raise ValueError(f"Invalid reward '{combo['reward']}' in custom combination '{combo['name']}'")
+        
+        # Validate selected_combinations if training_mode is 'selected'
+        if training_mode == 'selected':
+            selected = self.data.get('execution', {}).get('selected_combinations')
+            if selected is None:
+                raise ValueError("training_mode is 'selected' but selected_combinations is not specified")
+            
+            # Validate that selections are valid (string names or integer indices)
+            custom_combos = self.data.get('sar_config', {}).get('custom_combinations', [])
+            selections = selected if isinstance(selected, list) else [selected]
+            
+            for sel in selections:
+                if isinstance(sel, str):
+                    # Check if name exists
+                    if not any(c['name'] == sel for c in custom_combos):
+                        available = [c['name'] for c in custom_combos]
+                        raise ValueError(f"Selected combination '{sel}' not found. Available: {available}")
+                elif isinstance(sel, int):
+                    # Check if index is valid
+                    if not (0 <= sel < len(custom_combos)):
+                        raise ValueError(f"Selected index {sel} out of range. Valid range: 0-{len(custom_combos)-1}")
+                else:
+                    raise ValueError(f"Invalid selection type: {type(sel)}. Use string name or integer index")
     
     def get(self, key_path: str, default=None):
         """Get nested configuration value using dot notation."""
@@ -218,22 +260,16 @@ def create_train_env(env_idx: int,
                      config: Config,
                      model_name: str,
                      sar_config: Dict[str, Any],
-                     port: int) -> Monitor:
+                     port: int,
+                     state_repr: str,
+                     action_strat: str,
+                     reward_func: str) -> Monitor:
     """Create a training environment with SAR components."""
     
     # Create SAR components
-    state_repr = create_state_representation(
-        config.get('sar_config.state_representation'),
-        sar_config
-    )
-    action_strat = create_action_strategy(
-        config.get('sar_config.action_strategy'),
-        sar_config
-    )
-    reward_func = create_reward_function(
-        config.get('sar_config.reward_function'),
-        sar_config
-    )
+    state_repr_obj = create_state_representation(state_repr, sar_config)
+    action_strat_obj = create_action_strategy(action_strat, sar_config)
+    reward_func_obj = create_reward_function(reward_func, sar_config)
     
     # Get SUMO configuration
     sumo_config = None
@@ -260,9 +296,9 @@ def create_train_env(env_idx: int,
         sim_length=config.get('training.train_sim_length', 7200),
         base_gen_car_distrib=["uniform", 2000],  # Will be overridden in reset
         num_of_episodes=config.get('training.num_episodes', 200),
-        state_representation=state_repr,
-        action_strategy=action_strat,
-        reward_function=reward_func,
+        state_representation=state_repr_obj,
+        action_strategy=action_strat_obj,
+        reward_function=reward_func_obj,
         vsl_enforcement=config.get('model.vsl_enforcement'),
         sumo_binary_path_override=config.get('environment.sumo_binary'),
         sar_config=sar_config,
@@ -276,24 +312,18 @@ def create_train_env(env_idx: int,
 def create_eval_env(config: Config,
                     model_name: str,
                     sar_config: Dict[str, Any],
-                    port: int) -> Monitor:
+                    port: int,
+                    state_repr: str,
+                    action_strat: str,
+                    reward_func: str) -> Monitor:
     """Create an evaluation environment with SAR components."""
     
     from gymnasium.wrappers import TimeLimit
     
     # Create SAR components
-    state_repr = create_state_representation(
-        config.get('sar_config.state_representation'),
-        sar_config
-    )
-    action_strat = create_action_strategy(
-        config.get('sar_config.action_strategy'),
-        sar_config
-    )
-    reward_func = create_reward_function(
-        config.get('sar_config.reward_function'),
-        sar_config
-    )
+    state_repr_obj = create_state_representation(state_repr, sar_config)
+    action_strat_obj = create_action_strategy(action_strat, sar_config)
+    reward_func_obj = create_reward_function(reward_func, sar_config)
     
     # Get SUMO configuration
     sumo_config = None
@@ -322,9 +352,9 @@ def create_eval_env(config: Config,
         sim_length=eval_sim_length,
         base_gen_car_distrib=["uniform", 3000],  # Fixed eval scenario
         num_of_episodes=1,
-        state_representation=state_repr,
-        action_strategy=action_strat,
-        reward_function=reward_func,
+        state_representation=state_repr_obj,
+        action_strategy=action_strat_obj,
+        reward_function=reward_func_obj,
         vsl_enforcement=config.get('model.vsl_enforcement'),
         sumo_binary_path_override=config.get('environment.sumo_binary'),
         sar_config=sar_config,
@@ -343,7 +373,8 @@ def train_model(config: Config,
                 state_representation: Optional[str] = None,
                 action_strategy: Optional[str] = None,
                 reward_function: Optional[str] = None,
-                process_base_port: Optional[int] = None):
+                process_base_port: Optional[int] = None,
+                custom_model_name: Optional[str] = None):
     """
     Train a DRL model with specified configuration.
     
@@ -353,6 +384,7 @@ def train_model(config: Config,
         action_strategy: Override action strategy from config
         reward_function: Override reward function from config
         process_base_port: Base port for SUMO instances
+        custom_model_name: Custom name for the model (overrides auto-generated name)
     """
     
     # Get SAR configuration (use overrides if provided)
@@ -364,13 +396,17 @@ def train_model(config: Config,
     algorithm = config.get('model.algorithm', 'DQN')
     vsl_enforcement = config.get('model.vsl_enforcement')
     
-    # Model naming
-    model_name = f"{algorithm}_{reward_func}_{vsl_enforcement}"
-    full_model_name = f"{model_name}_{state_repr}_{action_strat}"
-    
-    # Override with custom model name if provided
-    if config.get('model.model_name'):
-        full_model_name = config.get('model.model_name')
+    # Model naming - use custom name if provided
+    if custom_model_name:
+        full_model_name = f"{algorithm}_{custom_model_name}_{vsl_enforcement}"
+        model_name = f"{algorithm}_{custom_model_name}"
+    else:
+        model_name = f"{algorithm}_{reward_func}_{vsl_enforcement}"
+        full_model_name = f"{model_name}_{state_repr}_{action_strat}"
+        
+        # Override with config model name if provided
+        if config.get('model.model_name'):
+            full_model_name = config.get('model.model_name')
     
     # Setup directories
     log_base = Path(config.get('logging.log_dir', './logs'))
@@ -404,7 +440,8 @@ def train_model(config: Config,
     logger.info(f"Creating {num_train_envs} training environments...")
     train_env = SubprocVecEnv([
         lambda i=i: create_train_env(
-            i, config, model_name, sar_config, train_base_port + i
+            i, config, model_name, sar_config, train_base_port + i,
+            state_repr, action_strat, reward_func
         )
         for i in range(num_train_envs)
     ])
@@ -413,7 +450,8 @@ def train_model(config: Config,
     logger.info("Creating evaluation environment...")
     eval_env = SubprocVecEnv([
         lambda: create_eval_env(
-            config, f"{model_name}_eval", sar_config, eval_base_port
+            config, f"{model_name}_eval", sar_config, eval_base_port,
+            state_repr, action_strat, reward_func
         )
     ])
     
@@ -538,13 +576,14 @@ def train_model(config: Config,
         logger.info(f"Finished training for {full_model_name}")
 
 
-def run_parallel_training(config: Config, configurations: list):
+def run_parallel_training(config: Config, configurations: list, custom_names: Optional[list] = None):
     """
     Run multiple training configurations in parallel.
     
     Args:
         config: Configuration object
         configurations: List of (state, action, reward) tuples
+        custom_names: Optional list of custom names for each configuration
     """
     
     num_processes = config.get('execution.num_processes')
@@ -563,7 +602,8 @@ def run_parallel_training(config: Config, configurations: list):
             'state_representation': state,
             'action_strategy': action,
             'reward_function': reward,
-            'process_base_port': base_port + i * 100
+            'process_base_port': base_port + i * 100,
+            'custom_model_name': custom_names[i] if custom_names else None
         }
         training_args.append(args)
     
@@ -573,9 +613,10 @@ def run_parallel_training(config: Config, configurations: list):
     
     # Report results
     logger.info("\nTraining Summary:")
-    for conf, result in zip(configurations, results):
+    for i, (conf, result) in enumerate(zip(configurations, results)):
+        name = custom_names[i] if custom_names else str(conf)
         status = "Success" if result else "Failed"
-        logger.info(f"  {conf}: {status}")
+        logger.info(f"  {name}: {status}")
 
 
 def train_model_wrapper(args_dict):
@@ -591,8 +632,8 @@ def train_model_wrapper(args_dict):
 def cleanup_temp_files(model_name: str):
     """Clean up temporary SUMO files after training."""
     patterns = [
-        f"./traffic_environment/sumo/*{model_name}*.rou.xml",
-        f"./traffic_environment/sumo/*{model_name}*.sumocfg",
+        f"./traffic_environment/sumo/generated_flows/*{model_name}*.rou.xml",
+        f"./traffic_environment/sumo/generated_configs/*{model_name}*.sumocfg",
         f"./logs/sumo_log/*{model_name}*.txt"
     ]
     
@@ -605,6 +646,111 @@ def cleanup_temp_files(model_name: str):
                 logger.warning(f"Could not remove {file}: {e}")
 
 
+def determine_configurations(config: Config) -> Tuple[list, list]:
+    """
+    Determine which configurations to train based on config settings.
+    
+    Returns:
+        Tuple of (configurations, custom_names) where:
+        - configurations: List of (state, action, reward) tuples
+        - custom_names: List of custom names or None
+    """
+    
+    training_mode = config.get('execution.training_mode', 'single')
+    custom_combos = config.get('sar_config.custom_combinations', [])
+    
+    if training_mode == 'selected':
+        # Train selected combinations only
+        selected = config.get('execution.selected_combinations')
+        
+        if selected is None:
+            logger.error("training_mode is 'selected' but no selected_combinations specified")
+            sys.exit(1)
+        
+        # Normalize to list
+        if not isinstance(selected, list):
+            selected = [selected]
+        
+        configurations = []
+        custom_names = []
+        
+        for selection in selected:
+            if isinstance(selection, str):
+                # Selection by name
+                found = False
+                for combo in custom_combos:
+                    if combo['name'] == selection:
+                        configurations.append((combo['state'], combo['action'], combo['reward']))
+                        custom_names.append(combo['name'])
+                        found = True
+                        break
+                
+                if not found:
+                    available = [c['name'] for c in custom_combos]
+                    logger.error(f"\nConfiguration Error:")
+                    logger.error(f"  Combination '{selection}' not found in custom_combinations")
+                    logger.error(f"\nAvailable combinations:")
+                    for i, name in enumerate(available):
+                        logger.error(f"    [{i}] {name}")
+                    logger.error(f"\nPlease update selected_combinations in your YAML config")
+                    sys.exit(1)
+                    
+            elif isinstance(selection, int):
+                # Selection by index
+                if 0 <= selection < len(custom_combos):
+                    combo = custom_combos[selection]
+                    configurations.append((combo['state'], combo['action'], combo['reward']))
+                    custom_names.append(combo['name'])
+                else:
+                    logger.error(f"Index {selection} out of range. Valid range: 0-{len(custom_combos)-1}")
+                    sys.exit(1)
+            else:
+                logger.error(f"Invalid selection type: {type(selection)}. Use string name or integer index.")
+                sys.exit(1)
+        
+        logger.info(f"Selected {len(configurations)} combination(s) to train")
+        return configurations, custom_names
+    
+    elif training_mode == 'all_custom':
+        # Train all custom combinations
+        if not custom_combos:
+            logger.error("training_mode is 'all_custom' but no custom_combinations defined")
+            sys.exit(1)
+        
+        configurations = []
+        custom_names = []
+        for combo in custom_combos:
+            configurations.append((combo['state'], combo['action'], combo['reward']))
+            custom_names.append(combo['name'])
+        return configurations, custom_names
+    
+    elif training_mode == 'all_rewards':
+        # All reward functions with default state/action
+        base_state = config.get('sar_config.state_representation')
+        base_action = config.get('sar_config.action_strategy')
+        configurations = [
+            (base_state, base_action, 'mobility'),
+            (base_state, base_action, 'safety'),
+            (base_state, base_action, 'balanced'),
+            (base_state, base_action, 'marvel'),
+        ]
+        return configurations, None
+    
+    elif training_mode == 'single':
+        # Single configuration from default settings
+        configurations = [(
+            config.get('sar_config.state_representation'),
+            config.get('sar_config.action_strategy'),
+            config.get('sar_config.reward_function')
+        )]
+        return configurations, None
+    
+    else:
+        logger.error(f"Unknown training mode: {training_mode}")
+        logger.info("Valid modes: 'single', 'selected', 'all_custom', 'all_rewards'")
+        sys.exit(1)
+
+
 def main():
     """Main entry point for training script."""
     
@@ -615,9 +761,12 @@ def main():
     
     parser.add_argument('--config', type=str, default=DEFAULT_CONFIG_PATH,
                        help=f'Path to YAML configuration file (default: {DEFAULT_CONFIG_PATH})')
-        
+    
     parser.add_argument('--validate-only', action='store_true',
                        help='Only validate the configuration file without training')
+    
+    parser.add_argument('--list-combos', action='store_true',
+                       help='List available custom combinations and exit')
     
     args = parser.parse_args()
     
@@ -634,68 +783,71 @@ def main():
         logger.error(f"Failed to load configuration: {e}")
         sys.exit(1)
     
+    # List combinations if requested
+    if args.list_combos:
+        custom_combos = config.get('sar_config.custom_combinations', [])
+        if not custom_combos:
+            logger.info("No custom combinations defined in configuration.")
+        else:
+            logger.info("\nAvailable custom combinations:")
+            for i, combo in enumerate(custom_combos):
+                logger.info(f"  [{i}] {combo['name']:<25} - state: {combo['state']:<15} "
+                           f"action: {combo['action']:<15} reward: {combo['reward']}")
+        return
+    
     # Check SUMO
     if 'SUMO_HOME' not in os.environ:
         logger.error("Please set SUMO_HOME environment variable")
         sys.exit(1)
     
-    # Determine configurations to run
-    if config.get('execution.all_combinations', False):
-        configurations = [
-            ('full_metrics', 'absolute_speed', 'mobility'),
-            ('full_metrics', 'absolute_speed', 'safety'),
-            ('full_metrics', 'absolute_speed', 'balanced'),
-            ('full_metrics', 'relative_speed', 'mobility'),
-            ('full_metrics', 'relative_speed', 'safety'),
-            ('full_metrics', 'relative_speed', 'balanced'),
-            ('minimal', 'absolute_speed', 'mobility'),
-            ('minimal', 'absolute_speed', 'safety'),
-            ('minimal', 'absolute_speed', 'balanced'),
-        ]
-    elif config.get('execution.all_rewards', False):
-        configurations = [
-            (config.get('sar_config.state_representation'),
-             config.get('sar_config.action_strategy'),
-             'mobility'),
-            (config.get('sar_config.state_representation'),
-             config.get('sar_config.action_strategy'),
-             'safety'),
-            (config.get('sar_config.state_representation'),
-             config.get('sar_config.action_strategy'),
-             'balanced'),
-        ]
-    else:
-        configurations = [(
-            config.get('sar_config.state_representation'),
-            config.get('sar_config.action_strategy'),
-            config.get('sar_config.reward_function')
-        )]
+    # Validate training mode and selections
+    training_mode = config.get('execution.training_mode', 'single')
+    if training_mode == 'selected':
+        selected = config.get('execution.selected_combinations')
+        if selected is None:
+            logger.error("\nConfiguration Error:")
+            logger.error("  training_mode is 'selected' but selected_combinations is not specified")
+            logger.error("\nPlease add to your YAML config:")
+            logger.error("  execution:")
+            logger.error("    selected_combinations: \"experiment_name\"  # or [\"name1\", \"name2\"]")
+            sys.exit(1)
+    
+    # Determine configurations based on YAML settings
+    configurations, custom_names = determine_configurations(config)
     
     # Log training plan
     logger.info("\nTraining Plan:")
     logger.info(f"  Algorithm: {config.get('model.algorithm')}")
     logger.info(f"  VSL Enforcement: {config.get('model.vsl_enforcement')}")
     logger.info(f"  Total Timesteps: {config.get('training.total_timesteps'):,}")
+    logger.info(f"  Training Mode: {config.get('execution.training_mode')}")
     logger.info(f"  Configurations to train: {len(configurations)}")
+    
     for i, (state, action, reward) in enumerate(configurations, 1):
-        logger.info(f"    {i}. State={state}, Action={action}, Reward={reward}")
+        name = custom_names[i-1] if custom_names else f"{state}_{action}_{reward}"
+        logger.info(f"    {i}. {name:<25} - State: {state:<15} Action: {action:<15} Reward: {reward}")
     
     # Run training
     if config.get('execution.parallel', False) and len(configurations) > 1:
-        run_parallel_training(config, configurations)
+        run_parallel_training(config, configurations, custom_names)
     else:
-        for state, action, reward in configurations:
+        for i, (state, action, reward) in enumerate(configurations):
+            custom_name = custom_names[i] if custom_names else None
             train_model(
                 config=config,
                 state_representation=state,
                 action_strategy=action,
-                reward_function=reward
+                reward_function=reward,
+                custom_model_name=custom_name
             )
             
             if config.get('execution.cleanup', True):
                 algorithm = config.get('model.algorithm')
                 vsl_enforcement = config.get('model.vsl_enforcement')
-                model_name = f"{algorithm}_{reward}_{vsl_enforcement}"
+                if custom_name:
+                    model_name = f"{algorithm}_{custom_name}"
+                else:
+                    model_name = f"{algorithm}_{reward}_{vsl_enforcement}"
                 cleanup_temp_files(model_name)
     
     logger.info("\nAll training completed successfully!")
