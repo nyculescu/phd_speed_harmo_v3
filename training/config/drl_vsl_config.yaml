@@ -176,7 +176,7 @@ sumo:
   #   - "file": Load configuration from a file
   #   - "custom": Define configuration directly in this file
   #   - "default": Use default SUMO settings
-  config_mode: "default"
+  config_mode: "custom"
   
   # Preset name (used when config_mode is "preset")
   # Available presets depend on your sumo_config.py implementation
@@ -231,7 +231,7 @@ sumo:
 logging:
   # Logging level: DEBUG, INFO, WARNING, ERROR
   level: "INFO"
-  
+
   # Base directories for outputs
   log_dir: "./logs"
   model_dir: "./rl_models"

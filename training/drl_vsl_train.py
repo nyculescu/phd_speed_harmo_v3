@@ -421,9 +421,17 @@ def train_model(config: Config,
     else:
         device = device_config
     
-    # Create model
+    # Create a copy for logging with readable values
+    log_hyperparams = hyperparams.copy()
+    if callable(hyperparams.get("learning_rate")):
+        # Extract the initial learning rate value from the schedule function
+        # The schedule function is created with the initial value in its closure
+        initial_lr = config.get('hyperparameters.overrides.learning_rate') or \
+                    config.get('hyperparameters.defaults.learning_rate', 0.0001)
+        log_hyperparams["learning_rate"] = f"{initial_lr} (linear schedule)"
+        
     logger.info(f"Creating {algorithm} model with hyperparameters:")
-    logger.info(json.dumps({k: str(v) for k, v in hyperparams.items()}, indent=2))
+    logger.info(json.dumps({k: str(v) for k, v in log_hyperparams.items()}, indent=2))
     
     model = DQN(
         "MlpPolicy",
