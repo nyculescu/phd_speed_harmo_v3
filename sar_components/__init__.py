@@ -1,67 +1,34 @@
 # sar_components/__init__.py
 """
-SAR Components Library
+SAR Components Package
 
-Collection of State representations, Action strategies, and Reward functions
-for the DRL-VSL framework.
+This package contains additional state representations, action strategies,
+and reward functions for the DRL-VSL framework.
+
+Note: Basic components (FullMetricsState, MinimalState, AbsoluteSpeedAction,
+RelativeSpeedAction, MobilityReward, SafetyReward, BalancedReward) are 
+defined in core.sar_framework to avoid circular imports.
 """
 
-# Import all states
-from .states import (
-    # Basic states
-    FullMetricsState,
-    MinimalState,
-    # Density-focused states
-    DensityFocusedState,
-    MultiSegmentDensityState,
-    # Queue-focused states
-    QueueLengthState,
-    QueueDynamicsState,
-)
+# Import only the additional components defined in this package
+# MARVEL components
+from .states.marvel_states import MARVELState
+from .actions.marvel_actions import MARVELSpeedAction
+from .rewards.marvel_rewards import MARVELReward
 
-# Import all actions
-from .actions import (
-    # Speed actions
-    AbsoluteSpeedAction,
-    RelativeSpeedAction,
-    # Adaptive actions
-    TrafficAdaptiveAction,
-    OccupancyBasedAction,
-    # Smooth actions
-    GradualChangeAction,
-    MomentumBasedAction,
-)
-
-# Import all rewards
-from .rewards import (
-    # Basic rewards
-    MobilityReward,
-    SafetyReward,
-    BalancedReward,
-    # Emission rewards
-    EmissionReward,
-    FuelEfficiencyReward,
-    # Comfort rewards
-    PassengerComfortReward,
-    SmoothFlowReward,
-)
+# Additional reward functions
+from .rewards.emission_rewards import EmissionReward, FuelEfficiencyReward
+from .rewards.comfort_rewards import PassengerComfortReward, SmoothFlowReward
 
 __all__ = [
-    # States
-    "FullMetricsState", "MinimalState",
-    "DensityFocusedState", "MultiSegmentDensityState",
-    "QueueLengthState", "QueueDynamicsState",
+    # MARVEL components
     "MARVELState",
-
-    # Actions
-    "AbsoluteSpeedAction", "RelativeSpeedAction",
-    "TrafficAdaptiveAction", "OccupancyBasedAction",
-    "GradualChangeAction", "MomentumBasedAction",
-    "MARVELSpeedAction",
-
-    # Rewards
-    "MobilityReward", "SafetyReward", "BalancedReward",
-    "EmissionReward", "FuelEfficiencyReward",
-    "PassengerComfortReward", "SmoothFlowReward",
+    "MARVELSpeedAction", 
     "MARVELReward",
+    
+    # Additional rewards
+    "EmissionReward",
+    "FuelEfficiencyReward",
+    "PassengerComfortReward",
+    "SmoothFlowReward",
 ]

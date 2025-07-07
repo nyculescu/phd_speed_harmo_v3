@@ -451,6 +451,7 @@ def create_state_representation(name: str, config: Dict[str, Any]) -> StateRepre
     
     # Lazy import MARVEL to avoid circular dependency
     if name == 'marvel':
+        from sar_components.states.marvel_states import MARVELState
         representations['marvel'] = MARVELState
     
     if name not in representations:
@@ -468,6 +469,7 @@ def create_action_strategy(name: str, config: Dict[str, Any]) -> ActionStrategy:
     
     # Lazy import MARVEL to avoid circular dependency
     if name == 'marvel_speed':
+        from sar_components.actions.marvel_actions import MARVELSpeedAction
         strategies['marvel_speed'] = MARVELSpeedAction
     
     if name not in strategies:
@@ -486,6 +488,7 @@ def create_reward_function(name: str, config: Dict[str, Any]) -> RewardFunction:
     
     # Lazy import MARVEL to avoid circular dependency
     if name == 'marvel':
+        from sar_components.rewards.marvel_rewards import MARVELReward
         functions['marvel'] = MARVELReward
     
     if name not in functions:
