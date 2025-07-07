@@ -51,14 +51,17 @@ __all__ = [
     "FullMetricsState", "MinimalState",
     "DensityFocusedState", "MultiSegmentDensityState",
     "QueueLengthState", "QueueDynamicsState",
-    
+    "MARVELState",
+
     # Actions
     "AbsoluteSpeedAction", "RelativeSpeedAction",
     "TrafficAdaptiveAction", "OccupancyBasedAction",
     "GradualChangeAction", "MomentumBasedAction",
-    
+    "MARVELSpeedAction",
+
     # Rewards
     "MobilityReward", "SafetyReward", "BalancedReward",
     "EmissionReward", "FuelEfficiencyReward",
     "PassengerComfortReward", "SmoothFlowReward",
+    "MARVELReward",
 ]

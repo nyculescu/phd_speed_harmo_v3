@@ -36,26 +36,23 @@ from .sar_framework import (
 from .drl_vsl import (
     TrafficEnv,
     TrafficDataLogger,
+    create_sumocfg
 )
 
 # Import integration/compatibility layer
 from .drl_vsl_integration import (
-    TrafficEnvCompat,
-    create_train_env_compat,
-    create_eval_env_compat,
-    create_mobility_env,
-    create_safety_env,
-    create_custom_env,
-    update_train_model_minimal,
     DEFAULT_SAR_CONFIG,
+    load_sar_config_from_file,
+    get_model_config_path,
+    merge_sar_configs,
+    PRESET_SAR_CONFIGS,
+    get_preset_sar_config,
+    create_traffic_env_from_config,
+    create_train_env_helper,
+    create_eval_env_helper,
 )
 
 # SUMO configuration utilities
-from .drl_vsl import create_sumocfg
-
-# Expose main classes at package level
-
-# SUMO configuration
 try:
     from ..traffic_environment.sumo_config import (
         SumoConfig,
@@ -81,19 +78,22 @@ __all__ = [
     "ActionStrategy", 
     "RewardFunction",
     "TrafficMetrics",
-    
+
     # State representations
     "FullMetricsState",
     "MinimalState",
+    "MARVELState",
     
     # Action strategies
     "AbsoluteSpeedAction",
     "RelativeSpeedAction",
+    "MARVELSpeedAction",
     
     # Reward functions
     "MobilityReward",
     "SafetyReward",
     "BalancedReward",
+    "MARVELReward",
     
     # Factory functions
     "create_state_representation",
@@ -102,18 +102,24 @@ __all__ = [
     
     # Environments
     "TrafficEnv",
-    "TrafficEnvCompat",
     "TrafficDataLogger",
-    
-    # Helper functions
-    "create_train_env_compat",
-    "create_eval_env_compat",
-    "create_mobility_env",
-    "create_safety_env",
-    "create_custom_env",
-    "update_train_model_minimal",
     "create_sumocfg",
     
-    # Configuration
+    # Integration utilities
     "DEFAULT_SAR_CONFIG",
+    "load_sar_config_from_file",
+    "get_model_config_path",
+    "merge_sar_configs",
+    "PRESET_SAR_CONFIGS",
+    "get_preset_sar_config",
+    "create_traffic_env_from_config",
+    "create_train_env_helper",
+    "create_eval_env_helper",
+    
+    # SUMO configuration
+    "SumoConfig",
+    "load_sumo_config",
+    "get_default_sumo_config",
+    "get_preset_config",
+    "PRESETS",
 ]

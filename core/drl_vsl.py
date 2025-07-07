@@ -219,6 +219,12 @@ class TrafficEnv(gym.Env):
         if isinstance(action, np.ndarray):
             action = action.item()
         
+        if hasattr(self.state_repr, 'set_downstream_action'): # NOTE: Specific to MARVELState
+            self.state_repr.set_downstream_action(self.metrics.current_speed_limit)
+            
+        if hasattr(self.reward_func, 'set_downstream_action'): # NOTE: Specific to MARVELReward
+            self.reward_func.set_downstream_action(self.metrics.current_speed_limit)
+
         # Initialize SUMO if not already done
         if not self.is_sumo_initialized:
             self._start_sumo()

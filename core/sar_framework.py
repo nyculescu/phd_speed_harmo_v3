@@ -447,6 +447,7 @@ def create_state_representation(name: str, config: Dict[str, Any]) -> StateRepre
     representations = {
         'full_metrics': FullMetricsState,
         'minimal': MinimalState,
+        # 'marvel': MARVELState,
     }
     
     if name not in representations:
@@ -460,6 +461,7 @@ def create_action_strategy(name: str, config: Dict[str, Any]) -> ActionStrategy:
     strategies = {
         'absolute_speed': AbsoluteSpeedAction,
         'relative_speed': RelativeSpeedAction,
+        # 'marvel_speed': MARVELSpeedAction,
     }
     
     if name not in strategies:
@@ -474,6 +476,7 @@ def create_reward_function(name: str, config: Dict[str, Any]) -> RewardFunction:
         'mobility': MobilityReward,
         'safety': SafetyReward,
         'balanced': BalancedReward,
+        # 'marvel': MARVELReward,
     }
     
     if name not in functions:

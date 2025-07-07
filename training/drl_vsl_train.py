@@ -35,13 +35,19 @@ from core.sar_framework import (
     create_reward_function
 )
 from core.drl_vsl import TrafficEnv
-from core.drl_vsl_integration import TrafficEnvCompat
 from core.drl_vsl import create_sumocfg
 from traffic_environment.flow_gen import flow_generation_fix_num_veh, flow_generation, bimodal_distribution_24h
 
 # Default configuration file path
 DEFAULT_CONFIG_DIR = "config"
 DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join("training", DEFAULT_CONFIG_DIR, "drl_vsl_config.yaml"))
+
+# Global SAR configuration (can be loaded from file)
+DEFAULT_SAR_CONFIG = {
+    'max_flow': 10000.0,
+    'max_occupancy': 100.0,
+    'max_queue_length': 575.0 * 3 / 7
+}
 
 # Setup logging
 logging.basicConfig(
