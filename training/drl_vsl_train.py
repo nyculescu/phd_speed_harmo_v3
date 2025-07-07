@@ -40,7 +40,7 @@ from traffic_environment.flow_gen import flow_generation_fix_num_veh, flow_gener
 
 # Default configuration file path
 DEFAULT_CONFIG_DIR = "config"
-DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join("training", DEFAULT_CONFIG_DIR, "drl_vsl_config.yaml"))
+DEFAULT_CONFIG_PATH = os.path.abspath(os.path.join("training", DEFAULT_CONFIG_DIR, "drl_vsl_train_config.yaml"))
 
 # Global SAR configuration (can be loaded from file)
 DEFAULT_SAR_CONFIG = {

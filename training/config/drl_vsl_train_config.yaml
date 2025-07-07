@@ -185,7 +185,7 @@ sumo:
   
   # Configuration file path (used when config_mode is "file")
   # Path to a JSON/YAML file containing SUMO configuration
-  config_file: "config/drl_vsl_config.yaml"
+  config_file: "config/drl_vsl_train_config.yaml"
   
   # Custom SUMO configuration (used when config_mode is "custom")
   # These settings override defaults when using custom mode
