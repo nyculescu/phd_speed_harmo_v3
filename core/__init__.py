@@ -57,7 +57,7 @@ from .drl_vsl import create_sumocfg
 
 # SUMO configuration
 try:
-    from .sumo_config import (
+    from ..traffic_environment.sumo_config import (
         SumoConfig,
         load_sumo_config,
         get_default_sumo_config,

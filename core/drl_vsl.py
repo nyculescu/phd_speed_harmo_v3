@@ -29,7 +29,7 @@ from core.sar_framework import (
 
 # Import SUMO configuration
 try:
-    from core.sumo_config import SumoConfig, load_sumo_config, get_preset_config
+    from traffic_environment.sumo_config import SumoConfig, load_sumo_config, get_preset_config
 except ImportError:
     # Fallback if sumo_config module doesn't exist yet
     SumoConfig = None
@@ -202,14 +202,14 @@ class TrafficEnv(gym.Env):
             self.sumo_config = sumo_config
         elif isinstance(sumo_config, dict):
             # Create from dictionary
-            from core.sumo_config import create_sumo_config_from_dict
+            from traffic_environment.sumo_config import create_sumo_config_from_dict
             self.sumo_config = create_sumo_config_from_dict(sumo_config)
         elif isinstance(sumo_config, (str, Path)):
             # Load from file
             self.sumo_config = load_sumo_config(sumo_config)
         else:
             # Use default configuration
-            from core.sumo_config import get_default_sumo_config
+            from traffic_environment.sumo_config import get_default_sumo_config
             self.sumo_config = get_default_sumo_config()
             logger.info("Using default SUMO configuration")
 
