@@ -439,7 +439,7 @@ class BalancedReward(RewardFunction):
 
 
 # ============================================================================
-# FACTORY FUNCTIONS
+# FACTORY FUNCTIONS with LAZY IMPORTS
 # ============================================================================
 
 def create_state_representation(name: str, config: Dict[str, Any]) -> StateRepresentation:
@@ -447,8 +447,12 @@ def create_state_representation(name: str, config: Dict[str, Any]) -> StateRepre
     representations = {
         'full_metrics': FullMetricsState,
         'minimal': MinimalState,
-        # 'marvel': MARVELState,
     }
+    
+    # Lazy import MARVEL to avoid circular dependency
+    if name == 'marvel':
+        from sar_components.states.marvel_states import MARVELState
+        representations['marvel'] = MARVELState
     
     if name not in representations:
         raise ValueError(f"Unknown state representation: {name}")
@@ -461,8 +465,12 @@ def create_action_strategy(name: str, config: Dict[str, Any]) -> ActionStrategy:
     strategies = {
         'absolute_speed': AbsoluteSpeedAction,
         'relative_speed': RelativeSpeedAction,
-        # 'marvel_speed': MARVELSpeedAction,
     }
+    
+    # Lazy import MARVEL to avoid circular dependency
+    if name == 'marvel_speed':
+        from sar_components.actions.marvel_actions import MARVELSpeedAction
+        strategies['marvel_speed'] = MARVELSpeedAction
     
     if name not in strategies:
         raise ValueError(f"Unknown action strategy: {name}")
@@ -476,8 +484,12 @@ def create_reward_function(name: str, config: Dict[str, Any]) -> RewardFunction:
         'mobility': MobilityReward,
         'safety': SafetyReward,
         'balanced': BalancedReward,
-        # 'marvel': MARVELReward,
     }
+    
+    # Lazy import MARVEL to avoid circular dependency
+    if name == 'marvel':
+        from sar_components.rewards.marvel_rewards import MARVELReward
+        functions['marvel'] = MARVELReward
     
     if name not in functions:
         raise ValueError(f"Unknown reward function: {name}")

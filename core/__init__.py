@@ -7,7 +7,7 @@ and the refactored traffic environment.
 """
 
 # Version
-__version__ = "0.1.0"
+__version__ = "1.1.0"
 
 # Import base classes and interfaces from SAR framework
 from .sar_framework import (
@@ -82,18 +82,18 @@ __all__ = [
     # State representations
     "FullMetricsState",
     "MinimalState",
-    "MARVELState",
+    # "MARVELState", NOTE: MARVELState is available through factory function
     
     # Action strategies
     "AbsoluteSpeedAction",
     "RelativeSpeedAction",
-    "MARVELSpeedAction",
+    # "MARVELSpeedAction", NOTE: MARVELSpeedAction is available through factory function
     
     # Reward functions
     "MobilityReward",
     "SafetyReward",
     "BalancedReward",
-    "MARVELReward",
+    # "MARVELReward", NOTE: MARVELReward is available through factory function
     
     # Factory functions
     "create_state_representation",

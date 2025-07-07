@@ -11,6 +11,7 @@ sar_config:
   # Options:
   #   - "full_metrics": Complete traffic metrics including flow, occupancy, queue length
   #   - "minimal": Reduced state space with essential metrics only
+  #   - "marvel": MARVEL state with downstream action and dual sensor data
   state_representation: "full_metrics"
   
   # Action Strategy
@@ -18,6 +19,7 @@ sar_config:
   # Options:
   #   - "absolute_speed": Direct speed limit values (e.g., 30, 50, 70 km/h)
   #   - "relative_speed": Speed changes relative to current limit (e.g., -10, 0, +10 km/h)
+  #   - "marvel_speed": MARVEL 5-action strategy (30, 40, 50, 60, 70 mph)
   action_strategy: "absolute_speed"
   
   # Reward Function
@@ -26,7 +28,36 @@ sar_config:
   #   - "mobility": Maximize traffic flow and minimize travel time
   #   - "safety": Minimize speed variance and sudden changes
   #   - "balanced": Weighted combination of mobility and safety
+  #   - "marvel": MARVEL 3-component reward (adaptability, safety, mobility)
   reward_function: "balanced"
+
+  # Custom SAR Combinations
+  # Define specific state-action-reward tuples to train
+  custom_combinations:
+    - name: "marvel_pure"
+      state: "marvel"
+      action: "marvel_speed"
+      reward: "marvel"
+    
+    - name: "marvel_reward_standard"
+      state: "full_metrics"
+      action: "absolute_speed"
+      reward: "marvel"
+    
+    - name: "marvel_action_balanced"
+      state: "full_metrics"
+      action: "marvel_speed"
+      reward: "balanced"
+    
+    - name: "baseline_balanced"
+      state: "full_metrics"
+      action: "absolute_speed"
+      reward: "balanced"
+    
+    - name: "minimal_mobility"
+      state: "minimal"
+      action: "relative_speed"
+      reward: "mobility"
 
 # ========================================================================
 # Model Configuration
@@ -55,20 +86,20 @@ model:
 training:
   # Total number of environment steps for training
   # Typical values: 500k-2M for initial training, 5M+ for final models
-  total_timesteps: 500000
+  total_timesteps: 100000 # 100k steps for quick testing
   
   # Number of parallel training environments
   # More environments = faster training but more CPU/memory usage
   # Recommended: 4-8 for most systems
-  num_train_envs: 4
+  num_train_envs: 1
   
   # Number of episodes per training environment
   # Each episode represents one traffic scenario
-  num_episodes: 200
+  num_episodes: 50
   
   # Evaluation frequency (steps per environment)
   # Model is evaluated on a separate environment every N steps
-  eval_freq: 25000
+  eval_freq: 10000
   
   # Checkpoint save frequency (steps)
   # Model weights are saved every N steps for recovery
@@ -76,8 +107,8 @@ training:
   
   # Simulation lengths (seconds)
   # Duration of each training/evaluation episode
-  train_sim_length: 7200  # 2 hours
-  eval_sim_length: 14400  # 4 hours
+  train_sim_length: 3600  # train_sim_length / 60 = X hours
+  eval_sim_length: 3600  # eval_sim_length / 60 = X hours
 
 # ========================================================================
 # Hyperparameter Configuration
@@ -85,7 +116,7 @@ training:
 hyperparameters:
   # Use Optuna-tuned hyperparameters if available
   # If true, loads optimized parameters from previous tuning runs
-  use_optuna: true
+  use_optuna: false  # Start with defaults for testing
   
   # Manual hyperparameter overrides
   # These values override both default and Optuna parameters
@@ -103,17 +134,17 @@ hyperparameters:
       net_arch: [256, 256, 128]  # Neural network architecture
       activation_fn: "ReLU"       # Activation function
     learning_rate: 0.0001
-    buffer_size: 200000
+    buffer_size: 50000
     batch_size: 32
     gamma: 0.995
     tau: 0.01
-    exploration_fraction: 0.2
+    exploration_fraction: 0.3
     exploration_initial_eps: 1.0
-    exploration_final_eps: 0.02
+    exploration_final_eps: 0.05
     learning_starts: 20000
-    train_freq: [2, "step"]  # Train every 2 steps
-    target_update_interval: 2000
-    gradient_steps: 2
+    train_freq: [1, "step"]  # Train every X step
+    target_update_interval: 500
+    gradient_steps: 1
 
 # ========================================================================
 # Execution Options
@@ -121,7 +152,7 @@ hyperparameters:
 execution:
   # Run multiple configurations in parallel
   # Useful for comparing different SAR combinations
-  parallel: false
+  parallel: false # Sequential for testing/debugging
   
   # Number of parallel processes (null = CPU count - 1)
   num_processes: null
@@ -143,6 +174,24 @@ execution:
   
   # Device for training ("cuda", "cpu", or "auto")
   device: "auto"
+
+  # Training mode options:
+  #   - "single": Use default SAR config above
+  #   - "selected": Train specific experiment(s)
+  #   - "all_custom": Train all custom combinations
+  #   - "all_rewards": Train all rewards with default state/action
+  training_mode: "selected"
+  
+  # Selected combination(s) when training_mode is "selected"
+  # Can be:
+  #   - A single name: "marvel_pure"
+  #   - A single index: 0
+  #   - A list of names: ["marvel_pure", "baseline_balanced"]
+  #   - A list of indices: [0, 3]
+  #   - A mix: ["marvel_pure", 2, "baseline_balanced"]
+  selected_combinations: "marvel_pure"
+  # selected_combinations: 0                              # By index
+  # selected_combinations: ["marvel_pure", "baseline_balanced"]  # Multiple
 
 # ========================================================================
 # Environment Configuration
@@ -208,7 +257,8 @@ sumo:
     # Logging
     no_step_log: true  # true: Disable step-by-step logging
     no_warnings: true  # true: Disable warnings
-    
+    quit_on_end: true  # Automatically quit SUMO when simulation ends
+
     # Additional SUMO options (key-value pairs)
     # These are passed directly to SUMO command line
     additional_options:
@@ -222,8 +272,6 @@ sumo:
       delay: 100  # Visualization delay in ms
       viewport: ""  # Initial viewport settings
       scheme: ""  # GUI coloring scheme
-
-    quit_on_end: true  # Automatically quit SUMO when simulation ends
 
 # ========================================================================
 # Logging and Output Configuration
@@ -250,11 +298,11 @@ logging:
 # ========================================================================
 advanced:
   # Random seed for reproducibility (null for random)
-  seed: null
+  seed: 42  # For reproducibility during testing
   
   # Early stopping configuration
   early_stopping:
-    enabled: true
+    enabled: false  # Disable for testing
     max_no_improvement_evals: 10
     min_evals: 5
     
