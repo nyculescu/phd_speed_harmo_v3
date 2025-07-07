@@ -11,7 +11,6 @@ from typing import Optional, Dict, Any, Union
 from pathlib import Path
 import logging
 
-from ..legacy.drl_vsl import create_sumocfg
 from .drl_vsl_refactored import TrafficEnv
 from core.sar_framework import (
     create_state_representation,
@@ -84,7 +83,7 @@ class TrafficEnvCompat(TrafficEnv):
         else:
             reward_func_obj = reward_fn
 
-        effective_model_name = f"{model_name}_{model_idx}" if os.environ.get('OPTION') == '1' else model_name
+        effective_model_name = f"{model_name}_{model_idx}"
         create_sumocfg(effective_model_name)
         
         # Initialize parent with objects

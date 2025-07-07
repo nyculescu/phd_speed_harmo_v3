@@ -17,6 +17,7 @@ from typing import Optional, Dict, Any, Tuple
 import multiprocessing as mp
 from datetime import datetime, timezone
 import torch.nn as nn
+from torch.cuda import is_available as cuda_available
 
 # Stable Baselines 3
 from stable_baselines3 import DQN
@@ -32,7 +33,8 @@ from core.sar_framework import (
     create_reward_function
 )
 from core.drl_vsl_refactored import TrafficEnv
-from ..core.drl_vsl_integration import TrafficEnvCompat, create_sumocfg
+from core.drl_vsl_integration import TrafficEnvCompat
+from core.drl_vsl_refactored import create_sumocfg
 from traffic_environment.flow_gen import flow_generation_fix_num_veh, flow_generation, bimodal_distribution_24h
 
 # Setup logging
@@ -297,10 +299,7 @@ def train_model(algorithm: str = "DQN",
     
     # Create SUMO config files for all environments
     for i in range(num_train_envs):
-        if os.environ.get('OPTION') == '1':
-            create_sumocfg(f"{model_name}_{i}")
-        else:
-            create_sumocfg(model_name)
+        create_sumocfg(f"{model_name}_{i}")
     
     # Create eval config
     create_sumocfg(f"{model_name}_eval")
@@ -339,7 +338,7 @@ def train_model(algorithm: str = "DQN",
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=str(log_dir),
-        device='cuda' if torch.cuda.is_available() else 'cpu',
+        device='cuda' if cuda_available() else 'cpu',
         **hyperparams
     )
     

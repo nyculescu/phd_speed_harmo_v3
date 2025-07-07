@@ -4,6 +4,7 @@ import logging
 from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 from numpy.testing import assert_allclose
+import os
 
 """ Route and other common flow attributes """
 route_id = "r_0"
@@ -108,7 +109,9 @@ def flow_generation(model, daily_pattern, sim_length_seconds, CAV_percent):
         daily_pattern: List of hourly vehicle counts
         sim_length_seconds: Total simulation length in seconds
     """
-    flows_file_path = f"./traffic_environment/sumo/generated_flows_{model}.rou.xml"
+    flows_dir = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_flows"))
+    os.makedirs(flows_dir, exist_ok=True)
+    flows_file_path = os.path.abspath(os.path.join(flows_dir, f"generated_flows_{model}.rou.xml"))
 
     # Open a .rou.xml file to write flows
     with open(flows_file_path, "w") as f:
@@ -474,7 +477,10 @@ def flow_generation_fix_num_veh(model, base_num_veh_per_hr, sim_length_seconds, 
         num_of_intervals: Number of intervals per episode
     """
 
-    flows_file_path = f"./traffic_environment/sumo/generated_flows_{model}.rou.xml"
+    flows_dir = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_flows"))
+    os.makedirs(flows_dir, exist_ok=True)
+    flows_file_path = os.path.abspath(os.path.join(flows_dir, f"generated_flows_{model}.rou.xml"))
+
     # Open a .rou.xml file to write flows
     with open(flows_file_path, "w") as f:
         edges = "seg_10_before seg_9_before seg_8_before seg_7_before seg_6_before seg_5_before seg_4_before seg_3_before seg_2_before seg_1_before seg_0_before seg_0_after seg_1_after"

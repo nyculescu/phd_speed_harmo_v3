@@ -7,9 +7,6 @@ metrics/
 rl_models/*/*/events.out.tfevents.*
 rl_models/*/rl_model_*.pkl
 rl_models/*/rl_model_*.zip
-traffic_environment/sumo/generated_flows_*.rou.xml
-traffic_environment/sumo/3_2_merge_*.sumocfg
-traffic_environment/sumo/loop_detector_metrics.xml
 multiprocessing_log.log
 eval/*.png
 tensorboard_logs/*_test/events.out.tfevents.*
@@ -20,5 +17,6 @@ eval/rew_func/*/reward_plots/*.png
 eval/rew_func/*/reward_speed_plots/*.png
 misc.py
 DQN_tune_*.db
-rl_models/*/3_2_merge_*.sumocfg
 rl_models/optuna_params/*.db
+traffic_environment/sumo/generated_flows/*.rou.xml
+traffic_environment/sumo/generated_configs/*.sumocfg

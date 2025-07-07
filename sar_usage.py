@@ -113,7 +113,7 @@ def create_env_with_sar(env_idx, port, model_name, sim_length,
     """Factory function to create environment with specific SAR configuration"""
     
     # Create the SUMO config file BEFORE creating the environment
-    effective_model_name = f"{model_name}_{env_idx}" if os.environ.get('OPTION') == '1' else model_name
+    effective_model_name = f"{model_name}_{env_idx}"
     create_sumocfg(effective_model_name)
     
     # Create SAR components

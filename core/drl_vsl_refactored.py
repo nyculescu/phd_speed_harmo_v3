@@ -52,10 +52,10 @@ loops_before = [["loop_seg_0_before_2A", "loop_seg_0_before_1A", "loop_seg_0_bef
 SUMO_CFG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <configuration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
         <input>
-            <net-file value="3_2_merge.net.xml"/>
-            <route-files value="generated_flows_{file_postfix}.rou.xml"/>
-            <additional-files value="loops_detectors.add.xml"/>
-            <gui-settings-file value="colored.view.xml"/>
+            <net-file value="../3_2_merge.net.xml"/>
+            <route-files value="../generated_flows/generated_flows_{file_postfix}.rou.xml"/>
+            <additional-files value="../loops_detectors.add.xml"/>
+            <gui-settings-file value="../colored.view.xml"/>
         </input>
         <processing>
             <lateral-resolution value="0.2"/>
@@ -64,12 +64,13 @@ SUMO_CFG_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     """
 
 def create_sumocfg(file_postfix):
-    output_dir = "./traffic_environment/sumo"
+    output_dir = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_configs"))
     os.makedirs(output_dir, exist_ok=True)
 
     filename = f"3_2_merge_{file_postfix}.sumocfg"
     filepath = os.path.join(output_dir, filename)
 
+    # Format the template
     content = SUMO_CFG_TEMPLATE.format(file_postfix=file_postfix)
 
     with open(filepath, 'w') as file:
@@ -109,7 +110,7 @@ class TrafficEnv(gym.Env):
         self.sumo_step_length = 1
         self.model_name = model_name
         self.model_idx = model_idx
-        self.effective_model_name_for_files = f"{model_name}_{model_idx}" if os.environ.get('OPTION') == '1' else model_name
+        self.effective_model_name_for_files = f"{model_name}_{model_idx}"
         self.sumo_binary_path_override = sumo_binary_path_override
         self.skip_flow_generation = False
         self.aggregation_time = 60
@@ -165,8 +166,6 @@ class TrafficEnv(gym.Env):
         self._default_sumo_binary_for_env = os.path.join(os.environ['SUMO_HOME'], 'bin', 
                                                          'sumo-gui' if os.name != 'nt' else 'sumo-gui.exe')
         self._sumo_retry_sleep_func = lambda attempt, max_retries: max_retries + attempt
-
-        create_sumocfg(self.effective_model_name_for_files)
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Execute one step in the environment using modular components."""
@@ -448,8 +447,8 @@ class TrafficEnv(gym.Env):
         for attempt in range(self.sumo_max_retries):
             try:
                 port = self.port
-                route_file = f"./traffic_environment/sumo/generated_flows_{self.effective_model_name_for_files}.rou.xml"
-                
+                route_file = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_flows", f"generated_flows_{self.effective_model_name_for_files}.rou.xml"))
+
                 if not os.path.exists(route_file) or os.path.getsize(route_file) == 0:
                     logger.error(f"Route file missing or empty: {route_file} on attempt {attempt + 1} for {log_id}.")
                 
@@ -457,10 +456,10 @@ class TrafficEnv(gym.Env):
                 
                 timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                 sumo_log_file = f"./logs/sumo_log/{self.effective_model_name_for_files}_{timestamp_str}.txt"
-                
+
+                config_path = os.path.abspath(os.path.join("traffic_environment", "sumo", "generated_configs", f"3_2_merge_{self.effective_model_name_for_files}.sumocfg"))
                 sumo_cmd = [
-                    current_sumo_binary, "-c",
-                    f"./traffic_environment/sumo/3_2_merge_{self.effective_model_name_for_files}.sumocfg",
+                    current_sumo_binary, "-c", config_path,
                     '--start',
                     "--default.emergencydecel=7",
                     '--random-depart-offset=3600',
