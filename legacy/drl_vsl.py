@@ -19,7 +19,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.logger import configure
 # from sb3_contrib import QRDQN
-from flow_gen import *
+from traffic_environment.flow_gen import *
 from gymnasium.wrappers import TimeLimit
 import gymnasium as gym
 from datetime import datetime, timezone
@@ -1880,7 +1880,7 @@ if __name__ == '__main__':
 
         # Use the same lists as for tuning, or define them if option 3 wasn't run
         reward_functions = ["mobility", "safety", "balanced"] # ["mobility", "safety", "balanced"]
-        vsl_enforcements = ["cavs_only", "recommend"] # ["all_vehicles", "cavs_only", "recommend"]
+        vsl_enforcements = ["cavs_only", "all_vehicles"] # ["all_vehicles", "cavs_only", "recommend"]
 
         use_hyperparams_by_optuna = False
         all_combinations_params_for_training = []

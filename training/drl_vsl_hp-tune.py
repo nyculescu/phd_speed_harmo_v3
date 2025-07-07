@@ -17,12 +17,12 @@ from stable_baselines3.common.env_util import make_vec_env
 import multiprocessing as mp
 
 # Import your TrafficEnv and other shared code
-from drl_vsl import (
+from legacy.drl_vsl import (
     TrafficEnv, SUMO_CFG_TEMPLATE, BASE_TRAIN_SUMO_PORT,
     OPTUNA_PARAMS_DIR, sumoExecutable_gui, sumoExecutable_nogui, flow_generation_fix_num_veh, logger,
     SUMO_CONFIG_DIR, logging
 )
-from flow_gen import flow_generation, bimodal_distribution_24h
+from traffic_environment.flow_gen import flow_generation, bimodal_distribution_24h
 
 SUMO_EXE_GUI = sumoExecutable_nogui
 

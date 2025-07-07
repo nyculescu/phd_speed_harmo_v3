@@ -23,7 +23,7 @@
             "console": "integratedTerminal",
             "args": [
                 "--option", "1",
-                "--n_envs", "6", // number of environments
+                "--n_envs", "2", // number of environments
                 "--algo", "DQN",
                 "--reward_fn", "mobility",
                 "--vsl_mode", "cavs_only",
