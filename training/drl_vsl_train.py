@@ -434,7 +434,7 @@ def train_model(config: Config,
         create_sumocfg(f"{model_name}_{i}")
     
     # Create eval config
-    create_sumocfg(f"{model_name}_eval")
+    create_sumocfg(f"{model_name}_eval_0")
     
     # Create training environments
     logger.info(f"Creating {num_train_envs} training environments...")

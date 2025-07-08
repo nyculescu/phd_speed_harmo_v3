@@ -74,7 +74,7 @@ model:
   #   - "recommend": Speed limits as recommendations (drivers may not comply)
   #   - "all_vehicles": Mandatory for all vehicles
   #   - "cavs_only": Only Connected Autonomous Vehicles (CAVs) follow limits
-  vsl_enforcement: "recommend"
+  vsl_enforcement: "cavs_only"
   
   # Model naming convention (optional, auto-generated if not specified)
   # Format: {algorithm}_{reward}_{enforcement}_{state}_{action}
@@ -86,12 +86,12 @@ model:
 training:
   # Total number of environment steps for training
   # Typical values: 500k-2M for initial training, 5M+ for final models
-  total_timesteps: 100000 # 100k steps for quick testing
+  total_timesteps: 400000 # 100k steps for quick testing
   
   # Number of parallel training environments
   # More environments = faster training but more CPU/memory usage
   # Recommended: 4-8 for most systems
-  num_train_envs: 1
+  num_train_envs: 12
   
   # Number of episodes per training environment
   # Each episode represents one traffic scenario
@@ -99,7 +99,7 @@ training:
   
   # Evaluation frequency (steps per environment)
   # Model is evaluated on a separate environment every N steps
-  eval_freq: 10000
+  eval_freq: 1000
   
   # Checkpoint save frequency (steps)
   # Model weights are saved every N steps for recovery
@@ -134,15 +134,15 @@ hyperparameters:
       net_arch: [256, 256, 128]  # Neural network architecture
       activation_fn: "ReLU"       # Activation function
     learning_rate: 0.0001
-    buffer_size: 50000
+    buffer_size: 200000 # NOTE: At least 2x total timesteps
     batch_size: 32
-    gamma: 0.995
+    gamma: 0.99 # NOTE: More appropriate for 60s intervals. This gives ~14 minutes half-life for future rewards
     tau: 0.01
-    exploration_fraction: 0.3
+    exploration_fraction: 0.6 # 60% instead of 30%
     exploration_initial_eps: 1.0
     exploration_final_eps: 0.05
-    learning_starts: 20000
-    train_freq: [1, "step"]  # Train every X step
+    learning_starts: 10000        # 2% instead of 20%
+    train_freq: [12, "step"]  # Train every X step
     target_update_interval: 500
     gradient_steps: 1
 
@@ -212,8 +212,7 @@ environment:
     max_occupancy: 100.0     # percentage
     max_queue_length: 246.4  # meters (default: 575m * 3/7)
     
-  # CAV penetration rate (percentage)
-  cavs_percentage: 10
+  cavs_percentage: 25 # Percentage of vehicles that are CAVs
 
 # ========================================================================
 # SUMO Configuration
