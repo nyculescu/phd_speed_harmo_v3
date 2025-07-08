@@ -20,6 +20,11 @@ from .rewards.marvel_rewards import MARVELReward
 from .rewards.emission_rewards import EmissionReward, FuelEfficiencyReward
 from .rewards.comfort_rewards import PassengerComfortReward, SmoothFlowReward
 
+# DQN-VSL components
+from .states.kang15_states import KANG15State
+from .actions.kang15_actions import KANG15Action
+from .rewards.kang15_rewards import KANG15Reward
+
 __all__ = [
     # MARVEL components
     "MARVELState",
@@ -31,4 +36,9 @@ __all__ = [
     "FuelEfficiencyReward",
     "PassengerComfortReward",
     "SmoothFlowReward",
+
+    # DQN-VSL components
+    "KANG15State",
+    "KANG15Action",
+    "KANG15Reward"
 ]

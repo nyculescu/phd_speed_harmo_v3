@@ -59,6 +59,20 @@ sar_config:
       action: "relative_speed"
       reward: "mobility"
 
+    - name: "kang15_paper"
+      state: "kang15"
+      action: "kang15"
+      reward: "kang15"
+
+    - name: "kang15_hybrid_action"
+      state: "kang15"
+      action: "relative_speed"  # Test with existing action
+      reward: "kang15"
+
+    - name: "kang15_safety_focus"
+      state: "kang15"
+      action: "kang15"
+      reward: "safety"  # Test with different reward
 # ========================================================================
 # Model Configuration
 # ========================================================================
@@ -97,8 +111,9 @@ training:
   # Each episode represents one traffic scenario
   num_episodes: 50
   
-  # Evaluation frequency (steps per environment)
-  # Model is evaluated on a separate environment every N steps
+  # Evaluation frequency (steps per environment / num_train_envs)
+  # Model is evaluated on a separate environment every N steps. 
+  # The actual evaluation fequency = num_train_envs x num_train_envs
   eval_freq: 1000
   
   # Checkpoint save frequency (steps)
@@ -189,7 +204,7 @@ execution:
   #   - A list of names: ["marvel_pure", "baseline_balanced"]
   #   - A list of indices: [0, 3]
   #   - A mix: ["marvel_pure", 2, "baseline_balanced"]
-  selected_combinations: "marvel_pure"
+  selected_combinations: "marvel_pure" # TODO: next, kang15_paper
   # selected_combinations: 0                              # By index
   # selected_combinations: ["marvel_pure", "baseline_balanced"]  # Multiple
 

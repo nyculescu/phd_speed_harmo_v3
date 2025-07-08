@@ -6,9 +6,10 @@
 from .emission_rewards import EmissionReward, FuelEfficiencyReward
 from .comfort_rewards import PassengerComfortReward, SmoothFlowReward
 from .marvel_rewards import MARVELReward
+from .kang15_rewards import KANG15Reward
 
 __all__ = [
     "EmissionReward", "FuelEfficiencyReward",
     "PassengerComfortReward", "SmoothFlowReward",
-    "MARVELReward"
+    "MARVELReward", "KANG15Reward"
 ]

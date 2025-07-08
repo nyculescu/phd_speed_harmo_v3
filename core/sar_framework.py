@@ -457,6 +457,11 @@ def create_state_representation(name: str, config: Dict[str, Any]) -> StateRepre
         from sar_components.states.marvel_states import MARVELState
         representations['marvel'] = MARVELState
     
+    # Lazy import DQN-VSL
+    if name == 'kang15':
+        from sar_components.states.kang15_states import KANG15State
+        representations['kang15'] = KANG15State
+
     if name not in representations:
         raise ValueError(f"Unknown state representation: {name}")
     
@@ -475,6 +480,11 @@ def create_action_strategy(name: str, config: Dict[str, Any]) -> ActionStrategy:
         from sar_components.actions.marvel_actions import MARVELSpeedAction
         strategies['marvel_speed'] = MARVELSpeedAction
     
+    # Lazy import DQN-VSL
+    if name == 'kang15':
+        from sar_components.actions.kang15_actions import KANG15Action
+        strategies['kang15'] = KANG15Action
+
     if name not in strategies:
         raise ValueError(f"Unknown action strategy: {name}")
     
@@ -494,6 +504,11 @@ def create_reward_function(name: str, config: Dict[str, Any]) -> RewardFunction:
         from sar_components.rewards.marvel_rewards import MARVELReward
         functions['marvel'] = MARVELReward
     
+    # Lazy import DQN-VSL
+    if name == 'kang15':
+        from sar_components.rewards.kang15_rewards import KANG15Reward
+        functions['kang15'] = KANG15Reward
+
     if name not in functions:
         raise ValueError(f"Unknown reward function: {name}")
     
